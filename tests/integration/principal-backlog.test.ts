@@ -3,9 +3,12 @@
 // The backlog line tells the coordinator how many items each list tool will show, so each
 // count must match its tool's read: decay-warnings-list (KnowledgeGraphStore.listDecayWarnings),
 // list-pending-actions (ActionLogRepo.findAllPending) and task-list with owner `ceo` and the
-// open statuses (TaskRepo.listTasks). The shared database may hold other rows, so the test
-// compares the counts with the reads, and checks that one row of each kind moves its count
-// by one while the near misses beside it move nothing.
+// open statuses (TaskRepo.listTasks). The shared database may hold other rows, and other test
+// files write to the same tables while this one runs, so nothing here compares two moments:
+// each check reads the counts and the lists in one REPEATABLE READ snapshot (they must agree),
+// and this test's own rows are checked by id, each kind present in its list and each near
+// miss absent. (Comparing a count with a later read, or a count with an earlier count, failed
+// under sharded CI when another file finished and deleted its open principal tasks in between.)
 
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -14,6 +17,7 @@ import pino from 'pino';
 import { OPEN_TASK_STATUSES } from '../../src/agents/prompts/backlog-line.js';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import type { DbPool } from '../../src/db/connection.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { createPrincipalBacklogSource, readAwaitingAnswers } from '../../src/dispatch/principal-backlog.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
@@ -39,7 +43,7 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
   // instance would surface or act on, so it runs only against curia_test.
   let dbVerified = false;
 
-  async function insertWarnedNode(opts: { archived?: boolean; identitySource?: 'label' | 'contact'; warned?: boolean }): Promise<void> {
+  async function insertWarnedNode(opts: { archived?: boolean; identitySource?: 'label' | 'contact'; warned?: boolean }): Promise<string> {
     const { rows } = await pool.query<{ id: string }>(
       `INSERT INTO kg_nodes (type, label, properties, source, confidence, decay_class, sensitivity, identity_source,
                              created_at, last_confirmed_at, warned_at, warn_reason, archived_at)
@@ -50,10 +54,11 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
       [`${PREFIX} ${randomUUID()}`, opts.identitySource ?? 'label', opts.warned ?? true, opts.archived ?? false],
     );
     nodeIds.push(rows[0]!.id);
+    return rows[0]!.id;
   }
 
-  async function insertApproval(expiresInMs: number, outcome: 'pending_approval' | 'approved' = 'pending_approval'): Promise<void> {
-    await actions.insert({
+  async function insertApproval(expiresInMs: number, outcome: 'pending_approval' | 'approved' = 'pending_approval'): Promise<number> {
+    return actions.insert({
       taskId,
       toolName: 'email-send',
       actionRisk: 'medium',
@@ -63,19 +68,43 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
     });
   }
 
-  async function insertTask(owner: 'ceo' | 'curia', status: string): Promise<void> {
+  async function insertTask(owner: 'ceo' | 'curia', status: string): Promise<string> {
     const task = await tasks.createTask({ agentId: 'coordinator', title: `${PREFIX} ${owner} ${status}`, owner, source: 'coordinator' });
     if (status !== 'open') {
       await pool.query(`UPDATE tasks SET status = $1 WHERE id = $2`, [status, task.id]);
     }
+    return task.id;
   }
 
-  async function reads() {
-    return {
-      decayWarnings: (await kg.listDecayWarnings()).length,
-      pendingApprovals: (await actions.findAllPending()).length,
-      principalTasks: (await tasks.listTasks({ owner: 'ceo', statuses: [...OPEN_TASK_STATUSES], limit: 100_000 })).length,
-    };
+  /**
+   * The backlog counts and the three list tools' reads, all in one REPEATABLE READ snapshot on
+   * one connection, so a concurrent writer cannot land between them. Each reader gets the
+   * snapshot's connection as its pool: every one of them reads with a single `query`.
+   */
+  async function snapshot() {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const db = { query: client.query.bind(client) } as unknown as DbPool;
+      const counts = await createPrincipalBacklogSource(db).counts();
+      const lists = {
+        decayWarnings: (await KnowledgeGraphStore.createWithPostgres(db, EmbeddingService.createForTesting(), logger as never).listDecayWarnings()).map((w) => w.nodeId),
+        pendingApprovals: (await new ActionLogRepo(db, logger as never).findAllPending()).map((a) => a.id),
+        principalTasks: (await new TaskRepo(db, noopBus, logger as never, 'UTC').listTasks({ owner: 'ceo', statuses: [...OPEN_TASK_STATUSES], limit: 100_000 })).map((t) => t.id),
+      };
+      await client.query('COMMIT');
+      return { counts, lists };
+    } finally {
+      client.release();
+    }
+  }
+
+  function expectCountsMatchLists(snap: Awaited<ReturnType<typeof snapshot>>): void {
+    expect(snap.counts).toEqual({
+      decayWarnings: snap.lists.decayWarnings.length,
+      pendingApprovals: snap.lists.pendingApprovals.length,
+      principalTasks: snap.lists.principalTasks.length,
+    });
   }
 
   beforeAll(async () => {
@@ -97,32 +126,31 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
   });
 
   it('counts what each list tool shows, and only that', async () => {
-    const source = createPrincipalBacklogSource(pool);
-    const before = await source.counts();
-    expect(before).toEqual(await reads());
+    expectCountsMatchLists(await snapshot());
 
     // One row of each kind that counts.
-    await insertWarnedNode({});
-    await insertApproval(60 * 60 * 1000);
-    for (const status of OPEN_TASK_STATUSES) await insertTask('ceo', status);
+    const warned = await insertWarnedNode({});
+    const pending = await insertApproval(60 * 60 * 1000);
+    const openTasks: string[] = [];
+    for (const status of OPEN_TASK_STATUSES) openTasks.push(await insertTask('ceo', status));
     // Near misses: archived, anchored or unwarned nodes; expired or resolved approvals;
     // finished principal tasks and open tasks someone else owns.
-    await insertWarnedNode({ archived: true });
-    await insertWarnedNode({ identitySource: 'contact' });
-    await insertWarnedNode({ warned: false });
-    await insertApproval(-60 * 1000);
-    await insertApproval(60 * 60 * 1000, 'approved');
-    await insertTask('ceo', 'done');
-    await insertTask('ceo', 'cancelled');
-    await insertTask('curia', 'open');
+    const missNodes = [
+      await insertWarnedNode({ archived: true }),
+      await insertWarnedNode({ identitySource: 'contact' }),
+      await insertWarnedNode({ warned: false }),
+    ];
+    const missApprovals = [await insertApproval(-60 * 1000), await insertApproval(60 * 60 * 1000, 'approved')];
+    const missTasks = [await insertTask('ceo', 'done'), await insertTask('ceo', 'cancelled'), await insertTask('curia', 'open')];
 
-    const after = await source.counts();
-    expect(after).toEqual(await reads());
-    expect(after).toEqual({
-      decayWarnings: before.decayWarnings + 1,
-      pendingApprovals: before.pendingApprovals + 1,
-      principalTasks: before.principalTasks + OPEN_TASK_STATUSES.length,
-    });
+    const after = await snapshot();
+    expectCountsMatchLists(after);
+    expect(after.lists.decayWarnings).toContain(warned);
+    expect(after.lists.pendingApprovals).toContain(pending);
+    expect(after.lists.principalTasks).toEqual(expect.arrayContaining(openTasks));
+    for (const id of missNodes) expect(after.lists.decayWarnings).not.toContain(id);
+    for (const id of missApprovals) expect(after.lists.pendingApprovals).not.toContain(id);
+    for (const id of missTasks) expect(after.lists.principalTasks).not.toContain(id);
   });
 
   // The approvals a principal turn may be answering (#2333): pending, unexpired, shown.
