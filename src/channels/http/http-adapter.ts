@@ -197,6 +197,11 @@ export interface HttpAdapterConfig {
   /** Whether a channel adapter that delivers notifications is subscribed (#2710). */
   canDeliverNotifications?: () => boolean;
   /**
+   * Retry an operator confirmation that Setup recorded but could not send (#2710). Called from
+   * `POST /api/onboarding/start`, the moment a restarted install can email.
+   */
+  retryOwedOperatorConfirmation?: () => Promise<void>;
+  /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
    * Drives the externalAdaptersPending flag on GET /api/setup/status so the
@@ -579,6 +584,9 @@ export class HttpAdapter implements Channel {
         bus,
         logger,
         onboarding: this.config.onboardingService,
+        ...(this.config.retryOwedOperatorConfirmation
+          ? { retryOwedOperatorConfirmation: this.config.retryOwedOperatorConfirmation }
+          : {}),
       });
     }
 

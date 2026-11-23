@@ -11,7 +11,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { TurnLanes } from '../../dispatch/turn-lanes.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
-import { MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../skills/outbound-gateway.js';
+import { PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
 import { replyDisplayName, replyRecipientSource } from './reply-recipient-provenance.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
@@ -72,13 +72,15 @@ interface QueuedInboundEmail {
 }
 
 /**
- * Whether a failed system-notification send was the channel refusing it outright — the sending
- * account is (or may be) the principal's own mailbox, which only principal-addressed notices may
- * use (#2474). A refusal is a rule working, so it is audited as one and not retried as a fault.
+ * Whether a failed system-notification send was the channel refusing it outright: the sending
+ * account is the principal's own mailbox, which only principal-addressed notices may use (#2474).
+ * That is a rule working, so it is audited as one rather than chased as a fault.
+ *
+ * `MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL` is deliberately *not* a refusal: the gateway calls it "a
+ * failure to check", so it is audited as `delivery_failed` — a hiccup to retry, not a verdict.
  */
 function isNotificationDeliveryRefusal(result: { blockedReason?: string }): boolean {
-  return result.blockedReason === PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL
-    || result.blockedReason === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL;
+  return result.blockedReason === PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL;
 }
 
 function nylasMessageIdOf(event: InboundMessageEvent): string {

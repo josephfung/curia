@@ -24,7 +24,8 @@
     "createdSubtasks": "number? (open_session: how many topics were added now)",
     "onboardingComplete": "boolean? (topic_done: true when this completed onboarding; status: true when onboarding is complete)",
     "completionPending": "string? (topic_done: every topic is closed but the onboarding task could not be completed; call op status to retry)",
-    "recorded": "boolean? (greeting_sent, operator_notice)"
+    "recorded": "boolean? (greeting_sent; operator_notice: true when the notice was recorded)",
+    "alreadyRaised": "boolean? (operator_notice: true when this run already raised it; nothing more is sent)"
   },
   "permissions": [],
   "secrets": [],

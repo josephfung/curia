@@ -262,9 +262,12 @@ async function operatorNotice({ svc, parent }: Deps, input: Record<string, unkno
   // Once per run, like every other operator notice: the service shares the watcher's dedupe, so
   // a repeated call records nothing and emails nothing. Model-supplied details go no further
   // than the task note, the log and the audit row — the email carries the event only (#2710).
-  const recorded = await svc.raiseOperatorNotice(parent.id, event as OperatorEvent, {
+  const result = await svc.raiseOperatorNotice(parent.id, event as OperatorEvent, {
     details: details as Record<string, unknown> | undefined,
   });
-  if (!recorded) return fail('The operator notice was already raised this run, or could not be recorded on the onboarding task. Try again shortly.');
+  // Already raised this run is success, not a failure: it is the dedupe working, and telling the
+  // model to retry would only make it loop. Nothing is emailed a second time (#2710).
+  if (result.alreadyRaised) return { success: true, data: { alreadyRaised: true } };
+  if (!result.recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
   return { success: true, data: { recorded: true } };
 }

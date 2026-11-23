@@ -112,7 +112,8 @@ are notification types in the one table. The `setupFor=self` rule in
 - **The tool may raise one event.** `web_search_failed` is trouble only the model can see. The
   other three are detected in code, so letting the model raise them would let a prompt-injected
   turn email a real-looking admin ask ("mark the app Trusted"), and duplicate the watcher's own
-  notice. The manifest and `SKILL.md` say so.
+  notice. The manifest and `SKILL.md` say so. A repeated call answers `alreadyRaised: true` and
+  succeeds, so the model has no reason to loop.
 - **The state records what was raised, and whether it arrived.** `operatorNotified` is the
   once-per-run guard; `operatorNoticeFailed` names events whose notice reached nobody, so the run
   state does not claim the operator heard it. `notifyOperator` returns `{ recorded, emailed }`.
@@ -130,8 +131,15 @@ Setup step, and a fresh install has no email account until it restarts. So the n
 - A second settings key, `operator_confirmation: { email, attemptedAt, sentAt }`, records the
   last attempt for an address. `sentAt: null` means it reached nobody.
 - It is attempted wherever delivery is possible — at boot once the email adapters start, on Start
-  onboarding, and immediately from the console's own Operator page — and retried on the next
+  onboarding (`POST /api/onboarding/start`, not the Setup page opening, which is before any email
+  account exists), and immediately from the console's own Operator page — and retried on the next
   attempt while it is owed.
+- **A publish is not a delivery.** `sendNotification` reports only that the notice was published;
+  the send happens later, in the email adapter. So a refused or failed delivery is reported back
+  through the gateway's `onNotificationUndelivered` hook, which puts the confirmation back to
+  `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
+  installs where operator notices never arrive. The console says "queued" until a real delivery
+  receipt exists.
 - The console shows `sent`, `pending` (owed, nothing could send it yet) or `failed`, with the
   time. Setup says "we'll email … once Curia's own email is set up" and never frames an
   undeliverable notice as a mistake in the address, because at step 1 nothing has gone wrong.
@@ -145,7 +153,12 @@ Setup step, and a fresh install has no email account until it restarts. So the n
 - Deliverability is checked once, in the gateway (`canDeliver`), instead of at each call site: a
   notice published before an email adapter subscribed would otherwise be reported as sent.
 - The email adapter — the only place the real outcome is known — audits a missed delivery as
-  `outbound.notification_undelivered` with `delivery_failed` or `delivery_refused`.
+  `outbound.notification_undelivered` with `delivery_failed` or `delivery_refused`. A verified
+  principal-account refusal is `delivery_refused` (a rule working); an account it could not verify
+  is `delivery_failed`, because that is a check that failed, not a verdict.
+- Callers that do work before publishing ask `gateway.canDeliverNotifications()` first, so a
+  notice that cannot go anywhere does not burn a single-use sign-in link or write an audit row on
+  every retry. The in-gateway check stays as the backstop.
 - A refusal is not exempted. A send through an account bound to the principal's own mailbox is
   refused unless every recipient is the principal (#2474, ADR-062); an operator notice is not
   such a send, and must not put Curia's admin mail in the principal's Sent folder. It is audited

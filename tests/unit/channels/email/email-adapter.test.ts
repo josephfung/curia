@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EmailAdapter } from '../../../../src/channels/email/email-adapter.js';
 import { createLogger } from '../../../../src/logger.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
-import { PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../../../src/skills/outbound-gateway.js';
+import { MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
@@ -1570,6 +1570,29 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     // A refusal is the rule working (#2474), recorded as such so it is not chased as a fault.
     expect(mocks.outboundGateway.reportNotificationUndelivered)
       .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused');
+    await adapter.stop();
+  });
+
+  it('reports an unverified-account refusal as delivery_failed, since that is a check that failed', async () => {
+    const mocks = createMocks();
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      success: false,
+      blockedReason: MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL,
+    });
+
+    await handleNotification(createOutboundNotification({
+      notificationType: 'schedule_suspended',
+      recipient: 'operator@example.com',
+      audience: 'operator',
+      subject: 'Suspended',
+      body: 'Body',
+    }));
+
+    expect(mocks.outboundGateway.reportNotificationUndelivered)
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed');
     await adapter.stop();
   });
 

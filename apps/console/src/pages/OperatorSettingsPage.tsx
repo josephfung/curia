@@ -33,9 +33,11 @@ function confirmationLine(confirmation: Confirmation | null): string | null {
   if (!confirmation) return null;
   switch (confirmation.state) {
     case 'sent':
+      // "Queued": a publish is all Curia knows at this point. A refused or failed delivery comes
+      // back later and flips this to failed (#2710).
       return confirmation.sentAt
-        ? `A confirmation notice was sent to ${confirmation.email} ${timeAgo(confirmation.sentAt)}.`
-        : `A confirmation notice was sent to ${confirmation.email}.`;
+        ? `A confirmation notice was queued for ${confirmation.email} ${timeAgo(confirmation.sentAt)}.`
+        : `A confirmation notice was queued for ${confirmation.email}.`;
     case 'pending':
       return `Curia will email ${confirmation.email} to confirm once its own email is set up.`;
     case 'failed':
@@ -277,7 +279,7 @@ function OperatorSection() {
                 <span className="autonomy-save-status">
                   Saved.{' '}
                   {outcome.confirmation?.state === 'sent'
-                    ? 'A confirmation went out to that address.'
+                    ? 'The confirmation is queued for that address.'
                     : outcome.confirmation?.state === 'failed'
                       ? 'The confirmation could not be sent; Curia will try again.'
                       : 'The confirmation is queued until Curia can email.'}

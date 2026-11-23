@@ -158,6 +158,59 @@ describe('WhoStep — the operator confirmation never costs the principal their 
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
+  it('saves an edit made after the notice, rather than continuing with the old values', async () => {
+    // The pending notice is shown on every fresh "Someone else" install, so this path is the
+    // normal one. A timezone changed after the first press must reach the profile (#2710 review).
+    const onContinue = vi.fn();
+    const page = await mountOtherStep(onContinue, { state: 'pending', email: 'sam@example.com' });
+    await submit(page);
+    expect(onContinue).not.toHaveBeenCalled();
+
+    const zone = page.host.querySelector('select') as HTMLSelectElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(zone, 'Europe/London');
+      zone.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // The edit clears the notice, so the next press saves instead of moving on.
+    expect(page.host.textContent).not.toContain("We'll email sam@example.com");
+
+    await submit(page);
+
+    expect(postJson).toHaveBeenLastCalledWith('/api/setup/principal/profile', expect.objectContaining({
+      timezone: 'Europe/London',
+    }));
+    // The notice is owed again for the re-save, so one more press moves on — and it does not
+    // touch the profile a second time.
+    saveSetupFields.mockResolvedValue({ setup: FIELDS, operatorConfirmation: { state: 'sent', email: 'sam@example.com' } });
+    await submit(page);
+    expect(postJson).toHaveBeenCalledTimes(4); // principal + profile, twice: once per save
+    expect(onContinue).toHaveBeenCalledOnce();
+  });
+
+  it('switching to Myself after the notice saves that, rather than continuing as Someone else', async () => {
+    const onContinue = vi.fn();
+    const page = await mountOtherStep(onContinue, { state: 'pending', email: 'sam@example.com' });
+    await submit(page);
+    expect(onContinue).not.toHaveBeenCalled();
+
+    const myself = Array.from(page.host.querySelectorAll('[role="radio"]'))
+      .find((r) => r.textContent?.startsWith('Myself')) as HTMLElement;
+    act(() => { myself.click(); });
+    // No operator, so no confirmation is owed and the step moves on after saving.
+    saveSetupFields.mockResolvedValue({ setup: FIELDS, operatorConfirmation: { state: 'none' } });
+
+    await submit(page);
+
+    // The operator is cleared, and the step did not just move on with the old choice.
+    expect(saveSetupFields).toHaveBeenLastCalledWith(expect.objectContaining({
+      setupFor: 'self',
+      operatorName: null,
+      operatorEmail: null,
+    }));
+    expect(onContinue).toHaveBeenCalledOnce();
+  });
+
   it('re-saves a corrected address instead of continuing with the one that failed', async () => {
     const onContinue = vi.fn();
     const page = await mountOtherStep(onContinue, { state: 'failed', email: 'sam@example.com' });

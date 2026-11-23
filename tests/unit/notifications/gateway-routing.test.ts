@@ -81,6 +81,30 @@ function makeGateway(recipients: {
   return { gateway, published, bus };
 }
 
+function makeGatewayWithHook(
+  onNotificationUndelivered: (type: string, reason: string) => Promise<void>,
+  recipients: { principalEmail?: () => string | undefined; canDeliver?: () => boolean },
+) {
+  const published: Published[] = [];
+  const bus = {
+    publish: vi.fn(async (_layer: string, event: BusEvent) => { published.push({ event }); }),
+    subscribe: vi.fn(),
+  } as unknown as EventBus;
+  const gateway = new OutboundGateway({
+    contactService: { resolveByChannelIdentity: vi.fn().mockResolvedValue(null) } as unknown as ContactService,
+    contentFilter: { check: vi.fn() } as unknown as OutboundContentFilter,
+    bus,
+    logger: createLogger('error'),
+    notificationRecipients: {
+      principalEmail: recipients.principalEmail ?? (() => PRINCIPAL),
+      operatorEmail: async () => undefined,
+      ...(recipients.canDeliver ? { canDeliver: recipients.canDeliver } : {}),
+    },
+    onNotificationUndelivered: onNotificationUndelivered as never,
+  });
+  return { gateway, published };
+}
+
 function notices(published: Published[]) {
   return published
     .map((p) => p.event)
@@ -173,10 +197,33 @@ describe('OutboundGateway.sendNotification routing', () => {
     expect(undelivered(published)[0]!.payload).toMatchObject({ reason: 'delivery_unavailable' });
   });
 
+  it('answers canDeliverNotifications without publishing anything, for callers that do work first', async () => {
+    // The outage notifier mints a single-use sign-in link before it alerts; asking first keeps a
+    // hopeless attempt from burning one and writing an audit row per retry (#2710 review).
+    const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => false });
+    expect(gateway.canDeliverNotifications()).toBe(false);
+    expect(published).toEqual([]);
+
+    const deliverable = makeGateway({ principalEmail: () => PRINCIPAL });
+    expect(deliverable.gateway.canDeliverNotifications()).toBe(true);
+  });
+
   it('publishes once an adapter can deliver', async () => {
     const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
     expect(await gateway.sendNotification({ notificationType: 'inbox_triage_paused', subject: 's', body: 'b' })).toBe(true);
     expect(notices(published)).toHaveLength(1);
+  });
+
+  it('tells the onNotificationUndelivered hook, so a caller can correct "published" in its own record', async () => {
+    const hook = vi.fn(async () => {});
+    const { gateway } = makeGatewayWithHook(hook, { principalEmail: () => PRINCIPAL });
+    await gateway.reportNotificationUndelivered('operator_configured', 'delivery_refused');
+    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused');
+  });
+
+  it('a throwing hook does not throw out of the report', async () => {
+    const { gateway } = makeGatewayWithHook(async () => { throw new Error('hook broke'); }, { principalEmail: () => PRINCIPAL });
+    await expect(gateway.reportNotificationUndelivered('operator_configured', 'delivery_failed')).resolves.toBeUndefined();
   });
 
   it('sends nothing when the gateway was given no recipient lookup at all', async () => {

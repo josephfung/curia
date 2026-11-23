@@ -57,7 +57,7 @@ function setup(over: Partial<MailboxSignInResumeSubscriberDeps> = {}) {
     logger: createSilentLogger(),
     registerRouting,
     googleClientId,
-    notifier: { gateway: { sendNotification } },
+    notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } },
     ...over,
   });
   sub.start();
@@ -199,7 +199,10 @@ describe('MailboxSignInResumeSubscriber', () => {
   });
 
   it('admin_blocked: when the notice is not delivered, the agent is told the operator was not notified (I)', async () => {
-    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification: vi.fn(async () => false) } } });
+    const sendNotification = vi.fn(async () => false);
+    const { emit, tasks } = setup({
+      notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } },
+    });
     await emit(finished({ outcome: 'admin_blocked' }));
     const content = tasks()[0]!.payload.content;
     expect(content).not.toMatch(/operator has been/);
@@ -210,7 +213,7 @@ describe('MailboxSignInResumeSubscriber', () => {
     // Deliverability is the gateway's check now (#2710): it answers false when no adapter can
     // deliver, or when there is no address, and this subscriber reports that honestly.
     const sendNotification = vi.fn(async () => false);
-    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification } } });
+    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } } });
     await emit(finished({ outcome: 'admin_blocked' }));
     expect(sendNotification).toHaveBeenCalledOnce();
     expect(tasks()[0]!.payload.content).toContain("I couldn't notify the operator");

@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   confirmationStatus,
+  markOperatorConfirmationUndelivered,
   sendPendingOperatorConfirmation,
   type PendingConfirmationDeps,
 } from '../../../src/notifications/operator-confirmation.js';
@@ -165,5 +166,33 @@ describe('sendPendingOperatorConfirmation', () => {
     const h = makeHarness({ operator: OPERATOR, confirmation: confirmation({ email: OTHER.email }) });
     expect(await sendPendingOperatorConfirmation(h.deps)).toMatchObject({ state: 'sent', email: OPERATOR.email });
     expect(h.sendNotification).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A published notice that the adapter could not deliver (#2710 review)
+// ---------------------------------------------------------------------------
+
+describe('markOperatorConfirmationUndelivered', () => {
+  it('puts a "sent" confirmation back to failed, so the console stops claiming it arrived', async () => {
+    const h = makeHarness({ operator: OPERATOR, confirmation: confirmation() });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+
+    expect(h.stored()).toMatchObject({ email: OPERATOR.email, sentAt: null, attemptedAt: NOW });
+    await expect(sendPendingOperatorConfirmation(h.deps)).resolves.toMatchObject({ state: 'sent' });
+    expect(h.sendNotification).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a failure record alone when nothing says it was sent', async () => {
+    const h = makeHarness({ operator: OPERATOR, confirmation: confirmation({ sentAt: null }) });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+    expect(h.stored()).toMatchObject({ sentAt: null, attemptedAt: NOW });
+  });
+
+  it('does not touch the record of an address that is no longer the operator', async () => {
+    // A late failure report for the old EA must not invalidate the new one's confirmation.
+    const h = makeHarness({ operator: OPERATOR, confirmation: confirmation({ email: OTHER.email }) });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+    expect(h.stored()).toMatchObject({ email: OTHER.email, sentAt: NOW });
   });
 });

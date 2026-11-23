@@ -110,7 +110,7 @@ export interface MailboxSignInResumeSubscriberDeps {
    *  recipient is the gateway's to resolve from the notification type (#2710), and the gateway
    *  checks that an adapter can deliver it. */
   notifier?: {
-    gateway: Pick<OutboundGateway, 'sendNotification'>;
+    gateway: Pick<OutboundGateway, 'sendNotification' | 'canDeliverNotifications'>;
   };
 }
 
@@ -231,6 +231,11 @@ export class MailboxSignInResumeSubscriber {
     const notifier = this.deps.notifier;
     if (!notifier) {
       this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no notice can be sent (no gateway)');
+      return false;
+    }
+    // Nothing can deliver it yet: a publish would reach no one and leave an audit row (#2710).
+    if (!notifier.gateway.canDeliverNotifications()) {
+      this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no email adapter delivers notices yet');
       return false;
     }
     let sent: boolean;

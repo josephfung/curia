@@ -5,7 +5,7 @@ function make(sent = true, hasOperator: (() => Promise<boolean>) | undefined = u
   const sendNotification = vi.fn().mockResolvedValue(sent);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const n = new MailboxOutageNotifier({
-    gateway: { sendNotification },
+    gateway: { sendNotification, canDeliverNotifications: () => true },
     ...(hasOperator ? { hasOperator } : {}),
     logger: logger as never,
   });
@@ -77,6 +77,34 @@ describe('MailboxOutageNotifier', () => {
     expect(sendNotification).toHaveBeenCalledTimes(2);
   });
 
+  it('mints no sign-in link, and alerts nothing, when no adapter can deliver a notice yet', async () => {
+    // Cheap pre-check (#2710 review): a single-use link minted for a notice that cannot be sent
+    // is a wasted link and a new undelivered audit row on every failing probe.
+    const mint = vi.fn().mockResolvedValue('https://curia.example.com/api/mailbox-signin/start/x');
+    const sendNotification = vi.fn().mockResolvedValue(true);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    let delivering = false;
+    const n = new MailboxOutageNotifier({
+      gateway: { sendNotification, canDeliverNotifications: () => delivering },
+      mintReconnectLink: mint,
+      logger: logger as never,
+    });
+
+    await n.record('work', 'Work', false, { authFailure: true });
+
+    expect(mint).not.toHaveBeenCalled();
+    expect(sendNotification).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mailboxId: 'work' }),
+      expect.stringContaining('no email adapter'),
+    );
+    // Once an adapter subscribes, the next failing probe alerts with the link.
+    delivering = true;
+    await n.record('work', 'Work', false, { authFailure: true });
+    expect(mint).toHaveBeenCalledOnce();
+    expect(sendNotification).toHaveBeenCalledOnce();
+  });
+
   describe('the operator also hears about it (#2710)', () => {
     it('raises the link-free operator notice when an operator is set', async () => {
       const { n, sendNotification } = make(true, async () => true);
@@ -114,7 +142,7 @@ describe('MailboxOutageNotifier', () => {
         .mockResolvedValueOnce(true);
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
       const n = new MailboxOutageNotifier({
-        gateway: { sendNotification },
+        gateway: { sendNotification, canDeliverNotifications: () => true },
         hasOperator: async () => true,
         logger: logger as never,
       });
@@ -142,7 +170,7 @@ describe('MailboxOutageNotifier', () => {
       const sendNotification = vi.fn().mockResolvedValue(true);
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
       const n = new MailboxOutageNotifier({
-        gateway: { sendNotification },
+        gateway: { sendNotification, canDeliverNotifications: () => true },
         mintReconnectLink: mint,
         ...(mintTimeoutMs !== undefined ? { mintTimeoutMs } : {}),
         logger: logger as never,

@@ -261,7 +261,7 @@ import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { createOperatorEmailLookup } from './notifications/operator-setting.js';
-import { sendPendingOperatorConfirmation } from './notifications/operator-confirmation.js';
+import { markOperatorConfirmationUndelivered, sendPendingOperatorConfirmation } from './notifications/operator-confirmation.js';
 import { createOperatorNotifier } from './onboarding/notify-operator.js';
 import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
@@ -2366,6 +2366,14 @@ async function main(): Promise<void> {
         // after the health service). Checked in the gateway, so every caller gets the same answer.
         canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
       },
+      // A published confirmation that the adapter could not deliver is corrected here (#2710):
+      // otherwise a refused or failed send reads as "sent" forever, and the typo check misses
+      // exactly the installs where operator notices never arrive.
+      onNotificationUndelivered: async (notificationType) => {
+        if (notificationType === 'operator_configured') {
+          await markOperatorConfirmationUndelivered({ pool, logger });
+        }
+      },
     });
     outboundGateway.start();
     logger.info({
@@ -2377,7 +2385,26 @@ async function main(): Promise<void> {
       queueableChannels: [...outboundQueueReadiness.keys()],
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
-  } else if (vapidSetup.configured && !outboundFilter && !setupRequiredAtBoot) {
+  }
+
+  /**
+   * Retry an operator confirmation Setup still owes (#2710). Safe to call at any time: it sends
+   * nothing unless a notice is owed and something can deliver it. Used at boot (after the email
+   * adapters start), on Start onboarding, and from the console's own save.
+   */
+  const retryOwedOperatorConfirmation = outboundGateway
+    ? async (): Promise<void> => {
+        await sendPendingOperatorConfirmation({
+          pool,
+          gateway: outboundGateway,
+          canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
+          logger,
+        });
+      }
+    : undefined;
+
+  if (vapidSetup.configured && !outboundFilter && !setupRequiredAtBoot) {
     logger.warn('Outbound gateway NOT initialized — phone push is configured but the content filter is not ready');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
     // Nylas clients are available but outboundFilter is missing (no coordinator config found).
@@ -3854,8 +3881,9 @@ async function main(): Promise<void> {
       // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
       notifyCeiling: async (batches) => {
         // The gateway resolves the address and checks that an adapter can deliver it, returning
-        // false when not, so the heartbeat retries rather than reporting a notice nobody got (#2710).
-        if (!outboundGateway) return false;
+        // false when not, so the heartbeat retries rather than reporting a notice nobody got
+        // (#2710). Asking first keeps a hopeless retry from writing an audit row every minute.
+        if (!outboundGateway || !outboundGateway.canDeliverNotifications()) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
           subject: 'Curia paused inbox triage for today',
@@ -4402,6 +4430,7 @@ async function main(): Promise<void> {
     ...(outboundGateway ? { outboundGateway } : {}),
     onOperatorChanged: (operator) => operatorEmail.remember(operator),
     canDeliverNotifications: () => emailAdapters.some((a) => a.deliversNotifications()),
+    ...(retryOwedOperatorConfirmation ? { retryOwedOperatorConfirmation } : {}),
     mailboxSignIn: {
       service: mailboxSignInService,
       readiness: nylasSignInReadiness,
@@ -4680,15 +4709,9 @@ async function main(): Promise<void> {
       // An operator confirmation owed from Setup is sent now that something can deliver it
       // (#2710): "Who it's for" is saved before Curia has an email account, so the notice waits
       // for this point. Best-effort — a failure is logged and retried on the next boot or Start.
-      if (outboundGateway) {
+      if (retryOwedOperatorConfirmation) {
         try {
-          await sendPendingOperatorConfirmation({
-            pool,
-            gateway: outboundGateway,
-            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
-            ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
-            logger,
-          });
+          await retryOwedOperatorConfirmation();
         } catch (err) {
           logger.error({ err }, 'Boot: failed to send an owed operator confirmation');
         }

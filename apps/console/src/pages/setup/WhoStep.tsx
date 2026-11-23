@@ -35,6 +35,19 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
    *  Everything else on the step is already saved, so the second press only moves on. */
   const [notice, setNotice] = useState<{ message: string; name: string; email: string } | null>(null);
 
+  /**
+   * Any edit clears the owed-notice line and its "press again" state (#2710 review). The notice
+   * is about the values that were saved; once one of them changes, pressing Save must save the
+   * new values rather than continue with the old ones — otherwise an edit made after the first
+   * press (a timezone, the principal's email, or a switch to "Myself") would be silently lost.
+   */
+  function edit<T>(setter: (value: T) => void): (value: T) => void {
+    return (value: T) => {
+      setNotice(null);
+      setter(value);
+    };
+  }
+
   function validate(): string | null {
     if (setupFor === 'other') {
       if (!operatorName.trim()) return 'Add your name.';
@@ -110,7 +123,7 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
       <ChoiceGroup
         label="Who Curia is for"
         value={setupFor}
-        onChange={setSetupFor}
+        onChange={edit(setSetupFor)}
         options={[
           { value: 'self', title: 'Myself', description: 'You’ll set it up, then go straight into your first conversation.' },
           { value: 'other', title: 'Someone else', description: 'An executive you work for. You set things up; they get an invitation when you’re ready.' },
@@ -126,10 +139,10 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
           <div className="setup-fields">
             <div className="setup-row2">
               <label className="setup-field">Your name
-                <input type="text" value={operatorName} onChange={(e) => setOperatorName(e.target.value)} autoComplete="name" />
+                <input type="text" value={operatorName} onChange={(e) => edit(setOperatorName)(e.target.value)} autoComplete="name" />
               </label>
               <label className="setup-field">Your email
-                <input type="email" value={operatorEmail} onChange={(e) => setOperatorEmail(e.target.value)} autoComplete="email" />
+                <input type="email" value={operatorEmail} onChange={(e) => edit(setOperatorEmail)(e.target.value)} autoComplete="email" />
               </label>
             </div>
           </div>
@@ -145,24 +158,24 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
           <div className="setup-fields">
             <div className="setup-row2">
               <label className="setup-field">Full name
-                <input id="setup-principal-name" type="text" value={name} onChange={(e) => setName(e.target.value)} />
+                <input id="setup-principal-name" type="text" value={name} onChange={(e) => edit(setName)(e.target.value)} />
               </label>
               <label className="setup-field"><span className="setup-field-label">Title <span className="setup-hint">(optional)</span></span>
-                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+                <input type="text" value={title} onChange={(e) => edit(setTitle)(e.target.value)} />
               </label>
             </div>
             <label className="setup-field">Email
-              <input id="setup-principal-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <input id="setup-principal-email" type="email" value={email} onChange={(e) => edit(setEmail)(e.target.value)} />
             </label>
             <div className="setup-row2">
               <label className="setup-field">Timezone
-                <select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                <select value={timezone} onChange={(e) => edit(setTimezone)(e.target.value)}>
                   {!IANA_ZONES.includes(timezone) && <option value={timezone}>{timezone}</option>}
                   {IANA_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
                 </select>
               </label>
               <label className="setup-field"><span className="setup-field-label">Pronouns <span className="setup-hint">(optional)</span></span>
-                <input type="text" value={pronouns} onChange={(e) => setPronouns(e.target.value)} placeholder="she/her" />
+                <input type="text" value={pronouns} onChange={(e) => edit(setPronouns)(e.target.value)} placeholder="she/her" />
               </label>
             </div>
           </div>

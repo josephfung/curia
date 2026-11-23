@@ -626,22 +626,6 @@ export async function setupRoutes(
           logger.error({ err }, 'POST /api/setup/start: failed to seed the onboarding playbook');
         }
       }
-      // An operator confirmation owed from Setup is retried here too (#2710): Start is the
-      // point where a fresh install has restarted and can email, so it is the tempting moment
-      // for a typo to go unnoticed. Best-effort: a failure must not fail Start.
-      if (outboundGateway) {
-        try {
-          await sendPendingOperatorConfirmation({
-            pool,
-            gateway: outboundGateway,
-            ...(canDeliver ? { canDeliver } : {}),
-            ...(appOrigin ? { appOrigin } : {}),
-            logger,
-          });
-        } catch (err) {
-          logger.error({ err }, 'POST /api/setup/start: failed to send an owed operator confirmation');
-        }
-      }
       // setupGuide: whether web chat now reaches the setup guide, so the page can say when not.
       return reply.send({ inSetup: isInSetup(state.phase), setupGuide: isInSetup(state.phase) });
     } catch (err) {

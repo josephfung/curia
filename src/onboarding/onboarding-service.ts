@@ -243,8 +243,15 @@ export class OnboardingService {
     taskId: string,
     event: OperatorEvent,
     notice: OperatorNotice = {},
-  ): Promise<boolean> {
-    return notifyOperatorOnce(
+  ): Promise<{ alreadyRaised: boolean; recorded: boolean }> {
+    // Checked up front so the caller can say "already raised" instead of "could not be recorded":
+    // the model would otherwise retry a notice that is deliberately not sent twice (#2710).
+    // notifyOperatorOnce re-checks under the state lock, so this is only about the message.
+    const state = await readOnboardingState(this.deps.configStore, this.deps.logger);
+    if (state !== null && state.taskId === taskId && state.operatorNotified.includes(event)) {
+      return { alreadyRaised: true, recorded: true };
+    }
+    const recorded = await notifyOperatorOnce(
       {
         taskRepo: this.deps.taskRepo,
         logger: this.deps.logger,
@@ -256,6 +263,7 @@ export class OnboardingService {
       event,
       notice,
     );
+    return { alreadyRaised: false, recorded };
   }
 
   async status(): Promise<OnboardingStatus> {

@@ -57,6 +57,39 @@ export async function readOperatorConfirmationStatus(
   return confirmationStatus(records.operator?.value, records.operator_confirmation?.value);
 }
 
+/**
+ * The confirmation could not be delivered after all (#2710). `sendNotification` reports a publish,
+ * and the send happens later in the email adapter, so a refused or failed delivery arrives here
+ * as a second event. Clearing `sentAt` puts the notice back to `failed`, which is what the console
+ * shows and what the next boot or Start retries — otherwise a mistyped address reads as confirmed
+ * on exactly the installs where notices never arrive.
+ *
+ * Only the current address's record is touched: a newer confirmation for a newer address is not
+ * invalidated by a late failure report for the old one. A no-op when nothing says it was sent.
+ */
+export async function markOperatorConfirmationUndelivered(deps: {
+  pool: SettingsPool;
+  logger: Pick<Logger, 'error'> & Pick<Logger, 'warn'>;
+}): Promise<void> {
+  const [operator, stored] = await Promise.all([
+    getSetting(deps.pool, 'operator', deps.logger),
+    getSetting(deps.pool, 'operator_confirmation', deps.logger),
+  ]);
+  if (!operator || !stored) return;
+  if (stored.email !== operator.email || stored.sentAt === null) return;
+  try {
+    await setSetting(deps.pool, 'operator_confirmation', { ...stored, sentAt: null }, 'curia', deps.logger);
+    deps.logger.warn(
+      { attemptedAt: stored.attemptedAt },
+      'operator confirmation: the notice was not delivered — marked failed so it is retried',
+    );
+  } catch (err) {
+    // The audit row from the adapter is the durable record; failing to update the console's copy
+    // of it must not throw into the notification path.
+    deps.logger.error({ err }, 'operator confirmation: could not mark the notice undelivered');
+  }
+}
+
 export interface PendingConfirmationDeps {
   pool: SettingsPool;
   /** The one system-notice path. Absent: nothing can be sent, so the notice stays owed. */

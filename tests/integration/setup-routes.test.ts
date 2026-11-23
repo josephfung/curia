@@ -34,6 +34,7 @@ import {
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
+import { sendPendingOperatorConfirmation } from '../../src/notifications/operator-confirmation.js';
 import { lockSetupSingletons } from './setup-singletons-lock.js';
 import { isIdentityConfigured } from '../../src/channels/http/routes/identity.js';
 
@@ -1076,9 +1077,14 @@ describeIf('/api/setup/* routes', () => {
       expect(res.json().operatorConfirmation).toMatchObject({ state: 'failed' });
       expect(await readSetupState(pool, logger)).toMatchObject({ operatorEmail: 'sam@example.com' });
 
-      // A failed notice is owed, not abandoned: the next attempt sends it.
-      const retried = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
-      expect(retried.statusCode).toBe(200);
+      // A failed notice is owed, not abandoned: the next attempt (boot, Start onboarding, or the
+      // console's own save) sends it, and records the success.
+      const retried = await sendPendingOperatorConfirmation({
+        pool,
+        gateway: { sendNotification: operatorNotices },
+        logger,
+      });
+      expect(retried).toMatchObject({ state: 'sent' });
       expect(operatorNotices).toHaveBeenCalledTimes(2);
     });
 

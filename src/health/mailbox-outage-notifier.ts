@@ -19,7 +19,7 @@ import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 
 export interface MailboxOutageNotifierDeps {
-  gateway: Pick<OutboundGateway, 'sendNotification'>;
+  gateway: Pick<OutboundGateway, 'sendNotification' | 'canDeliverNotifications'>;
   /**
    * Whether an operator is set (ADR-067's `operator` setting). When one is, the same outage
    * also raises the operator's link-free notice; when none is, that notice would go to the
@@ -73,6 +73,14 @@ export class MailboxOutageNotifier {
 
     // The principal's alert is one per episode. The operator's copy is retried separately, so a
     // probe after a failed operator send still tries it without repeating the principal's.
+    // Nothing can deliver a notice yet: stop before minting a single-use sign-in link that would
+    // be discarded, and before writing an undelivered audit row on every failing probe (#2710).
+    // The gateway checks again on the way out; this is the cheap pre-check.
+    if (!this.deps.gateway.canDeliverNotifications()) {
+      this.log.warn({ mailboxId }, 'Principal mailbox is failing but no email adapter delivers alerts yet; will alert on a later probe');
+      return;
+    }
+
     if (this.alerted.has(mailboxId)) {
       if (!this.operatorAlerted.has(mailboxId)) await this.notifyOperatorOfOutage(mailboxId, label);
       return;
@@ -145,6 +153,7 @@ export class MailboxOutageNotifier {
    */
   private async notifyOperatorOfOutage(mailboxId: string, label: string): Promise<void> {
     if (this.operatorAlerted.has(mailboxId)) return;
+    if (!this.deps.gateway.canDeliverNotifications()) return;
     // The dependency contract is "never throws" (createOperatorEmailLookup answers false rather
     // than throwing), so a read failure has already been handled where it happened.
     if (!this.deps.hasOperator || !(await this.deps.hasOperator())) return;

@@ -484,6 +484,15 @@ export interface OutboundGatewayConfig {
    * notification has no address, so nothing is sent and the miss is audited — never a guess.
    */
   notificationRecipients?: NotificationRecipientDeps;
+  /**
+   * Told when a published notice turned out not to be delivered (#2710): the channel adapter
+   * reports a refused or failed send, and a caller that recorded "published" as success can
+   * correct itself. Best-effort — the audit row is the durable record.
+   */
+  onNotificationUndelivered?: (
+    notificationType: OutboundNotificationRequest['notificationType'],
+    reason: Extract<OutboundNotificationUndeliveredPayload['reason'], 'delivery_refused' | 'delivery_failed'>,
+  ) => Promise<void> | void;
 }
 
 /**
@@ -1322,6 +1331,7 @@ export class OutboundGateway {
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
   private readonly notificationRecipients?: NotificationRecipientDeps;
+  private readonly onNotificationUndelivered?: OutboundGatewayConfig['onNotificationUndelivered'];
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1364,6 +1374,7 @@ export class OutboundGateway {
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
     this.notificationRecipients = config.notificationRecipients;
+    this.onNotificationUndelivered = config.onNotificationUndelivered;
     if (this.gating === 'band' && !this.bandReview) {
       // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
       // that replaces them, sends would go out with no disclosure review at all.
@@ -2834,7 +2845,7 @@ export class OutboundGateway {
     // Nothing can deliver a publish right now: an email adapter subscribes to
     // outbound.notification when it starts, and until then the event reaches no one. Checked
     // here, once, so every caller gets the same answer instead of each one re-checking (#2710).
-    if (this.notificationRecipients?.canDeliver && !this.notificationRecipients.canDeliver()) {
+    if (!this.canDeliverNotifications()) {
       this.log.warn(
         { notificationType: request.notificationType, audience },
         'outbound-gateway: no adapter delivers notifications yet — the notice is not published',
@@ -2917,6 +2928,23 @@ export class OutboundGateway {
   }
 
   /**
+   * Whether a channel adapter that delivers notifications is subscribed right now (#2710).
+   * Callers that do work before publishing — minting a sign-in link, retrying an owed notice —
+   * ask first, so a notice that cannot go anywhere does not cost a link or write an audit row on
+   * every retry. `sendNotification` checks it too; this is the cheap pre-check, not a substitute.
+   */
+  canDeliverNotifications(): boolean {
+    const canDeliver = this.notificationRecipients?.canDeliver;
+    if (!canDeliver) return true;
+    try {
+      return canDeliver();
+    } catch (err) {
+      this.log.warn({ err }, 'outbound-gateway: could not tell whether notifications are deliverable');
+      return false;
+    }
+  }
+
+  /**
    * Record that a published notice reached nobody, from a channel adapter that knows the
    * delivery outcome (#2710). The gateway publishes only the publish result; the send happens
    * later, in the email adapter, so a caller's `true` means "queued", not "delivered". This is
@@ -2934,6 +2962,16 @@ export class OutboundGateway {
       'outbound-gateway: system notification was not delivered — auditing the miss',
     );
     await this.auditUndeliveredNotification(notificationType, reason, parentEventId);
+    if (!this.onNotificationUndelivered) return;
+    try {
+      await this.onNotificationUndelivered(notificationType, reason);
+    } catch (err) {
+      // The caller's correction of its own record is best-effort; the audit row is the record.
+      this.log.error(
+        { err, notificationType, reason },
+        'outbound-gateway: the undelivered-notification hook threw',
+      );
+    }
   }
 
   /**

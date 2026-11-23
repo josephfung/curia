@@ -18,7 +18,10 @@ const STARTED: StartResult = {
   restartScheduled: false,
 };
 
-async function appWith(opts: { publish?: () => Promise<void> } = {}) {
+async function appWith(opts: {
+  publish?: () => Promise<void>;
+  retryOwedOperatorConfirmation?: () => Promise<void>;
+} = {}) {
   const sessions: SessionStore = new Map();
   sessions.set(hashToken(OPERATOR_COOKIE), {
     id: OPERATOR_SESSION_ID,
@@ -40,6 +43,9 @@ async function appWith(opts: { publish?: () => Promise<void> } = {}) {
     bus: { publish } as unknown as EventBus,
     logger: createSilentLogger(),
     onboarding: onboarding as unknown as OnboardingRouteOptions['onboarding'],
+    ...(opts.retryOwedOperatorConfirmation
+      ? { retryOwedOperatorConfirmation: opts.retryOwedOperatorConfirmation }
+      : {}),
   });
   return { app, onboarding, publish };
 }
@@ -47,6 +53,24 @@ async function appWith(opts: { publish?: () => Promise<void> } = {}) {
 const SESSION_HEADERS = { cookie: `curia_session=${OPERATOR_COOKIE}` };
 
 describe('POST /api/onboarding/start', () => {
+  it('retries an owed operator confirmation once onboarding has started (#2710)', async () => {
+    const retry = vi.fn(async () => {});
+    const { app } = await appWith({ retryOwedOperatorConfirmation: retry });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/start', headers: SESSION_HEADERS, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(retry).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('does not fail Start when the owed confirmation cannot be sent', async () => {
+    const retry = vi.fn(async () => { throw new Error('nylas down'); });
+    const { app } = await appWith({ retryOwedOperatorConfirmation: retry });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/start', headers: SESSION_HEADERS, payload: {} });
+    // Onboarding did start; only the notice is missing, and it is retried on the next boot.
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
   it('refuses the access-key header without a console session (401) and starts nothing', async () => {
     const { app, onboarding } = await appWith();
     const res = await app.inject({

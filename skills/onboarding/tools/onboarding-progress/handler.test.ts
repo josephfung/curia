@@ -277,12 +277,13 @@ describe('onboarding-progress', () => {
     expect(w.taskRepo.updateTask).toHaveBeenCalledWith('parent', { progressNote: 'Operator notice: web_search_failed' });
   });
 
-  it('operator_notice is raised once per run: a second call emails nothing more', async () => {
+  it('operator_notice is raised once per run: a second call reports alreadyRaised, not a failure', async () => {
     const w = makeWorld();
     const first = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
     expect(first).toEqual({ success: true, data: { recorded: true } });
+    // Success, so the model does not retry a notice the dedupe is deliberately holding back.
     const second = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
-    expect(second.success).toBe(false);
+    expect(second).toEqual({ success: true, data: { alreadyRaised: true } });
     // One note on the task, whatever the model does with the tool.
     expect(w.taskRepo.updateTask).toHaveBeenCalledTimes(1);
   });
