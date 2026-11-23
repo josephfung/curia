@@ -97,7 +97,7 @@
     "pgvector": "^0.3.0",
     "pino": "^10.4.0",
     "playwright": "1.65.0",
-    "sanitize-html": "^2.18.1",
+    "sanitize-html": "^2.18.2",
     "tldts": "^7.4.19",
     "undici": "^8.12.4",
     "web-push": "^3.6.7",
