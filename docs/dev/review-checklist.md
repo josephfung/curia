@@ -33,6 +33,7 @@ How reviewers weigh findings, including what not to raise, is in `docs/dev/revie
 - **Test each new branch:** assert returned values and audit rows, not just that a call happened. *(missing or weak tests)*
 - **Own your rows:** integration tests clean up and count only rows they created; never assert on table-wide counts. *(test isolation)*
 - **Scenario checks:** each critical check must fail a wrong run and pass a correct one; bind it to the specific tool call or task. *(scenario / smoke precision)*
+- **PR size against the issue's `size:` label:** count production lines (tests and docs excluded); split or relabel before opening. *(scope creep)*
 - **Docs follow code:** re-read every spec, ADR, `docs/dev` page and code comment that describes the behavior you changed. *(doc drift)*
 - **Migrations:** never edit an applied migration (add a new one); schema-qualify; make downgrades preserve pre-existing rows. *(migration safety)*
 - **Shell:** quote and default variables deliberately (`-` vs `:-`), and treat a failed probe as "unknown", not "absent". *(shell robustness)*
