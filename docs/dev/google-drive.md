@@ -31,9 +31,16 @@ exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any chang
 
 ### One-time setup
 
+Google Workspace is a **required** Setup step (#2683): the onboarding deep dive (#2362)
+delivers its drafts as Google Docs from Curia's account. The Setup page's Google Workspace
+step (under Business Apps, after Email & calendar) and the google-workspace drawer on the MCP
+tools page both take the three values and run the sign-in, so Steps 4 and 5 below happen in
+the console. The manual flow is kept as a fallback.
+
 #### Step 1 — Google Cloud Project
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a new project (e.g. `curia-workspace`).
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a new project (e.g. `curia-workspace`),
+   or reuse the one from the principal's email & calendar setup (Nylas's Google connector).
    Use an admin/developer Google account — not Curia's Gmail account.
 2. Enable these APIs (APIs & Services → Library):
    - Google Drive API
@@ -73,12 +80,26 @@ exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any chang
 
 #### Step 3 — Create OAuth credentials
 
-1. APIs & Services → Credentials → Create Credentials → **OAuth client ID**.
-2. Application type: **Desktop app**.
-3. Name it (e.g. `curia-mcp-client`).
-4. Note the **Client ID** and **Client Secret** — you will need these in the next step.
+1. APIs & Services → Credentials → Create Credentials → **OAuth client ID**
+   (or open the Web application client the Nylas Google connector already uses).
+2. Application type: **Web application**. A Desktop app client accepts only localhost
+   redirects, so it cannot complete the console sign-in; it still works for the manual
+   fallback below.
+3. Under **Authorized redirect URIs**, add Curia's callback, shown in the Google Workspace
+   step: `<APP_ORIGIN>/api/google-workspace/callback` (e.g.
+   `https://curia.example.com/api/google-workspace/callback`). Google accepts https, or
+   plain http for `localhost` only, so APP_ORIGIN must be one of those.
+4. Note the **Client ID** and **Client Secret**. Google shows a secret only once, at
+   creation. When reusing the Nylas connector's client, choose **Add secret** on it and use
+   the new secret for Curia; leave the original in place, since Nylas still uses it.
 
-#### Step 4 — Seed the OAuth secrets into the vault
+#### Step 4 — Save the OAuth values
+
+**From the console (preferred).** In the Setup page's Google Workspace step, or Settings →
+the google-workspace MCP server's drawer, save Curia's Google address, the client ID and the
+secret. They go to the encrypted vault under the keys below.
+
+**From the shell (fallback).**
 
 As of #913 the Google Workspace OAuth secrets live in the **encrypted vault**, not
 in `.env`. Both consumers read them from the vault at runtime: the
@@ -100,13 +121,32 @@ and `curia_google_email`. Do **not** add these to `.env` — if the vault has no
 for them, the `google-workspace` MCP server is skipped at startup and Drive download
 fails with a clear "not set in the vault" error.
 
-#### Step 5 — Run the first OAuth flow
+#### Step 5 — Sign in as Curia
 
-The OAuth flow must be completed locally (where you have a browser) and the resulting
-token cache copied to the VPS. There is no browser-accessible auth URL — authentication
-is initiated programmatically via the `start_google_auth` MCP tool.
+**From the console (preferred).** Choose **Sign in as Curia** in the Google Workspace step
+(or the drawer), sign in with **Curia's own Google account**, and leave every permission
+ticked. Google sends the browser back to Curia's callback, which:
 
-A script at `scripts/gdrive-auth.py` handles the full flow.
+- spends the single-use OAuth `state` (15 minutes, hashed in
+  `google_workspace_signin_states`, with a PKCE verifier);
+- refuses a different Google account (`wrong_account`, and revokes that stranger's grant)
+  or a grant missing Drive, Docs or Sheets (`missing_scopes`, not revoked: Google revokes the
+  whole grant for the account and client, which would also end a working saved sign-in);
+- writes the token to `~/.google_workspace_mcp/credentials/<address>.json`, where the MCP
+  server reads it (no copying), and restarts Curia once so the server starts with it.
+
+The result page explains each outcome. The step's status line, and setup-status's
+`google_workspace` item, run a live check: Curia refreshes the saved token against Google
+and reports signed in, not signed in, or token rejected. An install whose token was copied
+by hand reads signed in without signing in again.
+
+**Manual fallback.** If the console sign-in is not possible (no public APP_ORIGIN, say),
+complete the flow locally, where you have a browser, and copy the token cache to the VPS.
+This uses workspace-mcp's own `http://localhost:8000/oauth2callback` redirect, so it needs a
+Desktop app client, or that URI on a Web client. A script at `scripts/gdrive-auth.py`
+handles the flow. Copying the token does not turn the google-workspace MCP server on (the
+console sign-in does): enable it under Settings → MCP Skills before restarting, or the step
+stays pending with "the google-workspace MCP server is turned off".
 
 **Prerequisites:**
 - `uv` installed locally (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
@@ -164,7 +204,7 @@ Curia will be able to read and write anything shared with that Gmail.
 OAuth tokens auto-refresh in the background — no manual action needed for day-to-day use.
 
 If tokens are ever revoked (e.g. you revoke app access in Google account security settings),
-repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
+the Google Workspace step reads "token rejected". Sign in as Curia again (Step 5).
 
 ---
 

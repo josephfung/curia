@@ -3,11 +3,16 @@ import pg from 'pg';
 import pino from 'pino';
 import { loadEncryptionKey } from '../../src/secrets/crypto.js';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
-import { seedVault, verifyRequiredSecrets, parseSeedOnly, SEED_SECRET_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
+import { seedVault, verifyRequiredSecrets, parseSeedOnly, SEED_SECRET_NAMES, SEED_IF_ABSENT_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL && process.env.SECRET_ENCRYPTION_KEY ? describe : describe.skip;
 const NYLAS_KEY = 'channel.email.nylas_api_key';
+const LIVEKIT_ENV = {
+  SEED_LIVEKIT_URL: 'wss://curia.example.com',
+  SEED_LIVEKIT_API_KEY: 'lk-key-new',
+  SEED_LIVEKIT_API_SECRET: 'lk-secret-new',
+};
 
 describeIf('seedVault', () => {
   const logger = pino({ level: 'silent' });
@@ -23,11 +28,11 @@ describeIf('seedVault', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('DELETE FROM secrets WHERE name = ANY($1)', [[...SEED_SECRET_NAMES]]);
+    await pool.query('DELETE FROM secrets WHERE name = ANY($1)', [[...SEED_SECRET_NAMES, ...SEED_IF_ABSENT_NAMES]]);
   });
 
   afterAll(async () => {
-    await pool.query('DELETE FROM secrets WHERE name = ANY($1)', [[...SEED_SECRET_NAMES]]);
+    await pool.query('DELETE FROM secrets WHERE name = ANY($1)', [[...SEED_SECRET_NAMES, ...SEED_IF_ABSENT_NAMES]]);
     await pool.end();
   });
 
@@ -152,9 +157,71 @@ describeIf('seedVault', () => {
     );
     expect(await verifyRequiredSecrets(secrets, logger)).toEqual([]);
   });
+
+  it('writes the LiveKit values when the vault has none', async () => {
+    const { seeded } = await seedVault(secrets, LIVEKIT_ENV, logger);
+    expect(seeded).toEqual(expect.arrayContaining([...SEED_IF_ABSENT_NAMES]));
+    expect(await secrets.get('channel.voice.livekit_url')).toBe('wss://curia.example.com');
+    expect(await secrets.get('channel.voice.livekit_api_key')).toBe('lk-key-new');
+    expect(await secrets.get('channel.voice.livekit_api_secret')).toBe('lk-secret-new');
+  });
+
+  it('never overwrites LiveKit values already in the vault', async () => {
+    await secrets.set('channel.voice.livekit_url', 'old-url');
+    await secrets.set('channel.voice.livekit_api_key', 'old-key');
+    await secrets.set('channel.voice.livekit_api_secret', 'old-secret');
+    const { seeded, kept } = await seedVault(secrets, LIVEKIT_ENV, logger);
+    expect(await secrets.get('channel.voice.livekit_url')).toBe('old-url');
+    expect(await secrets.get('channel.voice.livekit_api_key')).toBe('old-key');
+    expect(await secrets.get('channel.voice.livekit_api_secret')).toBe('old-secret');
+    expect([...kept].sort()).toEqual([...SEED_IF_ABSENT_NAMES].sort());
+    for (const name of SEED_IF_ABSENT_NAMES) expect(seeded).not.toContain(name);
+  });
+
+  it('reports kept values that differ from the offered ones, and warns without printing keys', async () => {
+    const logs: Array<{ level: number; obj: Record<string, unknown>; msg: string }> = [];
+    const spyLogger = pino({ level: 'info' }, {
+      write: (line: string) => {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        logs.push({ level: parsed.level as number, obj: parsed, msg: String(parsed.msg) });
+      },
+    });
+    await secrets.set('channel.voice.livekit_url', 'wss://old.example.com');
+    await secrets.set('channel.voice.livekit_api_key', 'old-key');
+    // Same secret as offered: kept, but not a difference.
+    await secrets.set('channel.voice.livekit_api_secret', 'lk-secret-new');
+    const { kept, keptDiffers } = await seedVault(secrets, LIVEKIT_ENV, spyLogger);
+    expect([...kept].sort()).toEqual([...SEED_IF_ABSENT_NAMES].sort());
+    expect([...keptDiffers].sort()).toEqual(['channel.voice.livekit_api_key', 'channel.voice.livekit_url']);
+    const warns = logs.filter(l => l.level === 40);
+    expect(warns.map(w => w.obj.name).sort()).toEqual(['channel.voice.livekit_api_key', 'channel.voice.livekit_url']);
+    const all = JSON.stringify(logs);
+    // The URL is not a secret and is named so the operator can see what was kept.
+    expect(all).toContain('wss://old.example.com');
+    expect(all).toContain('wss://curia.example.com');
+    // Keys and secrets never appear, kept or offered.
+    for (const v of ['old-key', 'lk-key-new', 'lk-secret-new']) expect(all).not.toContain(v);
+  });
+
+  it('keptDiffers is empty when the vault already holds the offered values', async () => {
+    await seedVault(secrets, LIVEKIT_ENV, logger);
+    const { kept, keptDiffers } = await seedVault(secrets, LIVEKIT_ENV, logger);
+    expect(kept).toHaveLength(SEED_IF_ABSENT_NAMES.length);
+    expect(keptDiffers).toEqual([]);
+  });
+
+  it('still upserts ordinary secrets', async () => {
+    await secrets.set('api_token', 'old');
+    await seedVault(secrets, { API_TOKEN: 'new' }, logger);
+    expect(await secrets.get('api_token')).toBe('new');
+  });
 });
 
 describe('parseSeedOnly', () => {
+  it('accepts channel.voice.livekit_url', () => {
+    expect([...parseSeedOnly('channel.voice.livekit_url')!]).toEqual(['channel.voice.livekit_url']);
+  });
+
   it('is undefined when unset or blank', () => {
     expect(parseSeedOnly(undefined)).toBeUndefined();
     expect(parseSeedOnly('  ')).toBeUndefined();

@@ -100,7 +100,6 @@ function makeAdapter(
     contactCreationMaxPerMessage: 10,
     contactCreationMaxPerHour: 100,
     maxConcurrentTurns: overrides.maxConcurrentTurns ?? 4,
-    ceoEmail: CEO_EMAIL,
     timezone: 'America/Toronto',
     configStore: overrides.configStore,
     unacknowledgedInbound: overrides.unacknowledgedInbound,

@@ -1,34 +1,6 @@
-// Pure helper functions for the wizard — no React, no DOM, fully testable.
+// Pure helpers shared by the Setup page and the Personality settings — no React, no DOM, fully testable.
 
 import { bandForScore, scoreForBand, type AutonomyBand } from '../autonomy-bands.js';
-
-export interface WizardWorkingHours {
-  start: string; // "HH:MM"
-  end: string;   // "HH:MM"
-  days: number[]; // 0=Sun..6=Sat
-}
-
-export interface WizardState {
-  // Step 1 — About you. Captured separately from the assistant identity below
-  // and POSTed to /api/setup/principal so the principal contact exists before
-  // the rest of the form is saved. Pre-populated on a re-run; never auto-skipped.
-  principalName: string;
-  // Steps 3–6 — assistant identity, tone & style, autonomy & preferences, review.
-  name: string;
-  title: string;
-  signature: string;
-  toneStyle: string;
-  verbosity: number;   // 0–100
-  // Null until GET /api/autonomy resolves; the wizard never guesses a band.
-  autonomyBand: AutonomyBand | null;
-  preferences: string;
-  // Step 2 — Your details (principal operational profile, #392).
-  timezone: string;
-  email: string;
-  preferredName: string;
-  principalTitle: string; // distinct from `title` (the assistant's title, Step 3)
-  workingHours: WizardWorkingHours | null;
-}
 
 // Local mirror of the OfficeIdentity shape from the backend identity API.
 // Kept in-app to avoid importing from src/ (different package).
@@ -73,35 +45,6 @@ export function defaultSignature(firstName: string): string {
 // src/channels/email/signature.ts, so the console shows exactly what goes out.
 export function fallbackEmailSignature(name: string, title: string): string {
   return [name, title].map(s => s.trim()).filter(Boolean).join('\n');
-}
-
-export const DEFAULT_WIZARD_STATE: WizardState = {
-  principalName: '',
-  name: assistantFullName(DEFAULT_ASSISTANT_FIRST_NAME),
-  title: 'Executive Assistant to the CEO',
-  signature: defaultSignature(DEFAULT_ASSISTANT_FIRST_NAME),
-  toneStyle: '',
-  verbosity: 50,
-  autonomyBand: null,
-  preferences: '',
-  timezone: '',
-  email: '',
-  preferredName: '',
-  principalTitle: '',
-  workingHours: null,
-};
-
-// Number of wizard steps: About you → Your details → Identity → Tone & style →
-// Autonomy & preferences → Review. The /setup route and WizardPage both clamp ?step= against
-// this, so a step added here is reachable everywhere at once (#2146).
-export const WIZARD_TOTAL_STEPS = 6;
-
-// Normalizes a raw ?step= search value to a valid step number. Non-numbers
-// (missing, strings, NaN) fall back to step 1; out-of-range values are clamped
-// so a stale link renders the nearest real step instead of breaking the route.
-export function clampWizardStep(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 1;
-  return Math.max(1, Math.min(WIZARD_TOTAL_STEPS, Math.round(raw)));
 }
 
 // Backend's POST /api/setup/principal accepts up to 200 characters; enforce the
@@ -175,20 +118,6 @@ export function lengthPreview(
   };
 }
 
-// The review card's one-line summary of a tone & style text: its first line, cut short.
-export function styleReviewDesc(text: string): string {
-  const first = text.trim().split('\n')[0] ?? '';
-  return first.length > 120 ? `${first.slice(0, 117).trimEnd()}…` : first;
-}
-
-// Short descriptions used in the review card (step 4).
-export function verbosityReviewDesc(v: number): string {
-  if (v <= 25) return 'Very brief responses — just the essentials.';
-  if (v <= 50) return 'Concise responses by default.';
-  if (v <= 75) return 'Adapts length to the situation.';
-  return 'Thorough by default — full context included.';
-}
-
 /**
  * The PUT /api/autonomy body for the band picked in the wizard, or null when the picked
  * band is the current one (the score stays exactly as it is).
@@ -229,34 +158,6 @@ export function validatePrincipalName(name: string): string | null {
   return null;
 }
 
-// Maps WizardState onto an existing LocalIdentity, appending preferences.
-// Constraints are always preserved from the existing identity since the wizard does
-// not expose them.
-export function buildIdentityPayload(
-  state: WizardState,
-  existing: LocalIdentity,
-): { identity: LocalIdentity; note: string } {
-  const prefs = state.preferences.trim()
-    ? [...existing.behavioralPreferences, state.preferences.trim()]
-    : [...existing.behavioralPreferences];
-
-  const identity: LocalIdentity = {
-    assistant: {
-      name: state.name.trim(),
-      title: state.title.trim(),
-      emailSignature: state.signature.trim(),
-    },
-    tone: {
-      style: state.toneStyle.trim(),
-      verbosity: state.verbosity,
-    },
-    behavioralPreferences: prefs,
-    constraints: existing.constraints,
-  };
-
-  return { identity, note: 'Saved via onboarding wizard' };
-}
-
 // Browser timezone detection for the Step 2 prefill (#392). Falls back to the
 // backend default if the platform doesn't expose a resolved zone.
 export function detectBrowserTimezone(): string {
@@ -280,19 +181,3 @@ export function validateProfileEmail(email: string): string | null {
   return null;
 }
 
-// Builds the POST /api/setup/principal/profile body, omitting empty optionals so the
-// backend never clobbers an existing value with a blank.
-export function buildProfilePayload(state: WizardState): {
-  timezone: string; email?: string; preferredName?: string; title?: string;
-  workingHours?: WizardWorkingHours;
-} {
-  const payload: {
-    timezone: string; email?: string; preferredName?: string; title?: string;
-    workingHours?: WizardWorkingHours;
-  } = { timezone: state.timezone.trim() };
-  if (state.email.trim()) payload.email = state.email.trim();
-  if (state.preferredName.trim()) payload.preferredName = state.preferredName.trim();
-  if (state.principalTitle.trim()) payload.title = state.principalTitle.trim();
-  if (state.workingHours) payload.workingHours = state.workingHours;
-  return payload;
-}

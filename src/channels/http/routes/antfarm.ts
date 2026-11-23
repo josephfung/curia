@@ -150,6 +150,13 @@ export async function antfarmRoutes(
     const cleanup = eventRouter.addAntfarmClient({ res: reply.raw });
 
     const heartbeat = setInterval(() => {
+      // Ended (dropped as slow, or at shutdown): a write after end() errors asynchronously,
+      // past this catch, so stop here instead (#2358).
+      if (reply.raw.writableEnded) {
+        clearInterval(heartbeat);
+        cleanup();
+        return;
+      }
       try {
         reply.raw.write(':ping\n\n');
       } catch (err) {

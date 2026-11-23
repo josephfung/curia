@@ -12,7 +12,10 @@
     "role": "string? (optional stance for the call, at most 500 characters; never interpreted by code)",
     "sensitivity": "string? (internal | confidential | shareable; default internal)",
     "expires_at": "string? (ISO timestamp; default 7 days from now, maximum 30 days)",
-    "scheduled_for": "string? (ISO timestamp of the call this agenda is for)"
+    "scheduled_for": "string? (ISO timestamp of the call this agenda is for)",
+    "calendar_event_id": "string? (id of the booked calendar event this call is; give with calendar_id. The agenda then follows the event: moved, cancelled, about to start, missed)",
+    "calendar_id": "string? (id of the calendar holding calendar_event_id)",
+    "owner_task_id": "string? (UUID of the task to wake when the event is cancelled, about to start, or missed)"
   },
   "outputs": {
     "agenda_id": "string (id of the parked agenda)",

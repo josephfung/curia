@@ -4,12 +4,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluateChecklist, parseCatalog, type CatalogTask, type SetupCheckDeps } from '../../../src/setup/checklist.js';
-import { EMPTY_SETUP_STATE, type SetupState } from '../../../src/setup/setup-state.js';
+import { EMPTY_SETUP_STATE, type SetupState } from '../../../src/setup/setup-settings.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 const CATALOG_PATH = join(import.meta.dirname, '../../../skills/setup/tools/setup-status/catalog.yaml');
 const catalog = parseCatalog(readFileSync(CATALOG_PATH, 'utf-8'));
-const REQUIRED = ['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin'];
+const REQUIRED = ['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'google_workspace'];
 
 const COMPLETE_STATE: SetupState = {
   ...EMPTY_SETUP_STATE,
@@ -29,6 +29,7 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     identityConfigured: async () => true,
     emailChannelStatus: async () => 'running',
     nylasSignInReadiness: async () => ({ ready: true, applicationId: 'app', region: 'us' }),
+    googleWorkspaceSignIn: async () => ({ state: 'signed_in' }),
     principalMailboxReady: async () => 'pending',
     channelStatus: async () => 'running',
     principalHasIdentity: async () => true,
@@ -36,6 +37,7 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     signalCalls: () => 'ready',
     secretPresent: async () => false,
     browserReady: () => false,
+    livekitProbe: async () => 'ok',
     logger: createSilentLogger(),
     ...overrides,
   };
@@ -92,16 +94,16 @@ describe('evaluateChecklist', () => {
     expect(result.setupComplete).toBe(true);
     expect(result.missing).toEqual([]);
     expect(task(result, 'principal_mailboxes').status).toBe('pending');
-    expect(task(result, 'google_workspace').status).toBe('pending');
   });
 
   const missingCases: Array<[string, Partial<SetupCheckDeps>, Partial<SetupState>]> = [
-    ['who', {}, { setupFor: null }],
+    ['who', { principal: async () => null }, {}],
     ['curia_name', { identityConfigured: async () => false }, {}],
     ['email', { emailChannelStatus: async () => 'not_configured' }, {}],
     ['messaging', {}, { messagingRoute: null }],
     ['voice', {}, { voiceRoute: null }],
     ['mailbox_signin', { nylasSignInReadiness: async () => ({ ready: false, reason: 'no_api_key', detail: 'Add the key.' }) }, {}],
+    ['google_workspace', { googleWorkspaceSignIn: async () => ({ state: 'not_signed_in' }) }, {}],
   ];
   it.each(missingCases)('is incomplete when %s is not done, and says why', async (id, override, state) => {
     const result = await evaluateChecklist(catalog, deps(override, state));
@@ -111,12 +113,7 @@ describe('evaluateChecklist', () => {
   });
 
   describe('who it is for', () => {
-    it('needs the operator details when Setup is for someone else', async () => {
-      const result = await evaluateChecklist(catalog, deps({}, { operatorEmail: null }));
-      expect(task(result, 'who').detail).toMatch(/operator/);
-    });
-
-    it('needs no operator details when Setup is for the operator themselves', async () => {
+    it('does not check the operator: the registry guarantees a present one has both fields', async () => {
       const result = await evaluateChecklist(catalog, deps({}, { setupFor: 'self', operatorName: null, operatorEmail: null }));
       expect(task(result, 'who').status).toBe('done');
     });
@@ -193,6 +190,45 @@ describe('evaluateChecklist', () => {
       const result = await evaluateChecklist(catalog, deps({}, { voiceRoute: 'signal' }));
       expect(task(result, 'voice').status).toBe('done');
     });
+
+    it('voice reads LiveKit not running when the probe is unreachable, even with every channel running', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'unreachable' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit isn't running");
+      expect(task(result, 'voice').detail).toContain('docker compose up -d livekit');
+    });
+
+    it('voice reads rejected keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'rejected' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain('rejected');
+    });
+
+    it('voice reads missing LiveKit keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'no_keys' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit's keys");
+    });
+
+    it('voice probe applies to the Signal route too', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'unreachable' }, { voiceRoute: 'signal' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit isn't running");
+    });
+
+    it('voice is restart_required when LiveKit answers and the channel is saved but not started', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        livekitProbe: async () => 'ok',
+        channelStatus: async (c) => (c === 'voice' ? 'restart_required' : 'running'),
+      }));
+      expect(task(result, 'voice')).toMatchObject({ status: 'pending', restart_required: true });
+    });
+
+    it('no route chosen: the probe is not called', async () => {
+      let called = false;
+      await evaluateChecklist(catalog, deps({ livekitProbe: async () => { called = true; return 'ok'; } }, { voiceRoute: null }));
+      expect(called).toBe(false);
+    });
   });
 
   it('reports a check whose dependency throws as pending, and still computes the rest', async () => {
@@ -214,21 +250,67 @@ describe('evaluateChecklist', () => {
     expect(task(result, 'mailbox_signin')).toMatchObject({ restart_required: true, detail: 'Restart.' });
   });
 
-  it('reports optional key-based extras with their keys and the upgrade state', async () => {
+  it('reports the optional upgrade state', async () => {
     const result = await evaluateChecklist(catalog, deps({ secretPresent: async (k) => k === 'tavily_api_key' }));
-    expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', done_means: 'credentials_saved', optional: true });
     expect(task(result, 'web_research').optional_upgrade?.configured).toBe(true);
+  });
+
+  describe('Google Workspace (#2683)', () => {
+    it('is required, and done only on the live sign-in check, not on saved keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        secretPresent: async () => true,
+        googleWorkspaceSignIn: async () => ({ state: 'not_signed_in' }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', optional: false, detail: 'Sign in as Curia with Google.' });
+      expect(task(result, 'google_workspace')).not.toHaveProperty('done_means');
+      expect(result.setupComplete).toBe(false);
+    });
+
+    it('reads done for an install whose saved token Google still accepts', async () => {
+      const result = await evaluateChecklist(catalog, deps());
+      expect(task(result, 'google_workspace').status).toBe('done');
+    });
+
+    it('is not done while the google-workspace MCP server is turned off', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'signed_in', serverEnabled: false }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', detail: expect.stringMatching(/MCP Skills/) });
+    });
+
+    it('names the missing settings', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address', 'the OAuth client secret'] }),
+      }));
+      expect(task(result, 'google_workspace').detail).toBe('Add Curia’s Google address, the OAuth client secret.');
+    });
+
+    it('passes on why Google rejected the token', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'token_rejected', detail: 'Sign in again.' }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', detail: 'Sign in again.' });
+    });
+
+    it('reads pending, not done, when Google cannot be asked', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => { throw new Error('unreachable'); },
+      }));
+      expect(task(result, 'google_workspace').detail).toMatch(/Could not check/);
+      expect(result.missing).toEqual(['google_workspace']);
+    });
   });
 
   it('gives every pending task a detail, including the optional extras on a new install', async () => {
     const result = await evaluateChecklist(catalog, deps({
+      principal: async () => null,
       identityConfigured: async () => false,
       emailChannelStatus: async () => 'not_configured',
-    }, { setupFor: null, messagingRoute: null, voiceRoute: null }));
+      googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address'] }),
+    }, { messagingRoute: null, voiceRoute: null }));
     const pending = result.tasks.filter((t) => t.status === 'pending');
     expect(pending.map((t) => t.id)).toEqual(expect.arrayContaining(['principal_mailboxes', 'web_browser', 'google_workspace', 'who']));
     for (const t of pending) expect(t.detail, t.id).toBeTruthy();
-    expect(task(result, 'google_workspace').detail).toMatch(/curia_google_email/);
   });
 
   it('gives a task no detail once it is done', async () => {

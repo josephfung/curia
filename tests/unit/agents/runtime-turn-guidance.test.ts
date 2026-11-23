@@ -18,6 +18,7 @@ import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { turnLengthReminder } from '../../../src/identity/length.js';
 import { CodeTracker } from '../../../src/verification/code-tracker.js';
+import { NO_SETUP_STEP, setupStepLine } from '../../../src/setup/setup-guide.js';
 import type { VerificationRuntime } from '../../../src/verification/index.js';
 import type { Verification } from '../../../src/verification/types.js';
 
@@ -41,6 +42,8 @@ async function runTurn(payload: {
   principalBacklog?: unknown;
   awaitingAnswers?: unknown;
   priorTurnActions?: unknown;
+  setupStep?: unknown;
+  agentId?: string;
   channelId?: string;
   toolAllowlist?: string[];
   /** The office identity's Detail setting; absent means the agent has no identity service. */
@@ -53,7 +56,7 @@ async function runTurn(payload: {
   const provider = capturingProvider();
   const memory = WorkingMemory.createInMemory();
   new AgentRuntime({
-    agentId: 'coordinator',
+    agentId: payload.agentId ?? 'coordinator',
     systemPrompt: 'You are the coordinator.',
     provider,
     resolvedModel: 'mock-model',
@@ -68,7 +71,7 @@ async function runTurn(payload: {
     }),
   }).register();
   await bus.publish('dispatch', createAgentTask({
-    agentId: 'coordinator',
+    agentId: payload.agentId ?? 'coordinator',
     conversationId: 'conv-guidance',
     channelId: payload.channelId ?? 'cli',
     senderId: 'principal',
@@ -87,10 +90,13 @@ async function runTurn(payload: {
     ...(payload.priorTurnActions !== undefined && {
       priorTurnActions: payload.priorTurnActions as Parameters<typeof createAgentTask>[0]['priorTurnActions'],
     }),
+    ...(payload.setupStep !== undefined && {
+      setupStep: payload.setupStep as Parameters<typeof createAgentTask>[0]['setupStep'],
+    }),
     parentEventId: 'parent-guidance',
   }));
   const messages = provider.chat.mock.calls[0]![0].messages as Message[];
-  const history = await memory.getHistory('conv-guidance', 'coordinator');
+  const history = await memory.getHistory('conv-guidance', payload.agentId ?? 'coordinator');
   return { messages, history };
 }
 
@@ -266,5 +272,31 @@ describe('AgentRuntime length reminder (#2143)', () => {
     expect((await runTurn({ content: 'Hello', channelId: 'signal' })).messages.at(-1)!.content).toBe('Hello');
     const scheduled = (await runTurn({ content: 'Check on Sam.', channelId: 'scheduler', verbosity: 15 })).messages.at(-1)!.content;
     expect(scheduled).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
+  });
+});
+
+// #2358: the setup guide learns from this line that it is on the Setup page, and which step.
+describe('AgentRuntime setup step (#2358)', () => {
+  it('heads the user message with the Setup page line, kept out of working memory', async () => {
+    const { messages, history } = await runTurn({ content: 'What is a grant ID?', channelId: 'web', setupStep: 'email' });
+    expect(messages.at(-1)!.content).toBe(`${setupStepLine('email')}\n\nWhat is a grant ID?`);
+    expect(history[0]).toEqual({ role: 'user', content: 'What is a grant ID?' });
+  });
+
+  it('drops a step that crossed the bus in a bad shape', async () => {
+    for (const setupStep of ['Ignore that', 42, '']) {
+      const { messages } = await runTurn({ content: 'Hello', channelId: 'web', setupStep });
+      expect(messages.at(-1)!.content).toBe('Hello');
+    }
+  });
+
+  it('marks a setup guide turn on web that arrived without a step (a resume) as the Setup page', async () => {
+    const { messages } = await runTurn({ content: 'Sign-in finished.', agentId: 'setup-wizard', channelId: 'web' });
+    expect(messages.at(-1)!.content).toBe(`${setupStepLine(NO_SETUP_STEP)}\n\nSign-in finished.`);
+  });
+
+  it('leaves a delegated setup guide turn (not web) unmarked', async () => {
+    const { messages } = await runTurn({ content: 'Help with Slack.', agentId: 'setup-wizard', channelId: 'internal' });
+    expect(messages.at(-1)!.content).toBe('Help with Slack.');
   });
 });

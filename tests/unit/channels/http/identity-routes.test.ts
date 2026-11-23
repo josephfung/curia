@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import type { Pool } from 'pg';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { identityRoutes } from '../../../../src/channels/http/routes/identity.js';
@@ -27,6 +28,31 @@ function createMockIdentityService(): OfficeIdentityService {
 }
 
 const SECRET = 'test-bootstrap-secret';
+
+// #2358: the console's first-load gate reads inSetup from this route.
+describe('GET /api/identity — inSetup', () => {
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
+
+  it.each([
+    ['a new install that has saved nothing, which is still in Setup', [], true],
+    ['Setup complete, or an install that predates the Setup page (migration 132)', [
+      { key: 'setup.completed_at', value: '2026-01-01T00:00:00.000Z' },
+    ], false],
+  ])('%s', async (_name, settingsRows, inSetup) => {
+    const pool = {
+      query: vi.fn(async (sql: string) => (sql.includes('FROM settings')
+        ? { rows: settingsRows }
+        : { rows: [{ configured: true }] })),
+    } as unknown as Pool;
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(identityRoutes, { identityService: createMockIdentityService(), webAppBootstrapSecret: SECRET, sessions, pool });
+    const res = await app.inject({ method: 'GET', url: '/api/identity', headers: { 'x-web-bootstrap-secret': SECRET } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().inSetup).toBe(inSetup);
+    await app.close();
+  });
+});
 
 describe('GET /api/identity — configured flag', () => {
   const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
@@ -170,6 +196,57 @@ describe('PUT /api/identity — session cookie auth', () => {
     expect(res.statusCode).toBe(200);
     expect(identityService.update).toHaveBeenCalledWith(MOCK_IDENTITY, 'api', undefined);
 
+    await app.close();
+  });
+  // #2358: the Setup page's tone save is recorded as such, so it doesn't count as Curia's name.
+  it.each(['wizard', 'working_style', 'api'])('records changedBy %s as given', async (changedBy) => {
+    const identityService = createMockIdentityService();
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(identityRoutes, { identityService, webAppBootstrapSecret: SECRET, sessions, pool: { query: vi.fn() } as unknown as Pool });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/identity',
+      headers: { 'x-web-bootstrap-secret': SECRET, 'content-type': 'application/json' },
+      body: JSON.stringify({ identity: MOCK_IDENTITY, changedBy }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(identityService.update).toHaveBeenCalledWith(MOCK_IDENTITY, changedBy, undefined);
+    await app.close();
+  });
+});
+
+// #2358: the router reads GET /api/identity on every navigation, so it takes the console-wide
+// read limit (60/min). Writes keep the tighter cap. Uses the real rate limiter, no bypass.
+describe('identity routes — rate limits', () => {
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
+
+  async function build() {
+    const pool = { query: vi.fn(async () => ({ rows: [{ configured: true }] })) } as unknown as Pool;
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+    await app.register(identityRoutes, { identityService: createMockIdentityService(), webAppBootstrapSecret: SECRET, sessions, pool });
+    return app;
+  }
+
+  it('serves 30 navigations in a minute without a 429', async () => {
+    const app = await build();
+    const codes: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      codes.push((await app.inject({ method: 'GET', url: '/api/identity', headers: { 'x-web-bootstrap-secret': SECRET } })).statusCode);
+    }
+    expect(codes.filter((c) => c === 429)).toEqual([]);
+    await app.close();
+  });
+
+  it('still caps the reload write at 10 a minute', async () => {
+    const app = await build();
+    const codes: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      codes.push((await app.inject({ method: 'POST', url: '/api/identity/reload', headers: { 'x-web-bootstrap-secret': SECRET } })).statusCode);
+    }
+    expect(codes.at(-1)).toBe(429);
     await app.close();
   });
 });

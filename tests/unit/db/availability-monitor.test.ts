@@ -47,7 +47,6 @@ describe('DbAvailabilityMonitor', () => {
       pool,
       logger: createLogger(),
       outboundGateway: gateway,
-      ceoEmail: 'ceo@example.com',
       probeIntervalMs: 60_000,
       escalationAfterMs: overrides.escalationAfterMs ?? 5 * 60_000,
       now: () => now,
@@ -98,10 +97,13 @@ describe('DbAvailabilityMonitor', () => {
     expect(snap.escalationDue).toBe(true);
     expect(snap.escalated).toBe(true);
     expect(sendNotification).toHaveBeenCalledTimes(1);
+    // Operator-routed (#2710): the gateway resolves the address from the type; the monitor
+    // names no recipient. The alert is the one that most needs the operator, since the read of
+    // the operator setting is itself failing while Postgres is down.
     expect(sendNotification.mock.calls[0]![0]).toMatchObject({
       notificationType: 'database_unavailable',
-      ceoEmail: 'ceo@example.com',
     });
+    expect(sendNotification.mock.calls[0]![0]).not.toHaveProperty('ceoEmail');
   });
 
   it('retries notification when send fails, then succeeds once', async () => {

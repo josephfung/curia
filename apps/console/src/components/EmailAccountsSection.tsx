@@ -35,7 +35,8 @@ async function errorMessage(res: Response): Promise<string> {
 
 // onChanged lets the drawer re-read channel status: the email Enable gate needs at least
 // one enabled account with a grant (#2409), so adding or toggling one can flip it.
-export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } = {}) {
+/** showHeading: false drops the Settings heading and its note, for a page that names the section itself. */
+export function EmailAccountsSection({ onChanged, showHeading = true }: { onChanged?: () => void; showHeading?: boolean } = {}) {
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -132,10 +133,14 @@ export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } =
 
   return (
     <div className="form-field">
-      <label>Email accounts</label>
-      <p className="settings-page-sub" style={{ margin: '0 0 4px' }}>
-        Mailboxes the agent polls and replies from. Adding or removing an account takes effect on the next restart.
-      </p>
+      {showHeading && (
+        <>
+          <label>Email accounts</label>
+          <p className="settings-page-sub" style={{ margin: '0 0 4px' }}>
+            Mailboxes the agent polls and replies from. Adding or removing an account takes effect on the next restart.
+          </p>
+        </>
+      )}
 
       {err && <p className="autonomy-error" style={{ margin: '0 0 8px' }}>{err}</p>}
 

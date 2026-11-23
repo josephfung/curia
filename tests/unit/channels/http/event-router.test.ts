@@ -233,11 +233,14 @@ describe('EventRouter Ant Farm SSE', () => {
   it('drops a slow antfarm client when its pending buffer is full', () => {
     const { router } = makeRouter();
     let writeCount = 0;
+    let destroyed = false;
     const res = {
       write: (_chunk: string, _cb?: () => void) => {
         writeCount += 1;
         return true;
       },
+      end: () => {},
+      destroy: () => { destroyed = true; },
     };
 
     router.addAntfarmClient({ res: res as unknown as ServerResponse });
@@ -257,6 +260,9 @@ describe('EventRouter Ant Farm SSE', () => {
 
     router.broadcastToAntfarm(directives);
     expect(writeCount).toBe(firstPassWrites);
+    // Dropped and destroyed: it stopped reading, so end() would wait on its buffer, and an
+    // open dropped stream keeps a restart waiting (#2358).
+    expect(destroyed).toBe(true);
   });
 });
 
@@ -330,5 +336,60 @@ describe('EventRouter web reply push', () => {
       payload: { channelId: 'signal', conversationId: 'c1', content: 'hello' },
     } as unknown as BusEvent);
     expect(seen).toEqual([]);
+  });
+});
+
+// #2358: an open stream never ends on its own, and the server's close waits for it, so a
+// console tab open at Apply & restart kept the restart from finishing.
+describe('EventRouter.closeAllStreams', () => {
+  it('ends every chat and Ant Farm stream, keeps going past one that throws, and forgets them', () => {
+    const { router } = makeRouter();
+    const ended: string[] = [];
+    const res = (name: string, fail = false) => ({
+      write: () => true,
+      end: () => { if (fail) throw new Error('socket gone'); ended.push(name); },
+    }) as unknown as ServerResponse;
+    router.addSseClient({ res: res('chat-1'), conversationId: 'c1' });
+    router.addSseClient({ res: res('broken', true), conversationId: 'c1' });
+    router.addAntfarmClient({ res: res('antfarm') });
+    expect(router.closeAllStreams()).toBe(2);
+    expect(ended).toEqual(['chat-1', 'antfarm']);
+    expect(router.hasAnyChatListener()).toBe(false);
+    expect(router.closeAllStreams()).toBe(0);
+  });
+});
+
+describe('EventRouter streams at shutdown', () => {
+  it('destroys an ended stream that has not flushed after the grace period, and leaves a flushed one', () => {
+    vi.useFakeTimers();
+    try {
+      const { router } = makeRouter();
+      const destroyed: string[] = [];
+      const res = (name: string, flushed: boolean) => ({
+        write: () => true,
+        end: () => {},
+        writableFinished: flushed,
+        destroy: () => { destroyed.push(name); },
+      }) as unknown as ServerResponse;
+      router.addSseClient({ res: res('stopped-reading', false), conversationId: 'c1' });
+      router.addAntfarmClient({ res: res('flushed', true) });
+      router.closeAllStreams();
+      expect(destroyed).toEqual([]);
+      vi.advanceTimersByTime(2_000);
+      expect(destroyed).toEqual(['stopped-reading']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends a stream that registers after the shutdown sweep, chat or Ant Farm', () => {
+    const { router } = makeRouter();
+    router.closeAllStreams();
+    const ended: string[] = [];
+    const res = (name: string) => ({ write: () => true, end: () => { ended.push(name); } }) as unknown as ServerResponse;
+    router.addSseClient({ res: res('late-chat'), conversationId: 'c1' });
+    router.addAntfarmClient({ res: res('late-antfarm') });
+    expect(ended).toEqual(['late-chat', 'late-antfarm']);
+    expect(router.hasAnyChatListener()).toBe(false);
   });
 });

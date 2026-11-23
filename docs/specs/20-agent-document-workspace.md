@@ -148,6 +148,13 @@ skills are `action_risk: none`. Placement algorithms live in
 `src/agents/document-placement.ts` and are shared by `doc-place`, spill, and harness
 injection — not duplicated in prose-only guidance.
 
+**Console-only documents (#2360).** A document whose frontmatter carries `editable_by: console`
+is edited only in the console (the documents API). `doc-write` refuses every mode on it unless
+the write is a principal-approved re-execution, and no `doc-write` call may add, change or
+remove the key, approved or not. The key is matched case-insensitively and any value counts
+(fail closed); `src/memory/console-only-docs.ts` holds the reader, and code that relies on a
+document being console-owned checks the mark with `isConsoleOnlyMarked`.
+
 ## 7. Harness injection & auto-pin
 
 The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot

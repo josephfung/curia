@@ -98,14 +98,15 @@ describe('resolvePrincipalEmail', () => {
 });
 
 describe('notifyLearningProposal', () => {
-  it('sends a learning_proposal notification with the resolved email + provided subject/body', async () => {
+  it('sends a learning_proposal notification with the provided subject/body and no recipient', async () => {
     const { ctx, sendNotificationMock } = makeCtx();
     const result = await notifyLearningProposal(ctx, NOTIFICATION);
     expect(result).toBe(true);
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    // The type is principal-routed, so the gateway resolves who (#2710). A caller that named an
+    // address here would be a second place deciding the audience.
     expect(sendNotificationMock.mock.calls[0]![0]).toEqual({
       notificationType: 'learning_proposal',
-      ceoEmail: 'ceo@example.com',
       subject: 'Subject',
       body: 'Body',
     });
@@ -118,10 +119,12 @@ describe('notifyLearningProposal', () => {
     expect(logWarnMock).toHaveBeenCalled();
   });
 
-  it('skips (no send) and returns false when no principal email is on file', async () => {
-    const { ctx, sendNotificationMock } = makeCtx({ ceoEmail: '' });
+  it('asks the gateway anyway when no principal email is on file, and reports what it says', async () => {
+    // The lookup moved into the gateway (#2710): with no address it answers false, which is the
+    // same non-fatal outcome the old local pre-check produced.
+    const { ctx, sendNotificationMock } = makeCtx({ ceoEmail: '', sendResult: false });
     expect(await notifyLearningProposal(ctx, NOTIFICATION)).toBe(false);
-    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
   });
 
   it('returns false (non-fatal) when sendNotification reports a failed send', async () => {

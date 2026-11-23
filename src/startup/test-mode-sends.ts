@@ -720,7 +720,6 @@ export function subscribeRecordingRelays(deps: {
       pollingIntervalMs: 60_000,
       selfEmail,
       suppressedSenderEmails: owned.filter(a => a !== selfEmail),
-      ceoEmail: deps.principalEmail,
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 1,

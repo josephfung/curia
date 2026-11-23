@@ -442,6 +442,51 @@ describe('pairing routes', () => {
     await app.close();
   });
 
+  it('POST /api/pairing/redeem — an invitation publishes pairing.invitation_redeemed with the id and device only (#2360)', async () => {
+    const bus = makeBus();
+    const { app } = await appWith(invitationQuery(), { bus });
+    const response = await app.inject({ method: 'POST', url: '/api/pairing/redeem', payload: { token: TOKEN } });
+    expect(response.statusCode).toBe(200);
+    const redeemed = bus.published.find((p) => p.event.type === 'pairing.invitation_redeemed');
+    expect(redeemed?.layer).toBe('system');
+    expect(redeemed?.event.payload).toEqual({ invitationId: 'inv-1', deviceName: expect.any(String) });
+    expect(JSON.stringify(redeemed?.event.payload)).not.toContain(TOKEN);
+    await app.close();
+  });
+
+  it('POST /api/pairing/redeem — a code redemption publishes no pairing.invitation_redeemed (#2360)', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('UPDATE pairing_codes') && sql.includes('token_redeemed_at = NOW()')) {
+        return { rows: [{ id: 'code-1', origin: 'https://curia.example.com', short_redeemed_at: null }], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO sessions')) return { rows: [{ id: NEW_SESSION_ID }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const bus = makeBus();
+    const { app } = await appWith(query, { bus });
+    const response = await app.inject({ method: 'POST', url: '/api/pairing/redeem', payload: { token: TOKEN } });
+    expect(response.statusCode).toBe(200);
+    expect(bus.published.some((p) => p.event.type === 'pairing.invitation_redeemed')).toBe(false);
+    await app.close();
+  });
+
+  it('POST /api/pairing/redeem — a failed pairing.invitation_redeemed publish still signs the phone in (#2360)', async () => {
+    const published: BusEvent[] = [];
+    const bus = {
+      published: [],
+      async publish(_layer: Layer, event: BusEvent) {
+        if (event.type === 'pairing.invitation_redeemed') throw new Error('bus down');
+        published.push(event);
+      },
+    } as unknown as ReturnType<typeof makeBus>;
+    const { app, sessions } = await appWith(invitationQuery(), { bus });
+    const response = await app.inject({ method: 'POST', url: '/api/pairing/redeem', payload: { token: TOKEN } });
+    expect(response.statusCode).toBe(200);
+    expect(sessions.size).toBe(1);
+    expect(published.map((e) => e.type)).toEqual(['operator.session']);
+    await app.close();
+  });
+
   it('POST /api/pairing/redeem — a spent, superseded or expired invitation gets the QR rejection', async () => {
     const { app } = await appWith(vi.fn(async () => ({ rows: [], rowCount: 0 })));
     const response = await app.inject({

@@ -30,6 +30,9 @@ is its `task_id`, not its path.
 context`; only an agent that declares one can write it. Follow the format it states at
 its top.
 
+**Console-only documents.** A document whose frontmatter has `editable_by: console` is the
+console's: leave it unchanged, and never add or remove that key.
+
 **Writes.** Re-read with `doc-read` when you need the latest `expected_version`. On
 conflict, merge from the returned document and retry with the new version.
 

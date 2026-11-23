@@ -196,3 +196,29 @@ describe('Dispatcher checkpoint debounce', () => {
     ]);
   });
 });
+
+// #2358: during Setup the setup guide answers web chat for the operator. Those turns must
+// never feed fact or relationship extraction about the principal.
+describe('Dispatcher checkpoint: the setup guide', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('never checkpoints a setup guide turn on web', async () => {
+    const { dispatcher, subscribeHandlers, publishedEvents, queryMock } = makeStubs(500);
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-setup', 'web', 'web-thread-1');
+    await fireAgentResponse(subscribeHandlers, { taskEventId: 'task-setup', conversationId: 'web-thread-1', agentId: 'setup-wizard' });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(0);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('still checkpoints the coordinator on web (any install not in Setup)', async () => {
+    const { dispatcher, subscribeHandlers, publishedEvents } = makeStubs(500);
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-web', 'web', 'web-thread-1');
+    await fireAgentResponse(subscribeHandlers, { taskEventId: 'task-web', conversationId: 'web-thread-1', agentId: 'coordinator' });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(1);
+  });
+});

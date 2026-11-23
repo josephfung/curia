@@ -64,6 +64,37 @@ function make(over: {
 }
 
 describe('InboxHeartbeat.tick', () => {
+  it('stays quiet and wakes nothing while held', async () => {
+    const t = make({ extra: { held: async () => true } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.enqueueTaskWake).not.toHaveBeenCalled();
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
+  });
+
+  it('treats a failing hold read as held for the tick', async () => {
+    const t = make({ extra: { held: async () => { throw new Error('db down'); } } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ errName: 'Error', errMessage: 'db down' }),
+      expect.stringContaining('could not read the triage hold'),
+    );
+  });
+
+  it('still sweeps expired dedupe rows while held (no mailbox is touched)', async () => {
+    const sweepDedupe = vi.fn(async () => 2);
+    const t = make({ extra: { held: async () => true, sweepDedupe } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(sweepDedupe).toHaveBeenCalledTimes(1);
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
+  });
+
+  it('wakes as usual when the hold is released', async () => {
+    const t = make({ extra: { held: async () => false } });
+    expect(await t.hb.tick(NOW)).toBe('woke');
+  });
+
   it('quiet tick makes no task and no wake', async () => {
     const t = make({ hasUnread: vi.fn(async () => false) });
     expect(await t.hb.tick(NOW)).toBe('quiet');

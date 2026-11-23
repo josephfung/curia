@@ -47,18 +47,28 @@ services:
     restart: unless-stopped
     # Local/dev default under the voice profile. LiveKit --dev uses known
     # credentials (devkey / secret) — never expose that on a public interface.
-    # Production must set LIVEKIT_COMMAND to a real config (e.g.
-    # "--config /etc/livekit.yaml") with keys matching Settings → Channels → Voice,
-    # plus a bind mount of ./docker/livekit.yaml:/etc/livekit.yaml:ro.
+    # The installer sets LIVEKIT_COMMAND to a shipped config
+    # ("--config /etc/livekit.yaml", or for local installs
+    # "--config /etc/livekit.local.yaml --node-ip 127.0.0.1") and generates
+    # LIVEKIT_KEYS, which must match Settings → Channels → Voice.
+    # docker-compose.tls.yml replaces this fallback with the keyless shipped
+    # config (fails closed), since Caddy publishes /rtc* there.
     command: ${LIVEKIT_COMMAND:---dev --bind 0.0.0.0}
+    environment:
+      # "key: secret" read by LiveKit itself; the shipped configs carry no keys.
+      LIVEKIT_KEYS: ${LIVEKIT_KEYS:-}
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+      - ./docker/livekit.local.yaml:/etc/livekit.local.yaml:ro
     ports:
       # HTTP/WebSocket signaling. Use wss://<host> when served behind TLS.
       # Loopback by default so the --dev credentials above are never reachable
-      # from outside the host: a laptop browser uses ws://localhost:7880. The
-      # shipped Caddyfile proxies only curia, so a server either terminates
-      # wss:// with its own proxy on this host (to 127.0.0.1:7880) or sets
-      # LIVEKIT_HTTP_BIND to publish 7880 directly (real keys only, never --dev).
-      # See docs/dev/voice-setup.md.
+      # from outside the host: a laptop browser uses ws://localhost:7880. With
+      # the TLS overlay the shipped Caddyfile routes /rtc* to livekit:7880 over
+      # the compose network, so 7880 stays on loopback. Otherwise a server
+      # terminates wss:// with its own proxy on this host (to 127.0.0.1:7880) or
+      # sets LIVEKIT_HTTP_BIND to publish 7880 directly (real keys only, never
+      # --dev). See docs/dev/voice-setup.md.
       - "${LIVEKIT_HTTP_BIND:-127.0.0.1}:${LIVEKIT_HTTP_PORT:-7880}:7880"
       # WebRTC TCP fallback.
       - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881"

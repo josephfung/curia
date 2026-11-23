@@ -59,7 +59,7 @@ tasks:
     handoff_path: /setup
     completion_check:
       type: voice_route_ready
-    credential_how_to: "In the Voice step, choose the Curia app or a Signal call, then add the LiveKit, Deepgram and Cartesia keys and pick Curia's spoken voice. Signal calls also need the Signal channel and SIGNAL_VOICE_CALLS_ENABLED=true on the server. Voice starts after the restart."
+    credential_how_to: "In the Voice step, choose the Curia app or a Signal call, then add the Deepgram and Cartesia keys and pick Curia's spoken voice. LiveKit comes with Curia itself (set up when it's installed), so it needs nothing here. Signal calls also need the Signal channel and SIGNAL_VOICE_CALLS_ENABLED=true on the server. Voice starts after the restart."
     docs_url: /get-started/voice
 
   - id: mailbox_signin
@@ -73,6 +73,19 @@ tasks:
     credential_how_to: "Uses the Nylas API key from the Email step and APP_ORIGIN set to this console's public https:// address. The Email & calendar step finds the region and registers Curia's sign-in callback with Nylas on its first check. A sandbox application needs nothing more: it uses Nylas's built-in Google connector. A production application needs a Google connector: paste your Google Cloud OAuth client id and secret there, and in Google Cloud add only the Nylas redirect URI shown (https://api.us.nylas.com/v3/connect/callback, or the eu one) to the OAuth client. After the API key or region is first saved or changed, restart Curia once."
     docs_url: /get-started/principal-email-calendar
 
+  - id: google_workspace
+    label: "Google Workspace"
+    value_prop: "Lets Curia work in Google Docs, Sheets and Drive under its own Google account, and deliver drafts to the principal as shared Docs."
+    tier: heavy
+    handoff: console
+    handoff_path: /setup
+    # Required since #2683: the onboarding deep dive (#2362) delivers its drafts as Google Docs.
+    # Done means signed in and Google still accepts the token, not just saved keys.
+    completion_check:
+      type: google_workspace_signed_in
+    credential_how_to: "In Google Cloud (the project from Email & calendar can be reused), enable the Drive, Docs and Sheets APIs and use a Web application OAuth client (the Email & calendar one can be reused: Google shows a secret only once, so add a second secret to it for Curia and keep the old one for Nylas), with the callback URL shown in the Google Workspace step added to its authorized redirect URIs. Paste Curia's Google address, the client ID and the secret in that step, then Sign in as Curia with Curia's own Google account and allow every permission. Curia restarts once to start using it."
+    docs_url: /get-started/google-docs
+
   # ── Optional extras: never block setup_complete ──────────────────────────
 
   - id: working_style
@@ -84,7 +97,7 @@ tasks:
     optional: true
     completion_check:
       type: always_available
-    credential_how_to: null
+    credential_how_to: "Optional: in the Working style extra on the Setup page, pick a tone and how much Curia does before checking in. Each choice saves when picked. Leave them and the defaults apply until the principal chooses in their first conversation."
     docs_url: /get-started/check-your-setup
 
   - id: principal_mailboxes
@@ -98,22 +111,6 @@ tasks:
       type: principal_mailbox_ready
     credential_how_to: "Under Settings → Behaviour → Email & Calendar, add each Gmail account with Connect with Google, with the principal beside you, or leave it for onboarding. If sign-in is not available, use Paste a grant ID instead."
     docs_url: /get-started/principal-email-calendar
-
-  - id: google_workspace
-    label: "Google Workspace"
-    value_prop: "Lets Curia work in Google Docs, Sheets, Slides and Drive under its own Google account."
-    tier: heavy
-    handoff: console
-    handoff_path: /setup
-    optional: true
-    completion_check:
-      type: vault_secrets_all
-      keys:
-        - curia_google_email
-        - google_oauth_client_id
-        - google_oauth_client_secret
-    credential_how_to: "Add Curia's Google address and an OAuth client ID and secret from Google Cloud (the project from Email & calendar can be reused), then sign in as Curia."
-    docs_url: /get-started/google-docs
 
   - id: web_research
     label: "Higher web search limit"
@@ -154,5 +151,5 @@ tasks:
     optional: true
     completion_check:
       type: always_available
-    credential_how_to: null
+    credential_how_to: "Optional: in the Capabilities extra on the Setup page, or later under Settings → Behaviour → Capabilities, switch each capability on or off. Meetings is always on; email triage is left for the principal to choose, later in Settings. Changes apply at the next restart."
     docs_url: /get-started/check-your-setup

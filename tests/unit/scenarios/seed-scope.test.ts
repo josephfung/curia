@@ -10,6 +10,7 @@ import {
   scopedBullpen,
   scopedOutboundContext,
   scopedPinnedContextReader,
+  scopedOnboardingTurnContext,
   scopedPrincipalBacklog,
   scopedVerification,
   SeedScope,
@@ -19,6 +20,7 @@ import {
   createOutcomeGate,
 } from '../../scenarios/seed.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
+import { formatOnboardingTurnBlock } from '../../../src/onboarding/turn-context.js';
 
 type RunState = CaseAttempt & { scope: SeedScope };
 
@@ -117,6 +119,24 @@ describe('scoped views with overlapping runs', () => {
     expect(a).toEqual({ decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 });
     expect(b).toEqual(none);
     expect(await view.counts()).toEqual(none);
+  });
+
+  it('give each run the onboarding block of its own seed.onboarding, in production\'s words (#2360)', async () => {
+    const view = scopedOnboardingTurnContext(currentScope);
+    const onboarding = run('A', []);
+    onboarding.scope.onboarding = {
+      taskId: '6e0b0a2d-2360-4c00-8a00-00000000048a',
+      topics: [{ topicId: 'style', title: 'How I should sound', sessionId: 'first-conversation' }],
+    };
+    const now = new Date();
+    const [a, b] = await Promise.all([
+      context.run(onboarding, () => view.forPrincipalTurn(now)),
+      context.run(run('B', []), () => view.forPrincipalTurn(now)),
+    ]);
+    expect(a).toBe(formatOnboardingTurnBlock('6e0b0a2d-2360-4c00-8a00-00000000048a', ['style']));
+    expect(a).toContain('task 6e0b0a2d-2360-4c00-8a00-00000000048a. Open topics this session: style.');
+    expect(b).toBeNull();
+    expect(await view.forPrincipalTurn(now)).toBeNull();
   });
 
   it('serve each run only its own pinned documents and settings, never the database\'s (#2339)', async () => {

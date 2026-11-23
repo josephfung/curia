@@ -21,7 +21,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { Pool } from 'pg';
 import type { AgentRegistry } from '../../agents/agent-registry.js';
-import { bypassesBearerAuth, validateBearerToken } from './auth.js';
+import { createBearerAuthHook } from './auth.js';
 import { registerSecurityHeaders } from './security-headers.js';
 import { EventRouter } from './event-router.js';
 import type { SchedulerService } from '../../scheduler/scheduler-service.js';
@@ -45,6 +45,7 @@ import { documentsRoutes } from './routes/documents.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
+import { operatorRoutes } from './routes/operator.js';
 import {
   memoryRetentionRoutes,
   type MemoryRetentionSnapshot,
@@ -66,7 +67,9 @@ import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from './routes/mailbox-signin.js';
+import { googleWorkspaceSignInRoutes } from './routes/google-workspace-signin.js';
 import { setupRoutes } from './routes/setup.js';
+import { onboardingRoutes } from './routes/onboarding.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
 import { voiceSessionRoutes } from '../voice/session-routes.js';
@@ -179,6 +182,13 @@ export interface HttpAdapterConfig {
     /** The boot-time Nylas key and region, so the console's readiness shows restart_required (R11). */
     boot?: import('../../nylas/signin-readiness.js').NylasBootConfig;
   };
+  /** Backs /api/google-workspace/* ("Sign in as Curia" with Google Workspace, #2683). */
+  googleWorkspaceSignIn?: import('../../google/workspace-signin.js').GoogleWorkspaceSignInService;
+  /**
+   * Keeps the gateway's cached operator address current after the console or Setup saves it
+   * (#2710), so a later `database_unavailable` notice cannot reach a former operator.
+   */
+  onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -193,6 +203,11 @@ export interface HttpAdapterConfig {
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
    */
   bootStartedAt: string;
+  /** The health service's process start (GET /api/health started_at). A sign-in callback that
+   *  schedules a restart puts it in the done page's URL, so the page can tell the new process. */
+  processStartedAt?: string;
+  /** Backs /api/onboarding/* (#2360). Mounted only with the bootstrap secret. */
+  onboardingService?: import('../../onboarding/onboarding-service.js').OnboardingService;
   /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
   setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
@@ -329,42 +344,8 @@ export class HttpAdapter implements Channel {
     // hook registration order does not affect onSend coverage.
     registerSecurityHeaders(this.app);
 
-    // Auth hook — runs before every request
-    this.app.addHook('onRequest', async (request, reply) => {
-      // routeOptions.url is the registered pattern (e.g. '/assets/index-CU1g6HdR.js' or '/*').
-      // request.url is the actual request path (with query string).
-      const routeUrl = request.routeOptions.url ?? '';
-
-      // Non-API routes are the console app (static assets, SPA pages, /auth) — no bearer auth.
-      //
-      // @fastify/static v9 with wildcard:false scans consoleDist at startup and registers
-      // an individual Fastify route per file (e.g. /assets/index-CU1g6HdR.js). These exact
-      // paths don't match a '/*' check, so we gate on isApiPath() instead.
-      //
-      // We also check request.url as a fallback: the console '/*' catch-all absorbs GET
-      // requests to unregistered paths (e.g. GET /api/nonexistent, GET /api). Without
-      // the request.url check, those get routeUrl='/*', skip auth, and silently return
-      // the React app HTML. Checking the actual URL keeps unregistered /api paths enforced.
-      //
-      // isApiPath matches '/api' exactly and '/api/...' — avoids false positives like
-      // '/api-docs' while catching the bare '/api' case that startsWith('/api/') misses.
-      const isApiPath = (p: string) => p === '/api' || p.startsWith('/api/');
-      const requestPath = (request.url ?? '').split('?')[0] ?? '';
-      if (!isApiPath(routeUrl) && !isApiPath(requestPath)) return;
-
-      // Session-cookie, capability-token and webhook-signature routes authenticate
-      // themselves and bypass bearer token enforcement. A new console route must be
-      // added to the list in auth.ts, or this hook rejects it before assertSecret runs.
-      if (bypassesBearerAuth(routeUrl)) return;
-
-      if (!validateBearerToken(request.headers.authorization, apiToken)) {
-        // Audit-log the failure: IP, route, and whether a token was even provided.
-        // Never log the token value — only that it was present and wrong vs absent.
-        const reason = request.headers.authorization ? 'invalid_token' : 'missing_token';
-        logger.warn({ ip: request.ip, route: routeUrl, reason }, 'HTTP auth failed');
-        return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
-      }
-    });
+    // Auth hook — runs before every request (bearer token, with self-authenticating routes let through).
+    this.app.addHook('onRequest', createBearerAuthHook(apiToken, logger));
 
     // Shared session store — used by both KG and identity routes to validate browser sessions.
     // Sessions are set by POST /auth (KG routes) and verified by both route registrations.
@@ -403,6 +384,7 @@ export class HttpAdapter implements Channel {
     // overlap the sessions guard prevents for its own DELETE.
     let isPruningCaptureTokens = false;
     let isPruningSignInTokens = false;
+    let isPruningWorkspaceStates = false;
     this.pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, entry] of sessions) {
@@ -431,6 +413,17 @@ export class HttpAdapter implements Channel {
             logger.error({ err }, 'Mailbox sign-in token prune failed');
           })
           .finally(() => { isPruningSignInTokens = false; });
+      }
+
+      // And Google Workspace sign-in states (#2683).
+      const workspaceSvc = this.config.googleWorkspaceSignIn;
+      if (workspaceSvc && !isPruningWorkspaceStates) {
+        isPruningWorkspaceStates = true;
+        workspaceSvc.pruneExpired()
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Google Workspace sign-in state prune failed');
+          })
+          .finally(() => { isPruningWorkspaceStates = false; });
       }
 
       if (isPruning) return;
@@ -529,6 +522,19 @@ export class HttpAdapter implements Channel {
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
         setupChecklist: this.config.setupChecklist,
+        // Keeps the gateway's cached operator address current (#2710).
+        ...(this.config.onOperatorChanged ? { onOperatorChanged: this.config.onOperatorChanged } : {}),
+      });
+    }
+
+    // Onboarding routes (#2360): status, start and the triage hold release, for the console.
+    if (webAppBootstrapSecret && this.config.onboardingService) {
+      await this.app.register(onboardingRoutes, {
+        webAppBootstrapSecret,
+        sessions,
+        bus,
+        logger,
+        onboarding: this.config.onboardingService,
       });
     }
 
@@ -539,6 +545,18 @@ export class HttpAdapter implements Channel {
         executiveProfileService: this.config.executiveProfileService,
         webAppBootstrapSecret,
         sessions,
+      });
+    }
+
+    // Operator setting (#2710) — the operator's name and email and their change history. Same
+    // session-auth pattern.
+    if (webAppBootstrapSecret) {
+      await this.app.register(operatorRoutes, {
+        webAppBootstrapSecret,
+        sessions,
+        pool: this.config.pool,
+        logger,
+        ...(this.config.onOperatorChanged ? { onOperatorChanged: this.config.onOperatorChanged } : {}),
       });
     }
 
@@ -796,6 +814,18 @@ export class HttpAdapter implements Channel {
         readApiKey: this.config.mailboxSignIn.readApiKey,
         ...(this.config.mailboxSignIn.callback ? { callback: this.config.mailboxSignIn.callback } : {}),
         appOrigin: this.config.appOrigin,
+        ...(this.config.processStartedAt ? { processStartedAt: this.config.processStartedAt } : {}),
+        logger,
+      });
+    }
+
+    // Google Workspace sign-in (#2683): two console routes and the public OAuth callback.
+    if (webAppBootstrapSecret && this.config.googleWorkspaceSignIn) {
+      await this.app.register(googleWorkspaceSignInRoutes, {
+        service: this.config.googleWorkspaceSignIn,
+        webAppBootstrapSecret,
+        sessions,
+        ...(this.config.processStartedAt ? { processStartedAt: this.config.processStartedAt } : {}),
         logger,
       });
     }
@@ -826,6 +856,9 @@ export class HttpAdapter implements Channel {
       clearInterval(this.pruneInterval);
       this.pruneInterval = undefined;
     }
+    // Open SSE streams never finish, and close() waits for them: end them first.
+    const streams = this.eventRouter.closeAllStreams();
+    if (streams > 0) this.config.logger.info({ streams }, 'Ended open event streams for shutdown');
     await this.app.close();
     this.config.logger.info('HTTP API stopped');
   }

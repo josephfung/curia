@@ -1,0 +1,36 @@
+{
+  "name": "onboarding-progress",
+  "description": "Read and record progress on the principal's onboarding task. status: the open and done topics of each onboarding session (with the playbook text for open ones), whether a mailbox is connected, whether the greeting was sent, and who Setup was for and the operator's name. open_session: create the topics of a later playbook session (review, check-in, ongoing-rhythm) before running it; safe to repeat. topic_done: mark one topic done, or declined, with a note of what was chosen and applied or why it was declined; onboarding completes itself when the last topic is done. greeting_sent: record that the first greeting went out. operator_notice: record a web_search_failed you hit and email the operator about it when Curia can send mail; the other operator notices are raised by Curia itself.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "op": "string (status | open_session | topic_done | greeting_sent | operator_notice)",
+    "session_id": "string? (open_session: the playbook session id from status, e.g. review. topic_done: only when the same topic id is open in two sessions)",
+    "topic_id": "string? (topic_done: the topic id from status, e.g. style)",
+    "outcome": "string? (topic_done: done | declined)",
+    "note": "string? (topic_done, required there: what the principal chose and what you applied, or why they declined)",
+    "event": "string? (operator_notice: web_search_failed — the only notice only the model can see)",
+    "details": "object? (operator_notice: facts kept on the task record, e.g. { query }; recorded by key name only and never emailed)"
+  },
+  "outputs": {
+    "taskId": "string? (status: the onboarding task id)",
+    "sessions": "array? (status: [{ id, title, opened, open: [{ topicId, title, body, needsMailbox }], done: [{ topicId, title }] }])",
+    "mailboxConnected": "boolean? (status)",
+    "greetingSent": "boolean? (status)",
+    "setupFor": "string? (status: self when the principal set Curia up, other when an operator did; absent operator means self)",
+    "operatorName": "string? (status: the operator's name from Setup, or null)",
+    "topics": "array? (open_session: the session's topics with their status)",
+    "createdSubtasks": "number? (open_session: how many topics were added now)",
+    "onboardingComplete": "boolean? (topic_done: true when this completed onboarding; status: true when onboarding is complete)",
+    "completionPending": "string? (topic_done: every topic is closed but the onboarding task could not be completed; call op status to retry)",
+    "recorded": "boolean? (greeting_sent; operator_notice: true when the notice was recorded)",
+    "alreadyRaised": "boolean? (operator_notice: true when this run already raised it; nothing more is sent)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["onboardingService", "taskRepo"],
+  "optional_capabilities": ["mailboxDirectory"],
+  "allowed_callers": ["coordinator"]
+}

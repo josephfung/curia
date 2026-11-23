@@ -8,7 +8,9 @@ import * as yaml from 'js-yaml';
 import type { Logger } from '../logger.js';
 import type { EmailChannelStatus, PrincipalMailboxReadiness } from '../skills/types.js';
 import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
-import type { MessagingRoute, SetupState, VoiceRoute } from './setup-state.js';
+import type { WorkspaceSignInStatus } from '../google/workspace-signin.js';
+import type { LiveKitProbeResult } from './livekit-probe.js';
+import type { MessagingRoute, SetupState, VoiceRoute } from './setup-settings.js';
 
 // ── Catalog ────────────────────────────────────────────────────────────────
 
@@ -24,6 +26,8 @@ export type CompletionCheck =
   | { type: 'voice_route_ready' }
   // Mailbox sign-in through Nylas is usable: key, https origin, callback and Google connector (#2361).
   | { type: 'nylas_signin_ready' }
+  // Curia is signed in to Google Workspace and Google still accepts the saved token (#2683).
+  | { type: 'google_workspace_signed_in' }
   // At least one live principal mailbox whose last health canary passed (#2475).
   | { type: 'principal_mailbox_ready' }
   | { type: 'browser_ready' }
@@ -32,7 +36,7 @@ export type CompletionCheck =
 
 const CHECK_TYPES: ReadonlySet<string> = new Set([
   'principal_basics', 'office_identity_configured', 'email_channel_ready', 'messaging_route_ready',
-  'voice_route_ready', 'nylas_signin_ready', 'principal_mailbox_ready', 'browser_ready',
+  'voice_route_ready', 'nylas_signin_ready', 'google_workspace_signed_in', 'principal_mailbox_ready', 'browser_ready',
   'vault_secrets_all', 'always_available',
 ]);
 
@@ -110,6 +114,8 @@ export interface SetupCheckDeps {
   identityConfigured: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
   nylasSignInReadiness: () => Promise<NylasSignInReadiness>;
+  /** The live Google Workspace sign-in check; throws when Google cannot be asked. */
+  googleWorkspaceSignIn: () => Promise<WorkspaceSignInStatus>;
   principalMailboxReady: () => Promise<PrincipalMailboxReadiness>;
   channelStatus: (channel: RouteChannel) => Promise<ChannelRunStatus>;
   /** The principal has a verified identity on this channel (Signal number, mobile, Slack member id). */
@@ -125,6 +131,8 @@ export interface SetupCheckDeps {
   /** Vault first, then the upper-cased env var, as tools resolve secrets. */
   secretPresent: (name: string) => Promise<boolean>;
   browserReady: () => boolean;
+  /** Asks LiveKit itself, with the saved keys, whether it answers. */
+  livekitProbe: () => Promise<LiveKitProbeResult>;
   logger: Logger;
 }
 
@@ -150,6 +158,8 @@ export interface SetupChecklistTask {
 }
 
 export interface SetupChecklist {
+  /** Who Setup is for (step 1), so the setup guide knows whom it is talking to. */
+  setupFor: SetupState['setupFor'];
   tasks: SetupChecklistTask[];
   /** Every required task is done. Unlocks Start onboarding; does not start it. */
   setupComplete: boolean;
@@ -205,6 +215,13 @@ async function checkMessaging(deps: SetupCheckDeps, route: MessagingRoute | null
 
 async function checkVoice(deps: SetupCheckDeps, route: VoiceRoute | null): Promise<CheckResult> {
   if (!route) return { done: false, detail: 'Choose how the principal will talk to Curia.' };
+  // A started channel and saved keys do not mean LiveKit is up (#2357).
+  const livekit = await deps.livekitProbe();
+  if (livekit === 'no_keys') {
+    return { done: false, detail: "LiveKit's keys aren't saved. They come with Curia's install; re-run the installer or enter them under Settings → Channels → Voice." };
+  }
+  if (livekit === 'unreachable') return { done: false, detail: "LiveKit isn't running. On the server, run: docker compose up -d livekit" };
+  if (livekit === 'rejected') return { done: false, detail: "LiveKit rejected the saved keys. They must match LIVEKIT_KEYS in the install's .env." };
   const voice = channelResult(await deps.channelStatus('voice'), 'Voice');
   if (route === 'app') return voice ?? { done: true };
   // Signal calls run on the voice runtime too, so both channels must be up (#1672).
@@ -231,10 +248,8 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
     const check = task.completion_check;
     switch (check.type) {
       case 'principal_basics': {
-        if (!state.setupFor) return { done: false, detail: 'Choose who Curia is for.' };
-        if (state.setupFor === 'other' && (!state.operatorName || !state.operatorEmail)) {
-          return { done: false, detail: 'Add your name and email as the operator.' };
-        }
+        // setupFor is derived (absent operator means "myself"), and the registry guarantees a
+        // present operator has both fields, so there is no operator state left to check here.
         const p = await deps.principal();
         if (!p || !p.displayName.trim()) return { done: false, detail: "Add the principal's name." };
         if (!p.primaryEmail) return { done: false, detail: "Add the principal's email." };
@@ -258,6 +273,19 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
         const r = await deps.nylasSignInReadiness();
         if (r.ready) return { done: true };
         return { done: false, restartRequired: r.reason === 'restart_required', detail: r.detail };
+      }
+      case 'google_workspace_signed_in': {
+        const r = await deps.googleWorkspaceSignIn();
+        switch (r.state) {
+          case 'signed_in':
+            return r.serverEnabled === false
+              ? { done: false, detail: 'Signed in, but the google-workspace MCP server is turned off. Enable it under Settings → MCP Skills.' }
+              : { done: true };
+          case 'not_configured': return { done: false, detail: `Add ${r.missing.join(', ')}.` };
+          case 'not_signed_in': return { done: false, detail: 'Sign in as Curia with Google.' };
+          case 'token_rejected': return { done: false, detail: r.detail };
+        }
+        break;
       }
       case 'principal_mailbox_ready':
         return (await deps.principalMailboxReady()) === 'ready'
@@ -303,5 +331,5 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
   }));
 
   const missing = tasks.filter((t) => !t.optional && t.status !== 'done').map((t) => t.id);
-  return { tasks, setupComplete: missing.length === 0, missing };
+  return { setupFor: state.setupFor, tasks, setupComplete: missing.length === 0, missing };
 }

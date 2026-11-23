@@ -23,7 +23,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
-import { HttpAdapter } from './channels/http/http-adapter.js';
+import { HttpAdapter, scheduleProcessExit } from './channels/http/http-adapter.js';
 import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
@@ -102,6 +102,7 @@ import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness }
 import { MailboxSignInService, MailboxSignInUnavailableError, MAX_SIGNIN_TTL_MINUTES } from './nylas/mailbox-signin-service.js';
 import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
 import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
+import { GOOGLE_WORKSPACE_MCP_SERVER, GoogleWorkspaceSignInService, WORKSPACE_SECRET_KEYS } from './google/workspace-signin.js';
 import { NylasAppClient } from './nylas/app-client.js';
 import { createLiveGrantLookup } from './nylas/live-grant-lookup.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
@@ -141,8 +142,11 @@ import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-cap
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
+import { liveKitJoinUrl } from './channels/voice/livekit/server-url.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
+import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
+import { wakeAgendaOwner } from './meetings/owner-wake.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
 import { MeetingPipelineRecovery } from './meetings/recovery.js';
 import { MeetingSessionEndedSubscriber, MinutesReadySubscriber } from './meetings/subscribers.js';
@@ -253,6 +257,15 @@ import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { closeLegacyInboxDrains, InboxHeartbeat, type InboxTriageHealth } from './scheduler/inbox-heartbeat.js';
 import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-cadence.js';
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
+import { isTriageHeld } from './onboarding/triage-hold.js';
+import { OnboardingService } from './onboarding/onboarding-service.js';
+import { OnboardingSubscribers } from './onboarding/subscribers.js';
+import { createOperatorEmailLookup } from './notifications/operator-setting.js';
+import { createOperatorNotifier } from './onboarding/notify-operator.js';
+import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
+import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
+import { createOnboardingTurnContext } from './onboarding/turn-context.js';
+import { createOnboardingStateLock } from './onboarding/state.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -287,8 +300,9 @@ import {
 } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
+import { probeLiveKit } from './setup/livekit-probe.js';
 import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
-import { readSetupState } from './setup/setup-state.js';
+import { readSetupState } from './setup/setup-settings.js';
 import { isIdentityConfigured } from './channels/http/routes/identity.js';
 import { installabilityWarning } from './channels/http/pairing.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
@@ -1004,6 +1018,19 @@ async function main(): Promise<void> {
   // The principal's stored home timezone, refreshed with the identities. Inbox triage reads
   // it through usableTimezone(); the boot-time principalContact copy went stale on an edit.
   const principalTimezone: { current: string | null } = { current: null };
+  /**
+   * The principal's notification address: the designated primary when it is a verified, active
+   * email identity, otherwise the first verified email. Read live, so a post-boot bind applies.
+   * One reader for the gateway's notifications and the adapters that resolve their own recipient.
+   */
+  const principalNotificationEmail = (): string | undefined =>
+    findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+    ?? (principalEmail.current || undefined);
+  // The operator's notification address (#2710), read from the settings store on use. Warmed
+  // here so the database_unavailable notice — the one raised while the settings read is
+  // failing — still knows who the operator is (the lookup keeps the last address it read).
+  const operatorEmail = createOperatorEmailLookup(pool, logger);
+  void operatorEmail.read();
 
   // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
   // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
@@ -2329,6 +2356,15 @@ async function main(): Promise<void> {
       defaultMailboxId,
       draftProvenance: new DraftProvenance(auditLogRepo, logger, undefined, defaultMailboxId, async () => (await principalMailboxes.list()).map((m) => m.id)),
       sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
+      // System notices go to the operator when one is set and to the principal otherwise;
+      // the notification type decides which (#2710).
+      notificationRecipients: {
+        principalEmail: principalNotificationEmail,
+        operatorEmail: operatorEmail.read,
+        // Deliverable only once the primary ('curia') adapter has subscribed (its start() runs
+        // after the health service). Checked in the gateway, so every caller gets the same answer.
+        canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+      },
     });
     outboundGateway.start();
     logger.info({
@@ -2340,7 +2376,9 @@ async function main(): Promise<void> {
       queueableChannels: [...outboundQueueReadiness.keys()],
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
-  } else if (vapidSetup.configured && !outboundFilter && !setupRequiredAtBoot) {
+  }
+
+  if (vapidSetup.configured && !outboundFilter && !setupRequiredAtBoot) {
     logger.warn('Outbound gateway NOT initialized — phone push is configured but the content filter is not ready');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
     // Nylas clients are available but outboundFilter is missing (no coordinator config found).
@@ -2389,9 +2427,6 @@ async function main(): Promise<void> {
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
         suppressedSenderEmails: ownedMailboxAddresses,
-        // Principal's email, resolved from findContactBySystemRole('principal') (#1049).
-        // Mutable ref so post-boot email binds update rate-limit notifications (#1514).
-        ceoEmail: principalEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
         // default.yaml is 4. Applying it here matches the neighbouring limits,
@@ -2539,7 +2574,12 @@ async function main(): Promise<void> {
       } else {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
-      const voiceLivekitUrl = config.voiceLivekitUrl;
+      // Curia's own end of the call joins over the internal signaling URL (the
+      // compose-network address, or LIVEKIT_INTERNAL_URL for a host-run Curia). The
+      // browser-facing URL (config.voiceLivekitUrl) still gates enabling voice (above)
+      // and is what VoiceAdapter hands browsers, but the runtime never dials it: inside
+      // a container `ws://localhost:7880` is the container itself (#2357).
+      const voiceLivekitUrl = liveKitJoinUrl(config.voiceLivekitManagementUrl);
       const voiceRuntime = new VoiceRuntime({
         bus,
         logger,
@@ -2832,7 +2872,6 @@ async function main(): Promise<void> {
       bus,
       outboundGateway,
       schedulerService,
-      ceoEmail: principalEmail,
       logger,
       appOrigin: config.appOrigin,
       httpPort: config.httpPort,
@@ -2859,7 +2898,6 @@ async function main(): Promise<void> {
       bus,
       outboundGateway,
       schedulerService,
-      ceoEmail: principalEmail,
       logger,
       appOrigin: config.appOrigin,
       httpPort: config.httpPort,
@@ -2884,7 +2922,6 @@ async function main(): Promise<void> {
     pool,
     logger,
     outboundGateway,
-    ceoEmail: principalEmail,
   });
   dbAvailabilityMonitor.start();
   if (!outboundGateway) {
@@ -2949,14 +2986,10 @@ async function main(): Promise<void> {
     mailboxOutageNotifier: mailboxOutageAlerts && outboundGateway
       ? new MailboxOutageNotifier({
           gateway: outboundGateway,
-          // The designated primary email when it is a verified, active identity, as the gateway's
-          // own notices use; otherwise the first verified email.
-          principalEmail: () =>
-            findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-            ?? (principalEmail.current || undefined),
-          // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
-          // after the health service): until then an alert is not counted as sent, and retried.
-          canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          // A "someone else" install also tells the operator, with no reconnect link. The
+          // gateway addresses both notices from their notification types (#2710), and checks
+          // that an adapter can deliver them before reporting a notice as published.
+          hasOperator: async () => (await operatorEmail.read()) !== undefined,
           // A 7-day sign-in link for the failing mailbox (#2361). mailboxSignInService is built
           // later in boot; the canary only calls this after boot, so the reference is live then.
           mintReconnectLink: async (mailboxId, label) => {
@@ -3242,6 +3275,35 @@ async function main(): Promise<void> {
   }).catch((err: unknown) => {
     logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in readiness check failed at boot');
   });
+  // "Sign in as Curia" for Google Workspace (#2683). The three values are read from the vault
+  // live, as the MCP loader reads them at spawn (vault only, no env fallback). A sign-in schedules
+  // the same graceful restart as Curia's mailbox sign-in, so the google-workspace MCP server
+  // starts (or restarts) with the new token.
+  const googleWorkspaceSignIn = new GoogleWorkspaceSignInService({
+    pool,
+    logger,
+    appOrigin: config.appOrigin,
+    readSettings: async () => {
+      const [email, clientId, clientSecret] = await Promise.all([
+        secretsService.get(WORKSPACE_SECRET_KEYS.email),
+        secretsService.get(WORKSPACE_SECRET_KEYS.clientId),
+        secretsService.get(WORKSPACE_SECRET_KEYS.clientSecret),
+      ]);
+      return { email, clientId, clientSecret };
+    },
+    scheduleRestart: (delayMs) => {
+      setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs);
+    },
+    // A new install enrols the server off (no keys at first boot) and nothing turns it on later.
+    mcpServer: {
+      isEnabled: async () => (await mcpRegistryService.enabledServerNames()).has(GOOGLE_WORKSPACE_MCP_SERVER),
+      enable: async () => {
+        const entry = (await mcpRegistryService.list()).find((e) => e.name === GOOGLE_WORKSPACE_MCP_SERVER);
+        if (entry?.state === 'uninstalled') await mcpRegistryService.install(GOOGLE_WORKSPACE_MCP_SERVER, 'google_workspace_signin');
+        await mcpRegistryService.enable(GOOGLE_WORKSPACE_MCP_SERVER, 'google_workspace_signin');
+      },
+    },
+  });
   // The Setup checklist (#2358): one computation for the console's Setup page and the setup
   // agent's setup-status tool. The catalog stays with the setup skill; it is read once.
   const setupCatalogPath = path.resolve(import.meta.dirname, '../skills/setup/tools/setup-status/catalog.yaml');
@@ -3251,7 +3313,7 @@ async function main(): Promise<void> {
   // awaiting email's first poll, or setup-required mode, which starts none) does not count.
   const startedChannels = new Set<RouteChannel | 'signal_calls'>();
   const setupCheckDeps: SetupCheckDeps = {
-    state: () => readSetupState(pool),
+    state: () => readSetupState(pool, logger),
     principal: async () => {
       const p = await contactService.findContactBySystemRole('principal');
       return p ? { displayName: p.displayName, primaryEmail: p.primaryEmail, timezone: p.timezone } : null;
@@ -3259,6 +3321,7 @@ async function main(): Promise<void> {
     identityConfigured: () => isIdentityConfigured(pool),
     emailChannelStatus,
     nylasSignInReadiness,
+    googleWorkspaceSignIn: () => googleWorkspaceSignIn.status(),
     principalMailboxReady: () => healthService.principalMailboxReady(),
     channelStatus: async (channel) => {
       if (startedChannels.has(channel)) return 'running';
@@ -3283,6 +3346,7 @@ async function main(): Promise<void> {
     signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : startedChannels.has('signal_calls') ? 'ready' : 'not_wired'),
     secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
     browserReady: () => browserService?.browserContext != null,
+    livekitProbe: () => probeLiveKit({ getSecret: (n) => secretsService.get(n), managementUrl: config.voiceLivekitManagementUrl, logger }),
     logger,
   };
   const setupChecklist = async (): Promise<SetupChecklist> => {
@@ -3439,6 +3503,44 @@ async function main(): Promise<void> {
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
 
+  // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
+  // inbox heartbeat reads it from. Built here, after registryService, and handed to the
+  // ExecutionLayer for the onboarding skill's tools.
+  // One state lock for the process: every read-modify-write of the onboarding run state takes it.
+  const onboardingStateLock = createOnboardingStateLock(pool, logger);
+  // Operator notices (#2710): one seam, bound here to the outbound gateway. The subscribers, the
+  // watcher and the onboarding-progress tool all send through it, so each of the four onboarding
+  // events reaches the operator by the one system-notice path.
+  const operatorNotifier = createOperatorNotifier({
+    taskRepo,
+    logger,
+    ...(outboundGateway ? { gateway: outboundGateway } : {}),
+    ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
+  });
+  const onboardingService = new OnboardingService({
+    pool,
+    taskRepo,
+    registry: registryService,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    stateLock: onboardingStateLock,
+    workingDocsRepo,
+    principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
+    principalContactId: async () => (await contactService.findContactBySystemRole('principal'))?.id ?? null,
+    principalHasIdentity: setupCheckDeps.principalHasIdentity,
+    appOrigin: config.appOrigin,
+    scheduleProcessExit,
+    // Agents and skill bundles load only at boot: what this process lacks needs a restart.
+    loadedAtBoot: (kind, name) =>
+      kind === 'agent' ? agentRegistry.has(name) : kind === 'skill' ? skillRegistry.get(name) !== undefined : false,
+    // triageConfig is in memory when the knowledge graph is off: Start is refused then.
+    persistentStore: entityMemory !== undefined,
+    logger,
+    operatorNotifier,
+  });
+  executionLayer.setOnboardingService(onboardingService);
+  const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
+
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
@@ -3536,7 +3638,12 @@ async function main(): Promise<void> {
       taskManagementAgents.add(agentConfig.name);
     }
 
-    new AgentRuntime(assembled.runtimeConfig).register();
+    // Onboarding context for live principal turns (#2360): the coordinator only.
+    new AgentRuntime(
+      agentConfig.name === 'coordinator'
+        ? { ...assembled.runtimeConfig, onboardingTurnContext }
+        : assembled.runtimeConfig,
+    ).register();
 
     if (assembled.toolDefs.length > 0) {
       logger.info({ agent: agentConfig.name, skills: assembled.toolDefs.map(d => d.name) }, 'Agent tools configured');
@@ -3732,6 +3839,10 @@ async function main(): Promise<void> {
       scheduler: schedulerService,
       tz: triageTz,
       logger,
+      // Onboarding triage hold (#2360). A missing key is no hold. triageConfig is the config store,
+      // or an in-memory stand-in when the knowledge graph is off; onboarding refuses to start then
+      // (no_persistent_store), so the stand-in never holds a hold that a restart would drop.
+      held: () => isTriageHeld(triageConfig, logger),
       sweepDedupe: () => triageDedupe.sweep(),
       sentObserveFailing: async (ids) => {
         const failing: string[] = [];
@@ -3743,15 +3854,12 @@ async function main(): Promise<void> {
       },
       // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
       notifyCeiling: async (batches) => {
-        const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-          ?? (principalEmail.current || undefined);
-        // outbound.notification is delivered only by the primary ('curia') email adapter once its
-        // outbound side has subscribed (start() does that, after the heartbeat starts). Until
-        // then a publish reaches no one, so it is not reported as sent and the heartbeat retries.
-        if (!outboundGateway || !ceoEmail || !emailAdapters.some((a) => a.deliversNotifications())) return false;
+        // The gateway resolves the address and checks that an adapter can deliver it, returning
+        // false when not, so the heartbeat retries rather than reporting a notice nobody got
+        // (#2710). Asking first keeps a hopeless retry from writing an audit row every minute.
+        if (!outboundGateway || !outboundGateway.canDeliverNotifications()) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
-          ceoEmail,
           subject: 'Curia paused inbox triage for today',
           body: [
             `Curia triaged ${batches} batches of your mail today, its daily limit, so it has stopped until midnight.`,
@@ -3792,6 +3900,58 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
+  // The Google OAuth client id on the Nylas Google connector, read with the live key; undefined when
+  // unknown. Shared by the onboarding blocked-sign-in notice and the sign-in resume subscriber.
+  const googleOAuthClientId = async (): Promise<string | undefined> => {
+    const apiKey = await nylasSignInReaders.readApiKey();
+    if (!apiKey) return undefined;
+    const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
+    const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
+    return connectors.find((c) => c.provider === 'google')?.clientId;
+  };
+
+  // Onboarding (#2360): pairing, mailbox connection and blocked sign-ins wake the onboarding program.
+  new OnboardingSubscribers({
+    bus,
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    stateLock: onboardingStateLock,
+    logger,
+    notifyOperator: operatorNotifier,
+    googleClientId: googleOAuthClientId,
+  }).start();
+
+  // Onboarding watcher (#2360): greeting follow-ups, the idle nudge and the expired-invitation notice.
+  // A tick with no open onboarding task is one query, so installs that never onboard see nothing.
+  const onboardingWatcher = new OnboardingWatcher({
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    stateLock: onboardingStateLock,
+    logger,
+    notifyOperator: operatorNotifier,
+    readInvitation: () => readCurrentInvitationTiming(pool),
+    nextSessionBooked: (taskId, now) =>
+      isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
+  });
+  onboardingWatcher.start();
+
+  // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
+  // General meetings infrastructure; runs only when a calendar can be read.
+  let agendaEventSync: AgendaEventSync | undefined;
+  if (calendarRouter) {
+    const router = calendarRouter;
+    agendaEventSync = new AgendaEventSync({
+      store: agendaStore,
+      getEvent: (calendarId, eventId) => readAgendaEvent(router, calendarId, eventId),
+      // The owner id comes from agenda frontmatter, which the console can edit: wakeAgendaOwner
+      // wakes only an open coordinator task, never an arbitrary one.
+      wakeOwner: (taskId, note) => wakeAgendaOwner({ taskRepo, scheduler: schedulerService, logger }, taskId, note),
+      logger,
+    });
+    agendaEventSync.start();
+  }
 
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
@@ -4018,22 +4178,11 @@ async function main(): Promise<void> {
     bus,
     logger,
     registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
-    googleClientId: async () => {
-      const apiKey = await nylasSignInReaders.readApiKey();
-      if (!apiKey) return undefined;
-      const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
-      const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
-      return connectors.find((c) => c.provider === 'google')?.clientId;
-    },
+    googleClientId: googleOAuthClientId,
     ...(outboundGateway
       ? {
           notifier: {
             gateway: outboundGateway,
-            principalEmail: () =>
-              findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-              ?? (principalEmail.current || undefined),
-            // As for the outage notifier: a notice published before an adapter delivers reaches no one.
-            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
           },
         }
       : {}),
@@ -4251,6 +4400,8 @@ async function main(): Promise<void> {
     mcpRegistryService,
     secretsService,
     secretCaptureService,
+    // Keep the gateway's cached operator address current after a console or Setup save (#2710).
+    onOperatorChanged: (operator) => operatorEmail.remember(operator),
     mailboxSignIn: {
       service: mailboxSignInService,
       readiness: nylasSignInReadiness,
@@ -4258,6 +4409,7 @@ async function main(): Promise<void> {
       callback: mailboxSignInCallback,
       boot: nylasBoot,
     },
+    googleWorkspaceSignIn,
     principalMailboxConsole: principalMailboxAdmin
       ? {
           mailboxes: principalMailboxes,
@@ -4272,7 +4424,9 @@ async function main(): Promise<void> {
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
     setupChecklist,
+    onboardingService,
     bootStartedAt,
+    processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
     // Powers principal profile endpoints in setup routes (#392). Undefined when
@@ -4391,6 +4545,16 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    try {
+      onboardingWatcher.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping onboarding watcher during shutdown');
+    }
+    try {
+      agendaEventSync?.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping agenda event sync during shutdown');
     }
     try {
       inboxHeartbeat?.stop();

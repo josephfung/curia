@@ -1106,6 +1106,8 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
   font-size: 12px;
 }
 .invite-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Starting onboarding (#2360): the message to send with the invitation link. */
+.onboarding-message { margin: 0; font-size: 13px; color: var(--app-fg-muted); overflow-wrap: anywhere; }
 .pair-steps {
   margin: 0;
   padding-left: 1.2em;
@@ -3930,4 +3932,181 @@ table.records-table tbody tr.active td { background: transparent; }
   select {
     font-size: 16px !important;
   }
+}
+
+/* ── Setup page (#2358) ─────────────────────────────────────────────────────
+   The console's landing page on a new install until Setup is finished: the step
+   list on the left, the open step's form on the right. Layout from
+   docs/wip/2026-10-29-onboarding-journey-design/setup-page-mockup.html. */
+.setup-page {
+  min-height: 100vh; background: var(--app-bg);
+  max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px;
+  display: grid; grid-template-columns: 240px minmax(0, 620px); gap: 40px; justify-content: center;
+}
+.setup-steps h1 { font-size: 18px; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.01em; }
+.setup-count { font-size: 12.5px; color: var(--app-fg-muted); margin: 0 0 20px; }
+.setup-group {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--app-fg-subtle);
+  font-weight: 700; margin: 18px 0 4px; padding-left: 10px;
+}
+.setup-steps > div:first-of-type .setup-group { margin-top: 0; }
+.setup-step {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  background: none; border: 0; padding: 7px 10px; border-radius: 7px; cursor: pointer;
+  font-size: 13.5px; color: var(--app-fg);
+}
+.setup-step:hover { background: var(--app-bg-sunken); }
+.setup-step[aria-current="step"] { background: var(--app-card); box-shadow: 0 0 0 1px var(--app-border); font-weight: 600; }
+.setup-dot {
+  width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1.5px solid var(--app-input-bd);
+  display: grid; place-items: center; font-size: 10px; line-height: 1;
+}
+.setup-step.done .setup-dot { background: var(--app-teal); border-color: var(--app-teal); color: var(--app-primary-fg); }
+.setup-step.attention .setup-dot { border-color: var(--app-amber); }
+.setup-step.attention .setup-dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--app-amber); }
+.setup-step.locked { color: var(--app-fg-muted); }
+
+.setup-pane {
+  background: var(--app-card); border: 1px solid var(--app-border); border-radius: 12px;
+  padding: 28px 32px; min-width: 0; align-self: start;
+}
+.setup-eyebrow { font-size: 12px; color: var(--app-fg-subtle); margin-bottom: 6px; }
+.setup-pane h2 { font-size: 20px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+.setup-lede { color: var(--app-fg-muted); margin: 0 0 22px; max-width: 58ch; }
+.setup-fields { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+/* A field group's own Save button (#2683): left-aligned, natural width. */
+.setup-save-row { display: flex; }
+.setup-field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; }
+.setup-field input, .setup-field select, .setup-field textarea { font-weight: 400; width: 100%; }
+.setup-hint { font-size: 12px; color: var(--app-fg-subtle); font-weight: 400; }
+/* A label with a hint: one line, so every field in a row starts at the same height. */
+.setup-field-label { display: block; }
+.setup-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.setup-section { display: flex; flex-direction: column; gap: 2px; margin: 22px 0 8px; }
+.setup-section-label { font-size: 12.5px; font-weight: 600; }
+
+.setup-choices { display: flex; flex-direction: column; gap: 8px; max-width: 520px; margin-bottom: 20px; }
+.setup-choice {
+  display: flex; gap: 12px; align-items: flex-start; text-align: left; color: var(--app-fg);
+  background: var(--app-card); border: 1px solid var(--app-input-bd); border-radius: 9px; padding: 12px 14px; cursor: pointer;
+}
+.setup-choice[aria-checked="true"] { border-color: var(--app-teal); background: var(--app-teal-soft); box-shadow: 0 0 0 1px var(--app-teal); }
+.setup-radio {
+  width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--app-input-bd);
+  flex: none; margin-top: 2px; display: grid; place-items: center;
+}
+.setup-choice[aria-checked="true"] .setup-radio { border-color: var(--app-teal); }
+.setup-choice[aria-checked="true"] .setup-radio::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--app-teal); }
+.setup-choice[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
+.setup-choice b { display: block; font-weight: 600; font-size: 14px; }
+.setup-choice-desc { display: block; font-size: 12.5px; color: var(--app-fg-muted); }
+.setup-tag { font-size: 11px; color: var(--app-teal); font-weight: 600; margin-left: 6px; }
+
+.setup-status { font-size: 13px; margin: 18px 0 0; color: var(--app-fg-muted); }
+.setup-status.ok { color: var(--app-teal); }
+.setup-status.attention { color: var(--app-amber); }
+.setup-note {
+  font-size: 12.5px; color: var(--app-fg-muted); background: var(--app-bg-sunken);
+  border-radius: 8px; padding: 10px 12px; max-width: 520px; margin-top: 18px;
+}
+.setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.setup-actions .btn { text-decoration: none; }
+/* Google Workspace sign-in (#2683): the callback URL to paste into Google Cloud. */
+.gws-callback { display: flex; align-items: center; gap: 8px; max-width: 520px; margin-top: 8px; }
+.gws-callback code {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px;
+  background: var(--app-bg-sunken); border-radius: 6px; padding: 6px 8px;
+}
+.setup-saved { color: var(--app-teal); }
+.setup-inline { display: flex; gap: 8px; align-items: center; }
+.setup-inline input { flex: 1; min-width: 0; }
+.setup-identity { margin-top: 14px; }
+.setup-panel { margin-top: 22px; }
+.setup-link {
+  background: none; border: 0; padding: 0; color: var(--app-fg-muted); font-size: 12.5px; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.setup-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--app-border-soft);
+}
+.setup-foot .setup-help { margin-left: auto; }
+
+/* Capabilities (#2358): switches over the registry, on the Setup page and in Settings. */
+.caps {
+  display: flex; flex-direction: column; border: 1px solid var(--app-border); border-radius: 10px;
+  overflow: hidden; background: var(--app-card); margin-bottom: 14px;
+}
+.cap { display: flex; gap: 16px; align-items: center; padding: 13px 16px; }
+.cap + .cap { border-top: 1px solid var(--app-border); }
+.cap > div { flex: 1; min-width: 0; }
+.cap b { display: block; font-weight: 600; font-size: 14px; }
+.cap-desc { display: block; font-size: 12.5px; color: var(--app-fg-muted); }
+.cap-fixed { font-size: 11.5px; color: var(--app-fg-subtle); text-align: right; max-width: 14em; }
+.caps > .setup-status, .caps > .setup-hint { margin: 0; padding: 10px 16px; border-top: 1px solid var(--app-border); }
+.cap-switch {
+  position: relative; width: 36px; height: 20px; flex: none; border-radius: 999px; border: 0;
+  background: var(--app-input-bd); cursor: pointer; padding: 0;
+}
+.cap-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--app-card); transition: transform .15s;
+}
+.cap-switch[aria-checked="true"] { background: var(--app-teal); }
+.cap-switch[aria-checked="true"]::after { transform: translateX(16px); }
+/* Partly on: knob in the middle. */
+.cap-switch[aria-checked="mixed"] { background: var(--app-amber); }
+.cap-switch[aria-checked="mixed"]::after { transform: translateX(8px); }
+.cap-switch:disabled { opacity: .5; cursor: not-allowed; }
+.cap-switch:focus-visible { outline: 2px solid var(--app-teal); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .cap-switch::after { transition: none; } }
+
+/* The setup guide: a full-height column docked to the right, on the page background, past
+   one thin line, so it reads as part of the console and stays across steps. The page makes
+   room for it. Below 1180px the step list hides behind the guide's Steps button (which
+   closes the guide); on a phone the guide is full-screen. */
+.setup-page.guide-open {
+  max-width: none; margin: 0; padding-right: calc(var(--setup-guide-w) + 24px);
+  grid-template-columns: 210px minmax(0, 620px); gap: 28px;
+}
+.setup-page { --setup-guide-w: 360px; }
+.setup-guide {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--setup-guide-w); z-index: 5;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--app-bg); border-left: 1px solid var(--app-border);
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* Closed but kept mounted (its thread survives): display above would override [hidden]. */
+.setup-guide[hidden] { display: none; }
+.setup-guide-head {
+  display: flex; align-items: flex-start; gap: 10px; padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--app-border);
+}
+.setup-guide-head > div { flex: 1; min-width: 0; }
+.setup-guide-head b { display: block; font-size: 14px; }
+.setup-guide-head span { display: block; font-size: 12px; color: var(--app-fg-muted); }
+.setup-guide-steps {
+  display: none; font-size: 12px; font-weight: 600; background: var(--app-bg-sunken); border: 0;
+  border-radius: 6px; padding: 4px 9px; cursor: pointer; white-space: nowrap; color: var(--app-fg);
+}
+.setup-guide-close {
+  background: none; border: 0; font-size: 20px; line-height: 1; color: var(--app-fg-muted);
+  cursor: pointer; padding: 0 4px;
+}
+/* The chat's own thread and composer, in a narrow column: drop the centring padding. */
+.setup-guide .chat-messages { padding: 16px; }
+.setup-guide .chat-composer { padding: 12px 16px; }
+@media (max-width: 1180px) {
+  .setup-page.guide-open { grid-template-columns: minmax(0, 620px); }
+  .setup-page.guide-open .setup-steps { display: none; }
+  .setup-guide-steps { display: inline-block; }
+}
+
+@media (max-width: 760px) {
+  .setup-page { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 20px 16px 40px; }
+  .setup-pane { padding: 20px 18px; }
+  .setup-row2 { grid-template-columns: 1fr; }
+  .setup-foot .setup-help { margin-left: 0; }
+  .setup-page.guide-open { padding-right: 16px; }
+  .setup-guide { width: auto; left: 0; z-index: 10; border-left: 0; }
 }

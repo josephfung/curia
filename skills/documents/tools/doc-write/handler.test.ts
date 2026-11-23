@@ -430,7 +430,10 @@ describe('DocWriteHandler', () => {
         expect(data.action).toBe('section-deleted');
         expect(data.document?.version).toBe(4);
       }
-      expect(deleteSection).toHaveBeenCalledWith(PATH, { section: 'Board mail', expectedSectionVersion: 2 });
+      // expectedVersion: the version read for the console-only check (#2360).
+      expect(deleteSection).toHaveBeenCalledWith(PATH, {
+        section: 'Board mail', expectedSectionVersion: 2, expectedVersion: 3, expectedId: 'doc-1',
+      });
       // The folder's log.md (which the read mock reports as existing) gets an entry.
       expect(repo.append).toHaveBeenCalledWith('/projects/x/log.md', expect.objectContaining({
         content: expect.stringContaining('section-delete'),
@@ -620,6 +623,124 @@ describe('DocWriteHandler', () => {
       const repo = makeRepo({ read: vi.fn().mockResolvedValue(null), create });
       const result = await new DocWriteHandler().execute(makeCtx({ path: '/scratch/principal-mailbox-sends-notes.md', mode: 'create', type: 'note', body: 'x' }, repo));
       expect(result.success).toBe(true);
+    });
+  });
+  // #2360: a document marked `editable_by: console` is the console's, whatever its path.
+  describe('console-only documents (editable_by)', () => {
+    const PATH = '/meetings/notes/handbook.md';
+    const consoleDoc = () => makeDoc({ path: PATH, frontmatter: { editable_by: 'console' } });
+    const okWrite = () => ({ ok: true, document: consoleDoc() });
+    const repoWith = (doc: WorkingDocRow | null) => makeRepo({
+      read: vi.fn().mockResolvedValue(doc),
+      create: vi.fn().mockResolvedValue(makeDoc({ path: PATH })),
+      append: vi.fn().mockResolvedValue(okWrite()),
+      update: vi.fn().mockResolvedValue(okWrite()),
+      editSection: vi.fn().mockResolvedValue(okWrite()),
+      deleteSection: vi.fn().mockResolvedValue(okWrite()),
+    });
+    const ctxFor = (input: Record<string, unknown>, repo: WorkingDocsRepo, humanApproved = false) => {
+      const ctx = makeCtx(input, repo) as unknown as { humanApproved?: boolean };
+      if (humanApproved) ctx.humanApproved = true;
+      return ctx as unknown as ToolContext;
+    };
+    const MODES: Array<Record<string, unknown>> = [
+      { mode: 'create', type: 'note', body: 'x' },
+      { mode: 'append', content: 'x', expected_version: 1 },
+      { mode: 'replace', body: 'x', expected_version: 1 },
+      { mode: 'section-edit', section: 'Style', content: 'x' },
+      { mode: 'section-delete', section: 'Style' },
+    ];
+    // Writes to documents other than log.md (each write also appends the folder's change log).
+    const writes = (repo: WorkingDocsRepo) =>
+      [repo.create, repo.append, repo.update, repo.editSection, repo.deleteSection]
+        .flatMap((fn) => (fn as ReturnType<typeof vi.fn>).mock.calls)
+        .filter(([target]) => !String(typeof target === 'string' ? target : (target as { path: string }).path).endsWith('/log.md'))
+        .length;
+
+    it('refuses every mode on a console-only document, without writing', async () => {
+      for (const input of MODES) {
+        const repo = repoWith(consoleDoc());
+        const result = await new DocWriteHandler().execute(ctxFor({ path: PATH, ...input }, repo));
+        expect(result.success, String(input.mode)).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/only in the console/);
+        expect(writes(repo), String(input.mode)).toBe(0);
+      }
+    });
+
+    it('fails closed on the key: any case, any value', async () => {
+      const repo = repoWith(makeDoc({ path: PATH, frontmatter: { Editable_By: 'Console ' } }));
+      const result = await new DocWriteHandler().execute(ctxFor({ path: PATH, mode: 'append', content: 'x', expected_version: 1 }, repo));
+      expect(result.success).toBe(false);
+    });
+
+    it('allows a principal-approved re-execution in every mode but create (the document exists)', async () => {
+      for (const input of MODES.filter((m) => m.mode !== 'create')) {
+        const repo = repoWith(consoleDoc());
+        const result = await new DocWriteHandler().execute(ctxFor({ path: PATH, ...input }, repo, true));
+        expect(result.success, String(input.mode)).toBe(true);
+        expect(writes(repo), String(input.mode)).toBe(1);
+      }
+    });
+
+    it('refuses setting the key on a new or ordinary document, and removing or changing it, even approved', async () => {
+      const ordinary = makeDoc({ path: '/projects/x/brief.md' });
+      const cases: Array<[WorkingDocRow | null, Record<string, unknown>]> = [
+        [null, { path: '/projects/x/new.md', mode: 'create', type: 'note', body: 'x', frontmatter: { editable_by: 'console' } }],
+        [ordinary, { path: ordinary.path, mode: 'replace', body: 'x', expected_version: 1, frontmatter: { editable_by: 'console' } }],
+        [consoleDoc(), { path: PATH, mode: 'replace', body: 'x', expected_version: 1, frontmatter: { title: 'Handbook' } }],
+        [consoleDoc(), { path: PATH, mode: 'replace', body: 'x', expected_version: 1, frontmatter: { editable_by: 'anyone' } }],
+      ];
+      for (const [doc, input] of cases) {
+        const repo = repoWith(doc);
+        const result = await new DocWriteHandler().execute(ctxFor(input, repo, true));
+        expect(result.success, JSON.stringify(input)).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/editable_by/);
+        expect(writes(repo)).toBe(0);
+      }
+      // An approved replace that keeps the key as it is goes through.
+      const keep = repoWith(consoleDoc());
+      const kept = await new DocWriteHandler().execute(ctxFor(
+        { path: PATH, mode: 'replace', body: 'x', expected_version: 1, frontmatter: { editable_by: 'console' } }, keep, true));
+      expect(kept.success).toBe(true);
+    });
+
+    // An ordinary document read at version 1 that the console marks before the write lands
+    // must not take the write: every mode is bound to the version the check passed.
+    it('binds every write to the version the console-only check read', async () => {
+      const ordinary = makeDoc({ path: '/meetings/notes/brief.md', version: 1 });
+      for (const input of [
+        { mode: 'append', content: 'x', expected_version: 2 },
+        { mode: 'replace', body: 'x', expected_version: 2 },
+      ]) {
+        const repo = repoWith(ordinary);
+        const result = await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, ...input }, repo));
+        expect(result.success, input.mode).toBe(true);
+        if (result.success) expect((result.data as { conflict?: boolean; version?: number })).toMatchObject({ conflict: true, version: 1 });
+        expect(writes(repo), input.mode).toBe(0);
+      }
+      // Every mode also names the document it checked: one archived and re-created at the same
+      // path is back at version 1 under a new id.
+      for (const [mode, fn, extra] of [
+        ['append', 'append', { content: 'x', expected_version: 1 }],
+        ['replace', 'update', { body: 'x', expected_version: 1 }],
+        ['section-edit', 'editSection', { section: 'Style', content: 'x' }],
+        ['section-delete', 'deleteSection', { section: 'Style' }],
+      ] as const) {
+        const repo = repoWith(ordinary);
+        await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, mode, ...extra }, repo));
+        expect(repo[fn], mode).toHaveBeenCalledWith(ordinary.path, expect.objectContaining({
+          expectedId: ordinary.id,
+          ...(mode.startsWith('section') ? { expectedVersion: 1 } : {}),
+        }));
+      }
+    });
+
+    it('leaves ordinary documents alone', async () => {
+      const brief = makeDoc({ path: '/meetings/notes/research-brief.md', frontmatter: { title: 'Brief' } });
+      const repo = repoWith(brief);
+      const result = await new DocWriteHandler().execute(ctxFor({ path: brief.path, mode: 'append', content: 'x', expected_version: 1 }, repo));
+      expect(result.success).toBe(true);
+      expect(writes(repo)).toBe(1);
     });
   });
 });

@@ -1,10 +1,12 @@
 // The shared web thread is one Postgres row. These cases use the real server
 // so a typo in the adoption query or the insert race cannot hide behind a stub.
 // Skips when DATABASE_URL is unset. CI migrates before the suite.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
-import { clearWebThreadCache, getOrCreateWebThread } from '../../src/channels/http/web-thread.js';
+import { clearWebThreadCache, getOrCreateWebThread, readWebThreadAndSetupPhase, rotateWebThread, type WebThreadQueryable } from '../../src/channels/http/web-thread.js';
+import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { lockSetupSingletons } from './setup-singletons-lock.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -13,6 +15,8 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 describeIf('web thread (integration)', () => {
   let pool: pg.Pool;
   let verified = false;
+  // setup-routes.test.ts rewrites the same single rows (#2358): one suite at a time.
+  let unlock: (() => Promise<void>) | undefined;
   const conversations = [
     'wt-web-old',
     'wt-web-new',
@@ -21,12 +25,17 @@ describeIf('web thread (integration)', () => {
     'wt-null-channel',
     'wt-race-a',
     'wt-race-b',
+    'wt-rotated',
+    'wt-rotated-fresh',
+    'wt-before-race',
+    'wt-after-race',
   ];
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
     verified = true;
+    unlock = await lockSetupSingletons(DATABASE_URL!);
     await pool.query('DELETE FROM web_thread WHERE id = 1');
     await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
     clearWebThreadCache(pool);
@@ -52,6 +61,7 @@ describeIf('web thread (integration)', () => {
         await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
       }
     } finally {
+      await unlock?.();
       await pool.end();
     }
   });
@@ -87,5 +97,84 @@ describeIf('web thread (integration)', () => {
     expect(['wt-race-a', 'wt-race-b']).toContain(a);
     const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
     expect(stored.rows[0]?.conversation_id).toBe(a);
+  });
+
+  // #2358: Start onboarding gives the principal a new thread; the Setup chat stays in
+  // working_memory, and every reader of the pointer sees the new id at once.
+  it('rotation moves the pointer and the cache, and keeps the old conversation', async () => {
+    clearWebThreadCache(pool);
+    const before = await getOrCreateWebThread(pool);
+    await expect(rotateWebThread(pool, { newId: () => 'wt-rotated' })).resolves.toBe('wt-rotated');
+    await expect(getOrCreateWebThread(pool)).resolves.toBe('wt-rotated');
+    clearWebThreadCache(pool);
+    await expect(getOrCreateWebThread(pool)).resolves.toBe('wt-rotated');
+    if (before !== 'wt-rotated') {
+      const kept = await pool.query('SELECT 1 FROM working_memory WHERE conversation_id = $1 LIMIT 1', [before]);
+      // A minted id has no turns; an adopted one keeps them.
+      if (['wt-web-new', 'wt-web-old'].includes(before)) expect(kept.rows).toHaveLength(1);
+    }
+  });
+
+  it('rotation creates the row when there is none yet', async () => {
+    await pool.query('DELETE FROM web_thread WHERE id = 1');
+    clearWebThreadCache(pool);
+    await expect(rotateWebThread(pool, { newId: () => 'wt-rotated-fresh' })).resolves.toBe('wt-rotated-fresh');
+    const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
+    expect(stored.rows[0]?.conversation_id).toBe('wt-rotated-fresh');
+  });
+
+  // A cold-cache read that saw the old row must not overwrite a rotation that finished
+  // while it ran (#2358, CodeRabbit on #2687).
+  it('a read in flight during a rotation returns, and keeps, the new id', async () => {
+    await rotateWebThread(pool, { newId: () => 'wt-before-race' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = false;
+    // One wrapper for both callers: the cache is keyed by the pool object.
+    const slow: WebThreadQueryable = {
+      query: async (sql, params) => {
+        const result = await pool.query(sql, params as unknown[]);
+        if (!held && sql.includes('SELECT conversation_id FROM web_thread')) {
+          held = true;
+          await gate;
+        }
+        return result;
+      },
+    };
+    clearWebThreadCache(slow);
+    const inFlight = getOrCreateWebThread(slow);
+    await vi.waitFor(() => expect(held).toBe(true));
+    await rotateWebThread(slow, { newId: () => 'wt-after-race' });
+    release();
+    await expect(inFlight).resolves.toBe('wt-after-race');
+    await expect(getOrCreateWebThread(slow)).resolves.toBe('wt-after-race');
+  });
+
+  it('reads the thread and the derived Setup phase together', async () => {
+    const saved = (await pool.query(
+      `SELECT key, value, updated_at, updated_by FROM settings WHERE key = 'setup.completed_at'`,
+    )).rows;
+    try {
+      await pool.query(`DELETE FROM settings WHERE key = 'setup.completed_at'`);
+      await rotateWebThread(pool, { newId: () => 'wt-after-race' });
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
+        conversationId: 'wt-after-race', setupPhase: 'in_progress',
+      });
+      await pool.query(
+        `INSERT INTO settings (key, value, updated_by) VALUES ('setup.completed_at', to_jsonb($1::text), 'test')`,
+        ['2026-01-01T00:00:00.000Z'],
+      );
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
+        conversationId: 'wt-after-race', setupPhase: 'complete',
+      });
+    } finally {
+      await pool.query(`DELETE FROM settings WHERE key = 'setup.completed_at'`);
+      for (const row of saved) {
+        await pool.query(
+          `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, $3, $4)`,
+          [row['key'], JSON.stringify(row['value']), row['updated_at'], row['updated_by']],
+        );
+      }
+    }
   });
 });

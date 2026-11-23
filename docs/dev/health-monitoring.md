@@ -12,6 +12,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 {
   "status": "ok | degraded | down",
   "uptime_s": 3812,
+  "started_at": "2026-11-20T14:02:11.204Z",
   "checks": {
     "db":        "ok | fail",
     "bus":       "ok | fail",

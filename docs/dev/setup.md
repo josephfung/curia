@@ -151,46 +151,30 @@ in a separate terminal. It attaches a CLI channel to the running stack.
 
 ### 3. Personalize your instance
 
-After logging in for the first time, the app detects that the office identity
-has not been configured and redirects you to `/setup` automatically. This is
-a six-step React form wizard:
+After logging in for the first time, the console opens the Setup page at `/setup`
+automatically, and keeps it as the landing page until you press Start onboarding. A
+step list sits beside the open step's form; Save and continue walks the steps, and any
+step can be opened directly, so you can come back to what's left:
 
-1. **About you:** the CEO's name (the principal contact). This step no longer
-   auto-skips when a principal already exists; it pre-populates the current
-   name so it can be corrected if needed.
-2. **Your details:** the principal's operational profile. Captures timezone
-   (required), email, preferred name, title, and working hours (all optional).
-   The email is stored as a verified principal identity that comes online after
-   the wizard's restart. The selected timezone informs agent reasoning via
-   entity-context enrichment. Note: the system timezone (cron scheduler,
-   environment variable `TIMEZONE`) remains env-driven separate from the wizard
-   selection. Aligning the system clock to match the principal's contact
-   timezone is tracked as a follow-up.
-3. **Identity:** assistant name, title, optional email signature.
-4. **Tone & style:** a few lines on how the assistant sounds, started from a template,
-   and the Detail slider.
-5. **Autonomy & preferences:** how independently Curia acts (an autonomy band), and any
-   initial standing preferences.
-6. **Review:** confirm and save.
+1. **Who it's for:** yourself, or someone else (then your name and email, as Curia's
+   operator), and the principal's name, title, email, timezone and pronouns.
+2. **Curia's name:** the assistant's name, title and email signature.
+3. **Email, Messaging, Voice, Email & calendar:** each shows whether it works yet and
+   what it needs. Messaging and Voice ask how Curia reaches the principal (the Curia
+   app, Signal, text message or Slack; a call in the app or on Signal); the keys go in
+   the Settings page each step links to.
+4. **Apply & restart:** one restart turns on everything you saved, then every step is
+   checked again.
+5. **Start onboarding:** unlocks once every required step is done, and hands Curia to
+   the principal.
 
-When you submit step 6, the wizard saves the identity, hot reloads it, and
-(if the process booted in setup-required mode) asks the supervisor to
-restart so the email and Signal channels can come online. You'll see a
-brief "Setting up channels..." screen during the restart, then land directly
-in the chat view at `/chat`. The `setup-wizard` specialist agent
-automatically introduces itself and asks about your priorities, working
-hours, and debrief cadence. Reply to it like you'd talk to any agent.
-Preferences captured here are appended to the same office identity the
-form wizard wrote.
+Note: the system timezone (cron scheduler, environment variable `TIMEZONE`) remains
+env-driven, separate from the principal's timezone. Aligning it is tracked as a
+follow-up. The full design is in [spec 18 - Onboarding](../specs/18-onboarding.md).
 
-The whole personalization step takes a few minutes. You can come back to
-`/setup` directly any time you want to revise the identity by hand. The
-full design is documented in
-[spec 18 - Onboarding](../specs/18-onboarding.md).
-
-> **Checkpoint:** Curia is running, your identity is configured, and the
-> coordinator is personalized. Stop here or continue to Tier 2 for email
-> and, optionally, a different embedding model.
+> **Checkpoint:** Curia is running, and the Setup page has who it's for and Curia's
+> name. Stop here or continue to Tier 2 for email and, optionally, a different
+> embedding model.
 
 ---
 

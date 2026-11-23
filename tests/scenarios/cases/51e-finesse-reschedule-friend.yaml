@@ -1,0 +1,97 @@
+# Finesse 51e (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is lunch with a friend, so Curia
+# reschedules casually: no formal apology and no corporate language. Information level 3:
+# Josh's contact record says former Halcyon engineer; only Curia's notes (memory) say he and
+# Avery are friends who play pickup basketball.
+name: finesse 51e reschedules a friend
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Josh. Something
+  came up." The Thursday 2pm is lunch with Josh Tanaka, one of Halcyon's first engineers,
+  who left two years ago to start his own company. Curia's notes say Josh and Avery are
+  friends who play pickup basketball. Curia should reschedule casually, by text or a short
+  note: "Hey Josh, Avery has to bail on Thursday lunch, sorry! Could you do next Tuesday or
+  Wednesday instead?" A formal apology or corporate language is the failure.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: josh
+      display_name: Josh Tanaka
+      tier: known
+      title: Founder (former Halcyon engineer)
+      channel: sms
+      identifier: "+15555550144"
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Josh. Something came up.
+tool_stubs:
+  # Curia's notes: the only place the friendship is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c21
+            type: fact
+            label: Josh Tanaka and Avery
+            properties: { value: "Josh and Avery are friends: they play pickup basketball most weeks. Josh prefers texts." }
+            confidence: 0.85
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-15T10:00:00-04:00"
+            score: 0.8
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51e-lunch, title: Lunch with Josh, location: Café Lumen, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-51e-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+5 12:00}}", end: "{{time:next-thursday+5 14:00}}" }
+          - { start: "{{time:next-thursday+6 12:00}}", end: "{{time:next-thursday+6 14:00}}" }
+expected_behaviors:
+  - id: tells_josh
+    weight: critical
+    layer: decision
+    description: Curia gets in touch with Josh to move the lunch.
+    check:
+      any_of:
+        - { called: [sms-send, signal-send], agent: any, contains: { recipient: "{{contact:josh}}" } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:josh}}" } }
+  - id: offers_new_day
+    weight: important
+    layer: decision
+    description: Suggests a day or two for the rescheduled lunch rather than just cancelling it.
+  - id: does_not_ask_avery
+    weight: nice-to-have
+    layer: decision
+    description: Does not ask Avery what to tell Josh. Avery said to move it.
+  - id: josh_note_casual
+    weight: critical
+    layer: voice
+    description: >
+      The message to Josh is casual and short, as between friends ("Avery has to bail on
+      Thursday lunch, sorry! Could you do Tuesday or Wednesday instead?"). No formal apology
+      and no corporate language such as "Avery regrets that a scheduling conflict has
+      arisen".
+contrast:
+  group: finesse-51-reschedule
+  recipient: A friend of the executive, a former employee who now runs his own company.
+  message:
+    - { tool: sms-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+    - { tool: signal-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+    - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
+failure_modes:
+  - A formal apology
+  - Corporate language ("Avery regrets that a scheduling conflict has arisen")

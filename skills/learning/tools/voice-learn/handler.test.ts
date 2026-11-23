@@ -269,7 +269,8 @@ describe('VoiceLearnHandler', () => {
     expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
     const payload = ctx.__sendNotification.mock.calls[0]![0];
     expect(payload.notificationType).toBe('learning_proposal');
-    expect(payload.ceoEmail).toBe('ceo@example.com');
+    // Principal-routed (#2710): the gateway resolves the address; the handler names none.
+    expect(payload).not.toHaveProperty('ceoEmail');
     // The reviewable guide is inlined so the CEO can approve/dismiss straight from the email.
     expect(payload.body).toContain('Dry humour');
     expect(payload.body).toContain('Reply `approve voice` or `dismiss voice`.');

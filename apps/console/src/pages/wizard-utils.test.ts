@@ -6,28 +6,19 @@ import { emailSignatureText } from '../../../../src/channels/email/signature.js'
 import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS, detailBand } from '../../../../src/identity/length.js';
 import {
   lengthPreview,
-  verbosityReviewDesc,
   formalityBand,
   STYLE_TEMPLATES,
   TONE_STYLE_MAX_LENGTH,
   validateToneStyle,
-  styleReviewDesc,
   autonomyChange,
   validateNonEmptyName,
   validatePrincipalName,
   PRINCIPAL_NAME_MAX_LENGTH,
-  buildIdentityPayload,
   assistantFullName,
   defaultSignature,
   fallbackEmailSignature,
-  DEFAULT_WIZARD_STATE,
   detectBrowserTimezone,
   validateProfileEmail,
-  buildProfilePayload,
-  WIZARD_TOTAL_STEPS,
-  clampWizardStep,
-  type WizardState,
-  type LocalIdentity,
 } from './wizard-utils.js';
 
 // ── assistantFullName / defaultSignature ──────────────────────────────────────
@@ -41,14 +32,6 @@ describe('assistantFullName', () => {
 describe('defaultSignature', () => {
   it('builds the full default signature block', () => {
     expect(defaultSignature('Sam')).toBe('--\nSam Curia\nDigital EA');
-  });
-
-  it('backs the populated DEFAULT_WIZARD_STATE signature (not blank)', () => {
-    expect(DEFAULT_WIZARD_STATE.signature).toBe('--\nAlex Curia\nDigital EA');
-  });
-
-  it('backs the DEFAULT_WIZARD_STATE name', () => {
-    expect(DEFAULT_WIZARD_STATE.name).toBe('Alex Curia');
   });
 });
 
@@ -72,12 +55,6 @@ describe('lengthPreview (#2143)', () => {
 
   it('has nothing to show for an empty table', () => {
     expect(lengthPreview({ rows: [], bands: [] }, 50)).toBeNull();
-  });
-});
-
-describe('verbosityReviewDesc', () => {
-  it('returns concise description at 50', () => {
-    expect(verbosityReviewDesc(50)).toBe('Concise responses by default.');
   });
 });
 
@@ -132,69 +109,6 @@ describe('validatePrincipalName', () => {
   });
 });
 
-// ── buildIdentityPayload ──────────────────────────────────────────────────────
-
-describe('buildIdentityPayload', () => {
-  const existingIdentity: LocalIdentity = {
-    assistant: { name: 'Old', title: 'Old Title', emailSignature: '' },
-    tone: { style: 'Warm.', verbosity: 50 },
-    behavioralPreferences: ['existing pref'],
-    constraints: ['no spam'],
-  };
-
-  const state: WizardState = {
-    principalName: 'Jane Doe',
-    name: 'Alex Curia',
-    title: 'Executive Assistant to the CEO',
-    signature: 'Best, Alex',
-    toneStyle: '  Dry and brief.\nSounds like: "Done."  ',
-    verbosity: 60,
-    autonomyBand: 'spot-check',
-    preferences: 'Flag investor emails',
-    timezone: 'America/Toronto',
-    email: '',
-    preferredName: '',
-    principalTitle: '',
-    workingHours: null,
-  };
-
-  it('maps WizardState onto identity correctly', () => {
-    const { identity } = buildIdentityPayload(state, existingIdentity);
-    expect(identity.assistant.name).toBe('Alex Curia');
-    expect(identity.assistant.title).toBe('Executive Assistant to the CEO');
-    expect(identity.assistant.emailSignature).toBe('Best, Alex');
-    expect(identity.tone).toEqual({ style: 'Dry and brief.\nSounds like: "Done."', verbosity: 60 });
-    // The identity no longer carries a decision style; autonomy is saved separately.
-    expect(identity).not.toHaveProperty('decisionStyle');
-  });
-
-  it('appends preferences to existing behavioralPreferences', () => {
-    const { identity } = buildIdentityPayload(state, existingIdentity);
-    expect(identity.behavioralPreferences).toEqual([
-      'existing pref',
-      'Flag investor emails',
-    ]);
-  });
-
-  it('does not append when preferences is empty', () => {
-    const { identity } = buildIdentityPayload(
-      { ...state, preferences: '' },
-      existingIdentity,
-    );
-    expect(identity.behavioralPreferences).toEqual(['existing pref']);
-  });
-
-  it('preserves constraints from existing identity', () => {
-    const { identity } = buildIdentityPayload(state, existingIdentity);
-    expect(identity.constraints).toEqual(['no spam']);
-  });
-
-  it('sets note to "Saved via onboarding wizard"', () => {
-    const { note } = buildIdentityPayload(state, existingIdentity);
-    expect(note).toBe('Saved via onboarding wizard');
-  });
-});
-
 // ── validateProfileEmail ──────────────────────────────────────────────────────
 
 describe('validateProfileEmail', () => {
@@ -210,26 +124,6 @@ describe('validateProfileEmail', () => {
   });
 });
 
-// ── buildProfilePayload ───────────────────────────────────────────────────────
-
-describe('buildProfilePayload', () => {
-  it('includes timezone and omits empty optionals', () => {
-    const state = { ...DEFAULT_WIZARD_STATE, timezone: 'America/Vancouver' };
-    expect(buildProfilePayload(state)).toEqual({ timezone: 'America/Vancouver' });
-  });
-  it('includes provided optionals and trims them', () => {
-    const state = {
-      ...DEFAULT_WIZARD_STATE, timezone: 'America/Toronto',
-      email: '  Me@Example.com ', preferredName: ' Jo ', principalTitle: ' CEO ',
-      workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
-    };
-    expect(buildProfilePayload(state)).toEqual({
-      timezone: 'America/Toronto', email: 'Me@Example.com', preferredName: 'Jo',
-      title: 'CEO', workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
-    });
-  });
-});
-
 // ── detectBrowserTimezone ─────────────────────────────────────────────────────
 
 describe('detectBrowserTimezone', () => {
@@ -239,34 +133,6 @@ describe('detectBrowserTimezone', () => {
     const tz = detectBrowserTimezone();
     expect(tz.length).toBeGreaterThan(0);
     expect(() => Intl.DateTimeFormat(undefined, { timeZone: tz })).not.toThrow();
-  });
-});
-
-// ── clampWizardStep ───────────────────────────────────────────────────────────
-
-describe('clampWizardStep', () => {
-  it('accepts every real step, including the final review step (#2146)', () => {
-    for (let step = 1; step <= WIZARD_TOTAL_STEPS; step++) {
-      expect(clampWizardStep(step)).toBe(step);
-    }
-    expect(clampWizardStep(6)).toBe(6);
-  });
-
-  it('clamps out-of-range steps to the nearest real step', () => {
-    expect(clampWizardStep(0)).toBe(1);
-    expect(clampWizardStep(-3)).toBe(1);
-    expect(clampWizardStep(WIZARD_TOTAL_STEPS + 1)).toBe(WIZARD_TOTAL_STEPS);
-  });
-
-  it('rounds fractional steps', () => {
-    expect(clampWizardStep(2.6)).toBe(3);
-  });
-
-  it('falls back to step 1 for non-numeric values', () => {
-    expect(clampWizardStep(undefined)).toBe(1);
-    expect(clampWizardStep('3')).toBe(1);
-    expect(clampWizardStep(Number.NaN)).toBe(1);
-    expect(clampWizardStep(Number.POSITIVE_INFINITY)).toBe(1);
   });
 });
 
@@ -296,17 +162,6 @@ describe('validateToneStyle', () => {
     expect(TONE_STYLE_MAX_LENGTH).toBe(SERVER_TONE_STYLE_MAX_LENGTH);
     expect(validateToneStyle('x'.repeat(TONE_STYLE_MAX_LENGTH))).toBeNull();
     expect(validateToneStyle('x'.repeat(TONE_STYLE_MAX_LENGTH + 1))).toMatch(/801/);
-  });
-});
-
-describe('styleReviewDesc', () => {
-  it('shows the first line', () => {
-    expect(styleReviewDesc('Dry and brief.\nSounds like: "Done."')).toBe('Dry and brief.');
-  });
-  it('cuts a long first line short', () => {
-    const out = styleReviewDesc('word '.repeat(60));
-    expect(out.length).toBeLessThanOrEqual(118);
-    expect(out.endsWith('…')).toBe(true);
   });
 });
 

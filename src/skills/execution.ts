@@ -434,6 +434,9 @@ export class ExecutionLayer {
   private cardUseService?: import('../secrets/card-use-service.js').CardUseCapability;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
+  /** Onboarding (#2360) — injected post-construction via setOnboardingService() because it
+   *  depends on registryService, which is built after the ExecutionLayer. */
+  private onboardingService?: import('../onboarding/onboarding-service.js').OnboardingService;
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
@@ -680,6 +683,7 @@ export class ExecutionLayer {
       bullpenService: this.bullpenService,
       executiveProfileService: this.executiveProfileService,
       officeIdentityService: this.officeIdentityService,
+      onboardingService: this.onboardingService,
       actionLogRepo: this.actionLogRepo,
       approvalDelivery: this.approvalDelivery,
       auditLogRepo: this.auditLogRepo,
@@ -913,6 +917,14 @@ export class ExecutionLayer {
    */
   setSecretCaptureService(svc: import('../secrets/secret-capture-service.js').SecretCaptureMinter): void {
     this.secretCaptureService = svc;
+  }
+
+  /**
+   * Inject the onboarding service after construction (#2360). Called from index.ts once
+   * registryService (which the service enables capabilities through) is available.
+   */
+  setOnboardingService(svc: import('../onboarding/onboarding-service.js').OnboardingService): void {
+    this.onboardingService = svc;
   }
 
   /**

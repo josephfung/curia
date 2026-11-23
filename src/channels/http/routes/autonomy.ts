@@ -12,7 +12,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 // Value import (not type-only) because we call AutonomyService.bandDescription() as a static method.
 import { AutonomyService } from '../../../autonomy/autonomy-service.js';
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 
 export interface AutonomyRouteOptions {
   autonomyService: AutonomyService;
@@ -37,10 +37,14 @@ export async function autonomyRoutes(
   // These routes check credentials on every call — a brute-force target that
   // needs tighter throttling than the global 200/min baseline.
   const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+  // Reads use the console-wide read limit (60/min): the router reads GET /api/identity on every
+  // navigation, and the Setup page re-reads after each save. Failed auth is throttled
+  // separately, in assertSecret, so a tight cap on authenticated reads only adds friction
+  // (#2358). Writes keep AUTH_RATE.
 
   // -- GET /api/autonomy — return current autonomy config --
 
-  app.get('/api/autonomy', AUTH_RATE, async (request, reply) => {
+  app.get('/api/autonomy', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -111,7 +115,7 @@ export async function autonomyRoutes(
 
   // -- GET /api/autonomy/history — paginated history of score changes --
 
-  app.get('/api/autonomy/history', AUTH_RATE, async (request, reply) => {
+  app.get('/api/autonomy/history', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     // Parse query params with safe defaults. Clamp limit to max 50 to prevent

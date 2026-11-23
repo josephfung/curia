@@ -55,6 +55,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'curiaEmailAddresses',
   'mailboxDirectory',
   'triageServices',
+  'onboardingService',
 ]);
 
 /** One discovered on-disk skill: lenient parse for the registry UI + reconciliation.

@@ -9,6 +9,11 @@ export type HealthStatus = 'ok' | 'degraded' | 'down';
 export interface HealthResponse {
   status: HealthStatus;
   uptime_s: number;
+  /**
+   * When this process started (ISO). A sign-in done page waits for it to change after the
+   * restart the sign-in scheduled (#2697). Says nothing uptime_s doesn't already.
+   */
+  started_at?: string;
   checks: {
     db: CheckResult;
     bus: CheckResult;

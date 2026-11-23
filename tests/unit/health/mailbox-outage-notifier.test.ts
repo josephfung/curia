@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MailboxOutageNotifier, MINT_RECONNECT_LINK_TIMEOUT_MS } from '../../../src/health/mailbox-outage-notifier.js';
 
-function make(email: string | null = 'owner@example.com', sent = true) {
+function make(sent = true, hasOperator: (() => Promise<boolean>) | undefined = undefined) {
   const sendNotification = vi.fn().mockResolvedValue(sent);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const n = new MailboxOutageNotifier({
-    gateway: { sendNotification },
-    principalEmail: () => email ?? undefined,
+    gateway: { sendNotification, canDeliverNotifications: () => true },
+    ...(hasOperator ? { hasOperator } : {}),
     logger: logger as never,
   });
   return { n, sendNotification, logger };
@@ -35,8 +35,10 @@ describe('MailboxOutageNotifier', () => {
     const { n, sendNotification } = make();
     await n.record('work', 'Work', false, { authFailure: true });
     const payload = sendNotification.mock.calls[0]![0];
+    // The recipient is the gateway's to resolve from the type (#2710); the notifier states the type only.
     expect(payload.notificationType).toBe('principal_mailbox_outage');
-    expect(payload.ceoEmail).toBe('owner@example.com');
+    expect(payload).not.toHaveProperty('ceoEmail');
+    expect(payload).not.toHaveProperty('recipient');
     expect(payload.body).toContain('Work');
     expect(payload.body.toLowerCase()).toContain('remove');
     // No address; the only "grant" is the instruction to paste a new one, never an id.
@@ -66,35 +68,129 @@ describe('MailboxOutageNotifier', () => {
   });
 
   it('retries on the next failure when the alert could not be sent', async () => {
-    const { n, sendNotification } = make('owner@example.com', false);
+    // A gateway with no address to resolve answers false (#2710), which is also what happens
+    // when no principal email is bound yet: the episode is not recorded as alerted, so the next
+    // failing probe tries again.
+    const { n, sendNotification } = make(false);
     await n.record('work', 'Work', false);
     await n.record('work', 'Work', false);
     expect(sendNotification).toHaveBeenCalledTimes(2);
   });
 
-  it('does not alert, and retries later, while the principal email is not bound', async () => {
-    const { n, sendNotification } = make(null);
-    await n.record('work', 'Work', false);
-    expect(sendNotification).not.toHaveBeenCalled();
-  });
-
-  it('with no delivering email adapter (none, or not yet subscribed) it is not counted as sent, and retries', async () => {
+  it('mints no sign-in link, and alerts nothing, when no adapter can deliver a notice yet', async () => {
+    // Cheap pre-check (#2710 review): a single-use link minted for a notice that cannot be sent
+    // is a wasted link and a new undelivered audit row on every failing probe.
+    const mint = vi.fn().mockResolvedValue('https://curia.example.com/api/mailbox-signin/start/x');
     const sendNotification = vi.fn().mockResolvedValue(true);
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     let delivering = false;
     const n = new MailboxOutageNotifier({
-      gateway: { sendNotification },
-      principalEmail: () => 'owner@example.com',
-      canDeliver: () => delivering,
+      gateway: { sendNotification, canDeliverNotifications: () => delivering },
+      mintReconnectLink: mint,
       logger: logger as never,
     });
-    await n.record('work', 'Work', false);
+
+    await n.record('work', 'Work', false, { authFailure: true });
+
+    expect(mint).not.toHaveBeenCalled();
     expect(sendNotification).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work' }), expect.stringContaining('no email adapter'));
-    // The primary adapter has subscribed: the next failing probe alerts.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mailboxId: 'work' }),
+      expect.stringContaining('no email adapter'),
+    );
+    // Once an adapter subscribes, the next failing probe alerts with the link.
     delivering = true;
-    await n.record('work', 'Work', false);
-    expect(sendNotification).toHaveBeenCalledTimes(1);
+    await n.record('work', 'Work', false, { authFailure: true });
+    expect(mint).toHaveBeenCalledOnce();
+    expect(sendNotification).toHaveBeenCalledOnce();
+  });
+
+  describe('the operator also hears about it (#2710)', () => {
+    it('raises the link-free operator notice when an operator is set', async () => {
+      const { n, sendNotification } = make(true, async () => true);
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(sendNotification).toHaveBeenCalledTimes(2);
+
+      const [principal, operator] = sendNotification.mock.calls.map((c) => c[0] as {
+        notificationType: string; subject: string; body: string;
+      });
+      expect(principal!.notificationType).toBe('principal_mailbox_outage');
+      expect(operator!.notificationType).toBe('mailbox_outage');
+      // No recipient is named: the gateway resolves each from its type.
+      expect(operator).not.toHaveProperty('recipient');
+      // The acceptance rule for this notice: no reconnect link can reach anyone but the principal.
+      expect(operator!.body).not.toMatch(/https?:\/\//);
+      expect(operator!.body).not.toMatch(/@/);
+      expect(operator!.body).not.toMatch(/grant/i);
+      expect(operator!.body).toContain('Work');
+      // The principal's copy does carry the link when one was minted.
+      expect(principal!.body).not.toContain('mailbox_outage');
+    });
+
+    it('sends one email only when no operator is set, so the principal is not told twice', async () => {
+      const { n, sendNotification } = make(true, async () => false);
+      await n.record('work', 'Work', false);
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification.mock.calls[0]![0].notificationType).toBe('principal_mailbox_outage');
+    });
+
+    it('retries a failed operator copy on the next probe, without repeating the principal alert', async () => {
+      // The principal's notice publishes, the operator's first attempt does not.
+      const sendNotification = vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const n = new MailboxOutageNotifier({
+        gateway: { sendNotification, canDeliverNotifications: () => true },
+        hasOperator: async () => true,
+        logger: logger as never,
+      });
+      await n.record('work', 'Work', false);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ mailboxId: 'work' }),
+        expect.stringContaining('operator notice could not be sent'),
+      );
+
+      // The next failing probe retries the operator copy only: the principal heard once.
+      await n.record('work', 'Work', false);
+      expect(sendNotification).toHaveBeenCalledTimes(3);
+      const types = sendNotification.mock.calls.map((c) => (c[0] as { notificationType: string }).notificationType);
+      expect(types).toEqual(['principal_mailbox_outage', 'mailbox_outage', 'mailbox_outage']);
+
+      // After it publishes, no further probes repeat either notice.
+      await n.record('work', 'Work', false);
+      expect(sendNotification).toHaveBeenCalledTimes(3);
+    });
+
+    it('tells the operator even when the principal alert is refused, without claiming the owner was told', async () => {
+      // A refused principal alert (the account is the principal's own mailbox) must not keep the
+      // operator in the dark (#2710 review).
+      const sendNotification = vi.fn(async (req: { notificationType: string }) => req.notificationType === 'mailbox_outage');
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const n = new MailboxOutageNotifier({
+        gateway: { sendNotification, canDeliverNotifications: () => true },
+        hasOperator: async () => true,
+        logger: logger as never,
+      });
+      await n.record('work', 'Work', false);
+
+      const calls = sendNotification.mock.calls.map((c) => c[0] as unknown as { notificationType: string; body: string });
+      expect(calls.map((c) => c.notificationType)).toEqual(['principal_mailbox_outage', 'mailbox_outage']);
+      expect(calls[1]!.body).not.toContain('already told');
+      expect(calls[1]!.body).toContain('could not send the mailbox owner their alert');
+
+      // The next probe retries the principal alert only: the operator has heard.
+      await n.record('work', 'Work', false);
+      const types = sendNotification.mock.calls.map((c) => (c[0] as { notificationType: string }).notificationType);
+      expect(types).toEqual(['principal_mailbox_outage', 'mailbox_outage', 'principal_mailbox_outage']);
+    });
+
+    it('says the owner was told when the principal alert went out', async () => {
+      const { n, sendNotification } = make(true, async () => true);
+      await n.record('work', 'Work', false);
+      expect((sendNotification.mock.calls[1]![0] as { body: string }).body).toContain('Curia has already told the mailbox owner');
+    });
   });
 
   describe('reconnect link (#2361)', () => {
@@ -103,8 +199,7 @@ describe('MailboxOutageNotifier', () => {
       const sendNotification = vi.fn().mockResolvedValue(true);
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
       const n = new MailboxOutageNotifier({
-        gateway: { sendNotification },
-        principalEmail: () => 'owner@example.com',
+        gateway: { sendNotification, canDeliverNotifications: () => true },
         mintReconnectLink: mint,
         ...(mintTimeoutMs !== undefined ? { mintTimeoutMs } : {}),
         logger: logger as never,

@@ -4,6 +4,7 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
+import { GoogleWorkspaceSignIn } from '../components/GoogleWorkspaceSignIn.js';
 
 type McpState = 'uninstalled' | 'installed' | 'enabled';
 
@@ -108,9 +109,16 @@ function SecretRow({ field, onSaved }: { field: McpSecretField; onSaved: () => v
   );
 }
 
-function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: () => void; onChanged: () => void | Promise<void> }) {
+export function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: () => void; onChanged: () => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Bumped after each successful credential save: replacing a saved value changes no flag, but
+  // the Google Workspace sign-in panel must check again (#2697).
+  const [credentialSaves, setCredentialSaves] = useState(0);
+  const onCredentialSaved = useCallback(async () => {
+    setCredentialSaves((n) => n + 1);
+    await onChanged();
+  }, [onChanged]);
 
   const act = useCallback(async (method: 'POST' | 'DELETE', suffix: string) => {
     setBusy(true);
@@ -169,9 +177,18 @@ function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: ()
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {entry.secretFields.map(field => (
-                  <SecretRow key={field.key} field={field} onSaved={onChanged} />
+                  <SecretRow key={field.key} field={field} onSaved={onCredentialSaved} />
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* The same sign-in the Setup page's Google Workspace step has (#2683). */}
+          {entry.name === 'google-workspace' && (
+            <div className="form-field">
+              <label>Sign in as Curia</label>
+              {/* The state too: enabling or disabling the server changes what the panel says. */}
+              <GoogleWorkspaceSignIn refreshKey={`${entry.state}|${credentialSaves}|${entry.secretFields.map((f) => `${f.key}:${f.configured}`).join(',')}`} />
             </div>
           )}
 

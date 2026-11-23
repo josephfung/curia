@@ -105,7 +105,7 @@ export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<Nyla
   try {
     apiKey = (await deps.readApiKey())?.trim();
     if (apiKey === undefined || apiKey === '') {
-      return notReady('no_api_key', 'Save the Nylas API key first (Channels → Email).');
+      return notReady('no_api_key', 'Save the Nylas API key first.');
     }
     region = await deps.readRegion();
   } catch (err) {

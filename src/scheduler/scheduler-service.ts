@@ -1320,6 +1320,53 @@ export class SchedulerService {
     return (result.rowCount ?? 0) > 0;
   }
 
+  /**
+   * Run a task's wake at `runAt` without losing the time it was booked for (#2360), so a note added
+   * by an event is read before the next booked run. A pending task-wake due later than `runAt` moves
+   * to it, and its booked time is parked on deferred_wake_at. The run's completion (or a failed
+   * run's re-arm) then arms that time again on the same row, as for a task that rescheduled itself
+   * from inside its own wake (#1938); a new wake_at set during the run replaces it. A running wake
+   * with nothing deferred gets deferred_wake_at = `runAt`, so its completion re-arms it for one more
+   * run that reads the note (the running one may have started before it). A running wake that
+   * already holds a deferred time is left alone, since one row cannot hold both, and reported as
+   * 'busy' so the caller can try again once it completes. Updating in place keeps
+   * scheduled_jobs_one_active_wake_per_task_uq satisfied. Returns 'moved' when a wake changed,
+   * 'busy' for that running wake, and 'none' otherwise (a wake already due, or none at all).
+   */
+  async runTaskWakeEarly(taskId: string, runAt: Date): Promise<'moved' | 'busy' | 'none'> {
+    // A busy run can complete between the move and the busy check, leaving a pending wake neither
+    // saw: the second pass moves it.
+    for (let pass = 0; pass < 2; pass++) {
+      const outcome = await this.tryRunTaskWakeEarly(taskId, runAt);
+      if (outcome !== 'none') return outcome;
+    }
+    return 'none';
+  }
+
+  private async tryRunTaskWakeEarly(taskId: string, runAt: Date): Promise<'moved' | 'busy' | 'none'> {
+    const result = await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET deferred_wake_at = CASE WHEN status = 'pending' THEN COALESCE(deferred_wake_at, run_at) ELSE $2 END,
+              run_at = CASE WHEN status = 'pending' THEN $2 ELSE run_at END,
+              next_run_at = CASE WHEN status = 'pending' THEN $2 ELSE next_run_at END
+        WHERE task_id = $1
+          AND task_payload->>'type' = 'task-wake'
+          AND cron_expr IS NULL
+          AND ((status = 'pending' AND run_at > $2) OR (status = 'running' AND deferred_wake_at IS NULL))`,
+      [taskId, runAt],
+    );
+    if ((result.rowCount ?? 0) > 0) return 'moved';
+    const busy = await this.pool.query(
+      `SELECT 1 FROM scheduled_jobs
+        WHERE task_id = $1
+          AND task_payload->>'type' = 'task-wake'
+          AND status = 'running'
+          AND deferred_wake_at IS NOT NULL`,
+      [taskId],
+    );
+    return (busy.rowCount ?? 0) > 0 ? 'busy' : 'none';
+  }
+
   async enqueueTaskWake(params: {
     taskId: string;
     agentId: string;

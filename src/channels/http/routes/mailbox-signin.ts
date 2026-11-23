@@ -40,6 +40,8 @@ export interface MailboxSignInRouteOptions {
   makeClient?: (apiKey: string, apiUri: string) => Pick<NylasAppClient, 'buildAuthUrl'>;
   /** The real pino logger. Fastify is created with `logger: false`, so request.log is a no-op. */
   logger: Logger;
+  /** GET /api/health's started_at for this process: sent to the done page with a restart (#2697). */
+  processStartedAt?: string;
   /** The callback logic (handleMailboxSignInCallback with its deps bound). Absent: the callback
    *  redirects to `failed` without touching the token. */
   callback?: (query: MailboxSignInCallbackQuery) => Promise<MailboxSignInCallbackResult>;
@@ -50,11 +52,13 @@ function donePage(result: string): string {
   return `/mailbox-signin/done?result=${result}`;
 }
 
-/** The done page after a callback: outcome, target (when a link was claimed) and restart flag. */
-function callbackDonePage(r: Pick<MailboxSignInCallbackResult, 'outcome' | 'target' | 'restartScheduled'>): string {
+/** The done page after a callback: outcome, target (when a link was claimed) and restart flag,
+ *  plus, with a restart, this process's start (`since`), which the page waits to see change. */
+function callbackDonePage(r: Pick<MailboxSignInCallbackResult, 'outcome' | 'target' | 'restartScheduled'>, processStartedAt?: string): string {
   const params = new URLSearchParams({ result: r.outcome });
   if (r.target !== undefined) params.set('target', r.target);
   params.set('restart', r.restartScheduled ? '1' : '0');
+  if (r.restartScheduled && processStartedAt) params.set('since', processStartedAt);
   return `/mailbox-signin/done?${params.toString()}`;
 }
 
@@ -76,7 +80,7 @@ export async function mailboxSignInRoutes(
   app: FastifyInstance,
   options: MailboxSignInRouteOptions,
 ): Promise<void> {
-  const { signIn, readiness, readApiKey, appOrigin, logger, callback } = options;
+  const { signIn, readiness, readApiKey, appOrigin, logger, callback, processStartedAt } = options;
   const makeClient = options.makeClient
     ?? ((apiKey: string, apiUri: string) => new NylasAppClient({ apiKey, apiUri, logger }));
 
@@ -122,7 +126,7 @@ export async function mailboxSignInRoutes(
     }
     try {
       const result = await callback(callbackQuery(request.query));
-      return reply.redirect(callbackDonePage(result));
+      return reply.redirect(callbackDonePage(result, processStartedAt));
     } catch (err) {
       // Name only: never the query, which holds the state and the code.
       logger.error({ errName: err instanceof Error ? err.name : typeof err }, 'GET /api/mailbox-signin/callback failed');

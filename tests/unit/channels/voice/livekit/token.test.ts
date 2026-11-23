@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mintVoiceParticipantToken, deleteVoiceRoom, DEFAULT_VOICE_TOKEN_TTL } from '../../../../../src/channels/voice/livekit/token.js';
+import { mintVoiceParticipantToken, deleteVoiceRoom, toLiveKitHttpUrl, toLiveKitWsUrl, DEFAULT_VOICE_TOKEN_TTL } from '../../../../../src/channels/voice/livekit/token.js';
 
 const { deleteRoomMock, roomServiceCtor } = vi.hoisted(() => {
   const deleteRoomMock = vi.fn(async () => {});
@@ -98,5 +98,25 @@ describe('deleteVoiceRoom', () => {
       'devkey',
       'secret'.padEnd(32, 'x'),
     );
+  });
+});
+
+describe('toLiveKitWsUrl', () => {
+  it('maps http: to ws:', () => {
+    expect(toLiveKitWsUrl('http://livekit:7880')).toBe('ws://livekit:7880');
+  });
+
+  it('maps https: to wss:', () => {
+    expect(toLiveKitWsUrl('https://lk.example.com')).toBe('wss://lk.example.com');
+  });
+
+  it('leaves ws(s): URLs unchanged', () => {
+    expect(toLiveKitWsUrl('ws://x:1')).toBe('ws://x:1');
+    expect(toLiveKitWsUrl('wss://x.example.com')).toBe('wss://x.example.com');
+  });
+
+  it('round-trips with toLiveKitHttpUrl', () => {
+    expect(toLiveKitWsUrl(toLiveKitHttpUrl('ws://livekit:7880'))).toBe('ws://livekit:7880');
+    expect(toLiveKitHttpUrl(toLiveKitWsUrl('https://lk.example.com'))).toBe('https://lk.example.com');
   });
 });
