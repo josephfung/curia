@@ -193,6 +193,92 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
     expect(second.searchParams.get('received_after')).toBe('100');
   });
 
+  describe('listAllMessages paced listing (#2362)', () => {
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    // Page-delay sleeps are the 1000/2000 ms timers; a 429 retry backoff is ~375-625 ms.
+    function spyDelays(): number[] {
+      const delays: number[] = [];
+      const real = globalThis.setTimeout;
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (typeof ms === 'number') delays.push(ms);
+        return real(fn, ms, ...rest);
+      }) as typeof setTimeout);
+      return delays;
+    }
+
+    it('sleeps pageDelayMs between pages', async () => {
+      vi.useFakeTimers();
+      try {
+        const delays = spyDelays();
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+
+        const pending = client.listAllMessages({ pageDelayMs: 1000 });
+        await vi.runAllTimersAsync();
+        const { messages } = await pending;
+
+        expect(messages.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+        expect(delays.filter((d) => d >= 1000)).toEqual([1000, 1000]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('doubles the page delay after a 429 and reports it via onPage', async () => {
+      vi.useFakeTimers();
+      try {
+        const delays = spyDelays();
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(new Response('slow down', { status: 429 }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        const pages: Array<{ requests: number; rateLimited: boolean }> = [];
+
+        const pending = client.listAllMessages({ pageDelayMs: 1000, onPage: (p) => pages.push(p) });
+        await vi.runAllTimersAsync();
+        await pending;
+
+        expect(delays.filter((d) => d >= 1000)).toEqual([1000, 2000]);
+        expect(pages).toEqual([
+          { requests: 1, rateLimited: false },
+          { requests: 2, rateLimited: true },
+          { requests: 1, rateLimited: false },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('existing callers see no delay', async () => {
+      const delays = spyDelays();
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }] }));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      await client.listAllMessages({});
+
+      expect(delays).toEqual([]);
+    });
+
+    it('refuses a page delay that outlasts the call budget', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }] }));
+      const budget = { deadline: Date.now() + 500, signal: new AbortController().signal };
+      const client = new CeoNylasClient('key', 'grant', logger, budget);
+
+      await expect(client.listAllMessages({ pageDelayMs: 1000 })).rejects.toBeInstanceOf(NylasApiError);
+    });
+  });
+
   it('sends only page_token on a search_query_native follow-up page', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: [], next_cursor: 'CUR' }), {

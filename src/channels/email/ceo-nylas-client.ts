@@ -292,9 +292,16 @@ export class CeoNylasClient {
   // ceiling was hit with more pages still available — callers must NOT treat the
   // window as fully drained in that case.
   async listAllMessages(
-    options: ListMessagesOptions & { maxScan?: number } = {},
+    options: ListMessagesOptions & {
+      maxScan?: number;
+      /** Sleep between pages (default 0: none). Doubles, up to 30 s, after a page that saw a 429. */
+      pageDelayMs?: number;
+      /** Called once per page with the HTTP requests it took (retries included) and whether any was a 429. */
+      onPage?: (info: { requests: number; rateLimited: boolean }) => void;
+    } = {},
   ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean }> {
     const maxScan = options.maxScan ?? 500;
+    let pageDelayMs = options.pageDelayMs ?? 0;
     const pageSize = Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
 
     const messages: NylasMessageSummary[] = [];
@@ -308,11 +315,16 @@ export class CeoNylasClient {
       this.setMessageFilters(params, options, false);
       const url = `${this.#baseUrl}/messages?${params}`;
 
+      const stats: RequestStats = { requests: 0, rateLimited: false };
       const { data, nextCursor } = await this.#requestWithCursor<NylasApiMessage[]>(
         'GET',
         url,
         'listAllMessages',
+        undefined,
+        stats,
       );
+      options.onPage?.({ requests: stats.requests, rateLimited: stats.rateLimited });
+      if (stats.rateLimited) pageDelayMs = Math.min(pageDelayMs * 2, NYLAS_MAX_BACKOFF_MS);
       messages.push(...data.map(normalizeMessageSummary));
 
       // An empty page with a cursor would otherwise spin forever — bail out, but
@@ -328,6 +340,7 @@ export class CeoNylasClient {
       }
       if (!nextCursor) break;
       pageToken = nextCursor;
+      if (pageDelayMs > 0) await this.#pageDelay(pageDelayMs, 'listAllMessages');
     }
 
     // slice() defends against a final page overshooting maxScan when maxScan is not a
@@ -734,6 +747,7 @@ export class CeoNylasClient {
     url: string,
     operation: string,
     body?: unknown,
+    stats?: RequestStats,
   ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
@@ -754,6 +768,10 @@ export class CeoNylasClient {
         this.throwIfCancelled(operation);
         this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
         throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
+      }
+      if (stats) {
+        stats.requests++;
+        if (res.status === 429) stats.rateLimited = true;
       }
 
       // 429 is always retriable (rejected before processing). 5xx only on GET
@@ -852,6 +870,22 @@ export class CeoNylasClient {
     }
   }
 
+  // The pause between pages of a paced scan. Like a retry wait, it is refused when it
+  // would end after the call's deadline, so a paced scan cannot outlive its budget.
+  async #pageDelay(delayMs: number, operation: string): Promise<void> {
+    const leftMs = remainingMs(this.budget);
+    if (delayMs >= leftMs) {
+      this.log.warn({ operation, delayMs, leftMs }, `nylas: ${operation} page delay outlasts the call's budget, stopping`);
+      throw new NylasApiError(
+        0,
+        operation,
+        `Nylas ${operation}: the page delay (${delayMs}ms) is longer than the ${Math.max(0, leftMs)}ms this call has left`,
+      );
+    }
+    await this.sleep(delayMs);
+    this.throwIfCancelled(operation);
+  }
+
   // A backoff sleep that ends early when the tool call times out. The caller's
   // next throwIfCancelled() then stops the retry.
   private sleep(ms: number): Promise<void> {
@@ -867,6 +901,14 @@ export class CeoNylasClient {
       signal?.addEventListener('abort', done, { once: true });
     });
   }
+}
+
+// Filled in by #requestWithCursor so a caller can see what one logical request cost.
+interface RequestStats {
+  /** HTTP requests sent, retries included. */
+  requests: number;
+  /** True once any response was a 429, even if a retry then succeeded. */
+  rateLimited: boolean;
 }
 
 // ── Nylas API raw shapes (internal) ─────────────────────────────────────────
