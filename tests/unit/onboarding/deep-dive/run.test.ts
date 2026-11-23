@@ -33,7 +33,7 @@ const emptyScan = (): ScanResult => ({
   messages: [],
   sentBodies: [],
   events: [],
-  principalAddresses: ['ceo@acme.com'],
+  principalAddresses: ['ceo@acme.example.com'],
   coverage: { messagesRead: 3, eventsRead: 0, requests: 7, rateLimited: 1, truncated: false },
 });
 

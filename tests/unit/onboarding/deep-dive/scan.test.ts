@@ -42,7 +42,7 @@ function fakeMail(opts: {
       const maxScan = o.maxScan ?? 500;
       for (let i = 0; ; i++) {
         const page = src === 'endless'
-          ? Array.from({ length: opts.pageSize ?? 20 }, (_, k) => message(`${o.folder}-${i}-${k}`, o.folder ?? '', 'ceo@acme.com', `p${i}-${k}@ext.com`))
+          ? Array.from({ length: opts.pageSize ?? 20 }, (_, k) => message(`${o.folder}-${i}-${k}`, o.folder ?? '', 'ceo@acme.example.com', `p${i}-${k}@ext.example.com`))
           : src[i] ?? (i === 0 ? [] : undefined); // an empty folder is one empty page
         if (!page) return { messages: out, truncated: false };
         out.push(...page);
@@ -54,7 +54,7 @@ function fakeMail(opts: {
     getMessage: vi.fn(async (id: string): Promise<NylasMessageFull> => {
       getCalls.push(id);
       if (opts.getError !== undefined) throw opts.getError;
-      return { ...message(id, 'SENT', 'ceo@acme.com', 'a@b.com'), bcc: [], body: '<p>hello</p>', labels: [] };
+      return { ...message(id, 'SENT', 'ceo@acme.example.com', 'a@b.example.com'), bcc: [], body: '<p>hello</p>', labels: [] };
     }),
   };
   return { client: client as unknown as CeoNylasClient, listCalls, getCalls };
@@ -116,7 +116,7 @@ describe('scanHistory', () => {
     // Partial pages (5 messages) so the request cap, not the message cap, is what ends the scan.
     const mail = fakeMail({ pages: () => 'endless', pageSize: 5 });
     const cal = fakeCalendar();
-    const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
     const result = await scanHistory(d, ['mb-1']);
 
@@ -136,7 +136,7 @@ describe('scanHistory', () => {
       participants: [], conferencing: null, status: 'confirmed', calendarId: 'primary-cal', busy: true, metadata: null,
     };
     const cal = fakeCalendar([event]);
-    const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
     const result = await scanHistory(d, ['mb-1']);
 
@@ -155,10 +155,10 @@ describe('scanHistory', () => {
   it('reads only the given mailbox ids', async () => {
     const one = fakeMail({ pages: () => [] });
     const two = fakeMail({
-      pages: (folder) => (folder === 'SENT' ? [[message('s1', 'SENT', 'alias@two.com', 'pat@ext.com')]] : []),
+      pages: (folder) => (folder === 'SENT' ? [[message('s1', 'SENT', 'alias@two.example.com', 'pat@ext.example.com')]] : []),
     });
     const d = deps(
-      [view('mb-1', 'one@acme.com'), view('mb-2', 'Two@Acme.com'), view('mb-3', 'three@acme.com')],
+      [view('mb-1', 'one@acme.example.com'), view('mb-2', 'Two@Acme.example.com'), view('mb-3', 'three@acme.example.com')],
       { 'mb-1': one.client, 'mb-2': two.client, 'mb-3': one.client },
       { 'mb-1': fakeCalendar().client, 'mb-2': fakeCalendar().client, 'mb-3': fakeCalendar().client },
     );
@@ -168,12 +168,12 @@ describe('scanHistory', () => {
     expect(d.ceoClient.mock.calls.map((c) => c[0])).toEqual(['mb-2']);
     expect(d.calendarClient.mock.calls.map((c) => c[0])).toEqual(['mb-2']);
     expect(one.listCalls).toEqual([]);
-    expect(result.principalAddresses).toEqual(['alias@two.com', 'two@acme.com']);
+    expect(result.principalAddresses).toEqual(['alias@two.example.com', 'two@acme.example.com']);
   });
 
   it('ends the scan as truncated, not failed, when a listing exhausts its 429 retries', async () => {
     const mail = fakeMail({ pages: () => [], listError: new NylasApiError(429, 'listAllMessages', 'rate limited') });
-    const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
 
     const result = await scanHistory(d, ['mb-1']);
 
@@ -184,7 +184,7 @@ describe('scanHistory', () => {
 
   it('propagates an auth failure', async () => {
     const mail = fakeMail({ pages: () => [], listError: new NylasApiError(401, 'listAllMessages', 'unauthorized') });
-    const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
 
     await expect(scanHistory(d, ['mb-1'])).rejects.toMatchObject({ status: 401 });
   });
@@ -194,10 +194,10 @@ describe('scanHistory', () => {
       id, title: 'x', description: '', location: '', startTime: 1, endTime: 2, startDate: null, endDate: null,
       participants: [], conferencing: null, status: 'confirmed', calendarId: 'primary-cal', busy: true, metadata: null,
     });
-    const sentPage = [[message('s1', 'SENT', 'ceo@acme.com', 'pat@ext.com'), message('s2', 'SENT', 'ceo@acme.com', 'sam@ext.com')]];
+    const sentPage = [[message('s1', 'SENT', 'ceo@acme.example.com', 'pat@ext.example.com'), message('s2', 'SENT', 'ceo@acme.example.com', 'sam@ext.example.com')]];
 
     it('a calendar 429 storm ends the calendar step only: Sent and Inbox are still read', async () => {
-      const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.com', 'ceo@acme.com')]]) });
+      const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.example.com', 'ceo@acme.example.com')]]) });
       // Window 1 succeeds; window 2 is rate-limited on the call and on its one retry.
       const cal = fakeCalendar([], {
         listEvents: async (n) => {
@@ -205,7 +205,7 @@ describe('scanHistory', () => {
           throw sdkError(429);
         },
       });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -228,7 +228,7 @@ describe('scanHistory', () => {
           return [];
         },
       });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -239,7 +239,7 @@ describe('scanHistory', () => {
     it('propagates a calendar auth failure', async () => {
       const mail = fakeMail({ pages: () => [] });
       const cal = fakeCalendar([], { listEvents: async () => { throw sdkError(401); } });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       await expect(scanHistory(d, ['mb-1'])).rejects.toMatchObject({ statusCode: 401 });
       expect(mail.listCalls).toEqual([]);
@@ -248,7 +248,7 @@ describe('scanHistory', () => {
     it('skips a mailbox with no primary calendar and still reads its mail', async () => {
       const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : []) });
       const cal = fakeCalendar([], { noPrimary: true });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -266,7 +266,7 @@ describe('scanHistory', () => {
           return [];
         },
       });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -278,7 +278,7 @@ describe('scanHistory', () => {
       const mail = fakeMail({ pages: () => [] });
       const full = Array.from({ length: 1000 }, (_, i) => event(`full-${i}`));
       const cal = fakeCalendar([], { listEvents: async (n) => (n === 1 ? full : []) });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -290,10 +290,10 @@ describe('scanHistory', () => {
 
     it('a voice-body 429 ends the voice step only: the inbox is still read', async () => {
       const mail = fakeMail({
-        pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.com', 'ceo@acme.com')]]),
+        pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.example.com', 'ceo@acme.example.com')]]),
         getError: new NylasApiError(429, 'getMessage', 'rate limited'),
       });
-      const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
 
       const result = await scanHistory(d, ['mb-1']);
 
@@ -306,9 +306,9 @@ describe('scanHistory', () => {
   });
 
   it('counts a message in both Inbox and Sent once', async () => {
-    const self = message('self-1', 'SENT', 'ceo@acme.com', 'ceo@acme.com');
+    const self = message('self-1', 'SENT', 'ceo@acme.example.com', 'ceo@acme.example.com');
     const mail = fakeMail({ pages: () => [[self]] });
-    const d = deps([view('mb-1', 'ceo@acme.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
 
     const result = await scanHistory(d, ['mb-1']);
 

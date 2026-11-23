@@ -10,12 +10,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -39,12 +39,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -68,12 +68,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -97,12 +97,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -126,12 +126,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -155,12 +155,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -184,12 +184,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -213,12 +213,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -242,12 +242,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -271,12 +271,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -300,12 +300,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -329,12 +329,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "alice.smith@partner.com",
+        "email": "alice.smith@partner.example.com",
         "name": "Alice Smith",
         "status": "yes"
       }
@@ -358,12 +358,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "carol.white@partner.com",
+        "email": "carol.white@partner.example.com",
         "name": "Carol White",
         "status": "yes"
       }
@@ -385,12 +385,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "yes"
       },
       {
-        "email": "bob.jones@vendor.io",
+        "email": "bob.jones@vendor.example.net",
         "name": "Bob Jones",
         "status": "yes"
       }
@@ -412,12 +412,12 @@
     "endDate": null,
     "participants": [
       {
-        "email": "ceo@acme.com",
-        "name": "Joe CEO",
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
         "status": "no"
       },
       {
-        "email": "frank.moss@client.org",
+        "email": "frank.moss@client.example.org",
         "name": "Frank Moss",
         "status": "yes"
       }

@@ -22,7 +22,7 @@ function input(overrides: Partial<SummariseInput> = {}): SummariseInput {
     messages: mail,
     sentBodies,
     events: calendar,
-    principalAddresses: ['CEO@acme.com'],
+    principalAddresses: ['CEO@acme.example.com'],
     window: { from: FROM, to: TO },
     coverage: COVERAGE,
     timezone: 'America/Toronto',
@@ -35,50 +35,50 @@ const byEmail = (s: HistorySummary, email: string) => s.correspondents.find((c) 
 describe('summarise', () => {
   it('counts two-way correspondents and reply latency', () => {
     const s = summarise(input());
-    expect(byEmail(s, 'alice.smith@partner.com')).toMatchObject({
-      name: 'Alice Smith', domain: 'partner.com', kind: 'person',
+    expect(byEmail(s, 'alice.smith@partner.example.com')).toMatchObject({
+      name: 'Alice Smith', domain: 'partner.example.com', kind: 'person',
       received: 2, sent: 2, twoWay: true, medianReplyMinutes: 60,
     });
     // Sorted by volume, ties by address.
     expect(s.correspondents.map((c) => c.email)).toEqual([
-      'alice.smith@partner.com',
-      'bob.jones@vendor.io',
-      'frank.moss@client.org',
-      'noreply@saas.com',
-      'carol.white@partner.com',
-      'dave.lee@lawfirm.com',
-      'erin.park@client.org',
-      'info@vendor.io',
+      'alice.smith@partner.example.com',
+      'bob.jones@vendor.example.net',
+      'frank.moss@client.example.org',
+      'noreply@saas.example.net',
+      'carol.white@partner.example.com',
+      'dave.lee@lawfirm.example.org',
+      'erin.park@client.example.org',
+      'info@vendor.example.net',
     ]);
   });
 
   it('marks one-way and automated senders', () => {
     const s = summarise(input());
-    expect(byEmail(s, 'bob.jones@vendor.io')).toMatchObject({ received: 2, sent: 0, twoWay: false, medianReplyMinutes: null });
+    expect(byEmail(s, 'bob.jones@vendor.example.net')).toMatchObject({ received: 2, sent: 0, twoWay: false, medianReplyMinutes: null });
     // One message each way is below TWO_WAY_MIN_MESSAGES (3): still one-way, latency still measured.
-    expect(byEmail(s, 'frank.moss@client.org')).toMatchObject({ received: 1, sent: 1, twoWay: false, medianReplyMinutes: 120 });
-    expect(byEmail(s, 'carol.white@partner.com')).toMatchObject({ received: 0, sent: 1, twoWay: false });
-    expect(byEmail(s, 'noreply@saas.com')).toMatchObject({ kind: 'automated', twoWay: false });
-    expect(byEmail(s, 'info@vendor.io')).toMatchObject({ kind: 'organization', name: null });
+    expect(byEmail(s, 'frank.moss@client.example.org')).toMatchObject({ received: 1, sent: 1, twoWay: false, medianReplyMinutes: 120 });
+    expect(byEmail(s, 'carol.white@partner.example.com')).toMatchObject({ received: 0, sent: 1, twoWay: false });
+    expect(byEmail(s, 'noreply@saas.example.net')).toMatchObject({ kind: 'automated', twoWay: false });
+    expect(byEmail(s, 'info@vendor.example.net')).toMatchObject({ kind: 'organization', name: null });
     expect(s.unopened).toEqual([
-      { fromDomain: 'saas.com', count: 2, evidence: { messageIds: ['m07', 'm06'] } },
+      { fromDomain: 'saas.example.net', count: 2, evidence: { messageIds: ['m07', 'm06'] } },
       // m16 is unread but only 3 days old: not unopened yet.
-      { fromDomain: 'vendor.io', count: 1, evidence: { messageIds: ['m05'] } },
+      { fromDomain: 'vendor.example.net', count: 1, evidence: { messageIds: ['m05'] } },
     ]);
-    expect(s.handedOff).toEqual([{ threadId: 't-contract', to: 'dave.lee@lawfirm.com', evidence: { messageIds: ['m09'] } }]);
+    expect(s.handedOff).toEqual([{ threadId: 't-contract', to: 'dave.lee@lawfirm.example.org', evidence: { messageIds: ['m09'] } }]);
   });
 
   it("excludes the principal's own addresses", () => {
     const s = summarise(input());
     const emails = s.correspondents.map((c) => c.email);
     // Self-sent (m10), CC to self (m04, m12) and the alias seen as a Sent-folder sender (m11, m12).
-    expect(emails).not.toContain('ceo@acme.com');
-    expect(emails).not.toContain('joe@joefung.dev');
-    expect(s.principalAddresses).toEqual(['ceo@acme.com', 'joe@joefung.dev']);
+    expect(emails).not.toContain('ceo@acme.example.com');
+    expect(emails).not.toContain('principal@example.com');
+    expect(s.principalAddresses).toEqual(['ceo@acme.example.com', 'principal@example.com']);
     // The alias's sent mail still counts as the principal's.
-    expect(byEmail(s, 'erin.park@client.org')).toMatchObject({ sent: 1, received: 0 });
-    expect(s.recurringMeetings[0]!.attendees).toEqual(['alice.smith@partner.com']);
-    expect(s.timeSpent.map((t) => t.key)).not.toContain('ceo@acme.com');
+    expect(byEmail(s, 'erin.park@client.example.org')).toMatchObject({ sent: 1, received: 0 });
+    expect(s.recurringMeetings[0]!.attendees).toEqual(['alice.smith@partner.example.com']);
+    expect(s.timeSpent.map((t) => t.key)).not.toContain('ceo@acme.example.com');
   });
 
   it('finds a weekly recurring meeting with 12 occurrences', () => {
@@ -104,7 +104,7 @@ describe('summarise', () => {
       events.push({
         id: `busy-${day}`, title: 'Busy', description: '', location: '',
         startTime: d.set({ hour: 8 }).toSeconds(), endTime: end.toSeconds(), startDate: null, endDate: null,
-        participants: [{ email: 'ceo@acme.com', name: 'Joe', status: 'yes' }], conferencing: null,
+        participants: [{ email: 'ceo@acme.example.com', name: 'Avery', status: 'yes' }], conferencing: null,
         status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
       });
     }
@@ -119,14 +119,14 @@ describe('summarise', () => {
   it('groups time spent by organisation', () => {
     const s = summarise(input());
     const org = (key: string) => s.timeSpent.find((t) => t.by === 'organization' && t.key === key);
-    expect(org('partner.com')).toEqual({ by: 'organization', key: 'partner.com', calendarHours: 13, messages: 5 });
-    expect(org('vendor.io')).toEqual({ by: 'organization', key: 'vendor.io', calendarHours: 2, messages: 3 });
+    expect(org('partner.example.com')).toEqual({ by: 'organization', key: 'partner.example.com', calendarHours: 13, messages: 5 });
+    expect(org('vendor.example.net')).toEqual({ by: 'organization', key: 'vendor.example.net', calendarHours: 2, messages: 3 });
     // Declined events are not time spent.
-    expect(org('client.org')).toEqual({ by: 'organization', key: 'client.org', calendarHours: 0, messages: 3 });
+    expect(org('client.example.org')).toEqual({ by: 'organization', key: 'client.example.org', calendarHours: 0, messages: 3 });
     expect(s.timeSpent.find((t) => t.by === 'series')).toEqual({ by: 'series', key: 'ser-1', calendarHours: 12, messages: 0 });
-    expect(s.timeSpent.find((t) => t.by === 'person' && t.key === 'alice.smith@partner.com'))
-      .toEqual({ by: 'person', key: 'alice.smith@partner.com', calendarHours: 12, messages: 4 });
-    expect(s.timeSpent.some((t) => t.key === 'saas.com' || t.key === 'noreply@saas.com')).toBe(false);
+    expect(s.timeSpent.find((t) => t.by === 'person' && t.key === 'alice.smith@partner.example.com'))
+      .toEqual({ by: 'person', key: 'alice.smith@partner.example.com', calendarHours: 12, messages: 4 });
+    expect(s.timeSpent.some((t) => t.key === 'saas.example.net' || t.key === 'noreply@saas.example.net')).toBe(false);
   });
 
   it('every item carries evidence ids', () => {
@@ -150,7 +150,7 @@ describe('summarise', () => {
     const s = summarise(input());
     expect(s.voiceSample.map((v) => v.messageId)).toEqual(['m14', 'm12', 'm08', 'm04', 'm02']);
     const m02 = s.voiceSample.find((v) => v.messageId === 'm02')!;
-    expect(m02).toMatchObject({ to: 'alice.smith@partner.com', subject: 'Re: t-alice' });
+    expect(m02).toMatchObject({ to: 'alice.smith@partner.example.com', subject: 'Re: t-alice' });
     expect(m02.body).toBe('Works for me, Alice.\nThursday it is.');
     expect(s.voiceSample.find((v) => v.messageId === 'm12')!.body).toBe('Thanks Erin, looping in my work address.');
   });
@@ -166,8 +166,8 @@ describe('summarise', () => {
     expect(s.handedOff).toEqual([]);
     expect(s.recurringMeetings).toEqual([]);
     expect(s.timeSpent).toEqual([
-      { by: 'person', key: 'bob.jones@vendor.io', calendarHours: 0, messages: 1 },
-      { by: 'organization', key: 'vendor.io', calendarHours: 0, messages: 1 },
+      { by: 'person', key: 'bob.jones@vendor.example.net', calendarHours: 0, messages: 1 },
+      { by: 'organization', key: 'vendor.example.net', calendarHours: 0, messages: 1 },
     ]);
     expect(s.voiceSample).toEqual([]);
     expect(s.meetingShape).toEqual({ medianMinutes: 0, bufferMinutesMedian: 0, keptClearBlocks: [], declinedOrMoved: 0, evidence: {} });
