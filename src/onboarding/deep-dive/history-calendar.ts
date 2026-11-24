@@ -130,7 +130,7 @@ function recurring(events: readonly Timed[], attended: ReadonlySet<string>, prin
         evidence: eventEvidence(list.map(dated)),
       },
       // Attended time in the window: what "biggest series" means for ordering.
-      weight: list.filter((e) => attended.has(e.id)).length * minutes,
+      weight: list.filter((e) => attended.has(e.id)).reduce((sum, e) => sum + minutesOf(e), 0),
     });
   }
   out.sort((a, b) => b.weight - a.weight || compareStrings(a.meeting.seriesId, b.meeting.seriesId));

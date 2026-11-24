@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DateTime } from 'luxon';
 import { describe, expect, it } from 'vitest';
 import { summarise, type HistorySummary, type SummariseInput } from '../../../../src/onboarding/deep-dive/history-summary.js';
+import { voiceBody } from '../../../../src/onboarding/deep-dive/voice-sample.js';
 import type { NylasMessageFull, NylasMessageSummary } from '../../../../src/channels/email/ceo-nylas-client.js';
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 
@@ -189,6 +190,37 @@ describe('summarise', () => {
     expect(s.unopened).toEqual([]);
   });
 
+  it('links nothing through a missing threadId: no reply time, one hand-off per forward', () => {
+    const t = Math.floor(TO.getTime() / 1000) - 5 * 86_400;
+    const msg = (id: string, from: string, to: string, date: number, subject = 'hi'): NylasMessageSummary => ({
+      id, threadId: '', subject, from: [{ email: from }], to: [{ email: to }], cc: [],
+      snippet: '', date, unread: false, folders: ['INBOX'], attachments: [],
+    });
+    const messages = [
+      msg('x1', 'pat@ext.example.com', 'ceo@acme.example.com', t),
+      msg('x2', 'ceo@acme.example.com', 'sam@ext.example.com', t + 600),
+      msg('f1', 'ceo@acme.example.com', 'dana@ext.example.com', t + 700, 'Fwd: one'),
+      msg('f2', 'ceo@acme.example.com', 'dana@ext.example.com', t + 800, 'Fwd: two'),
+    ];
+    const s = summarise(input({ messages, sentBodies: [], events: [] }));
+    expect(byEmail(s, 'pat@ext.example.com')).toMatchObject({ received: 1, medianReplyMinutes: null });
+    expect(s.handedOff.map((h) => h.evidence.messageIds)).toEqual([['f2'], ['f1']]);
+  });
+
+  it('orders recurring meetings by total attended minutes', () => {
+    const base = Math.floor(FROM.getTime() / 1000) + 86_400;
+    const occ = (series: string, n: number, minutes: number): NylasCalendarEvent => ({
+      id: `${series}-${n}`, title: series, description: '', location: '',
+      startTime: base + n * 7 * 86_400, endTime: base + n * 7 * 86_400 + minutes * 60, startDate: null, endDate: null,
+      participants: [], conferencing: null, status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
+      masterEventId: series,
+    });
+    // Short median, long total (15 + 15 + 180 = 210) beats three 45-minute meetings (135).
+    const events = [occ('a-even', 0, 45), occ('a-even', 1, 45), occ('a-even', 2, 45), occ('b-spiky', 3, 15), occ('b-spiky', 4, 15), occ('b-spiky', 5, 180)];
+    const s = summarise(input({ messages: [], sentBodies: [], events }));
+    expect(s.recurringMeetings.map((r) => [r.seriesId, r.minutesPerOccurrence])).toEqual([['b-spiky', 15], ['a-even', 45]]);
+  });
+
   it('refuses an unusable timezone rather than silently finding no kept-clear blocks', () => {
     expect(() => summarise(input({ timezone: 'Eastern Time - Toronto' }))).toThrow(/timezone/);
   });
@@ -202,5 +234,12 @@ describe('summarise', () => {
     expect(b).toEqual(a);
     expect(reversed).toEqual(a);
     expect(a.generatedAt).toBe(TO.toISOString());
+  });
+});
+
+describe('voiceBody', () => {
+  it('drops a quoted <blockquote> that has no reply header, nested or not', () => {
+    expect(voiceBody('<div>Yes, thanks.</div><blockquote>Earlier sender text</blockquote>')).toBe('Yes, thanks.');
+    expect(voiceBody('<p>Sounds good.</p><BLOCKQUOTE class="q">a<blockquote>b</blockquote>c</BLOCKQUOTE>')).toBe('Sounds good.');
   });
 });

@@ -131,10 +131,10 @@ function correspondentsOf(messages: readonly NylasMessageSummary[], principal: R
     return a;
   };
 
-  // Principal-sent times per thread, ascending, for reply latency.
+  // Principal-sent times per thread, ascending, for reply latency. No threadId ('') links nothing.
   const sentByThread = new Map<string, number[]>();
   for (const m of messages) {
-    if (!principal.has(senderOf(m))) continue;
+    if (m.threadId === '' || !principal.has(senderOf(m))) continue;
     const list = sentByThread.get(m.threadId) ?? [];
     list.push(m.date);
     sentByThread.set(m.threadId, list);
@@ -158,7 +158,7 @@ function correspondentsOf(messages: readonly NylasMessageSummary[], principal: R
     const a = acc(from, m.from[0]?.name);
     a.received++;
     a.evidence.push({ id: m.id, at: m.date });
-    const reply = (sentByThread.get(m.threadId) ?? []).find((t) => t > m.date);
+    const reply = m.threadId === '' ? undefined : (sentByThread.get(m.threadId) ?? []).find((t) => t > m.date);
     if (reply !== undefined) a.latencies.push((reply - m.date) / 60);
   }
   return accs;
@@ -201,7 +201,8 @@ function handedOffOf(messages: readonly NylasMessageSummary[], principal: Readon
     if (!principal.has(senderOf(m)) || !isForward(m.subject)) continue;
     const to = firstOutsideRecipient(m, principal);
     if (to === '') continue; // forwarded to themself: not a hand-off
-    const key = `${m.threadId}\u0000${to}`;
+    // No threadId: the forward is its own hand-off, not merged with others to the same person.
+    const key = m.threadId === '' ? `\u0001${m.id}` : `${m.threadId}\u0000${to}`;
     const g = groups.get(key) ?? { threadId: m.threadId, to, items: [] };
     g.items.push({ id: m.id, at: m.date });
     groups.set(key, g);

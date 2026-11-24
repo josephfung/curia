@@ -78,7 +78,11 @@ export function stripQuotedText(text: string): string {
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** HTML stripped (the repo's `htmlToPlainText`), quoted text removed, capped at VOICE_BODY_MAX_CHARS. */
+/**
+ * Cut at the first `<blockquote>` (quoted history, which flattening would keep with no marker),
+ * HTML stripped (the repo's `htmlToPlainText`), quoted text removed, capped at VOICE_BODY_MAX_CHARS.
+ */
 export function voiceBody(html: string): string {
-  return stripQuotedText(htmlToPlainText(html)).slice(0, VOICE_BODY_MAX_CHARS);
+  const quote = html.search(/<blockquote\b/i);
+  return stripQuotedText(htmlToPlainText(quote === -1 ? html : html.slice(0, quote))).slice(0, VOICE_BODY_MAX_CHARS);
 }
