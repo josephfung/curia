@@ -25,7 +25,6 @@ import {
 } from '../../channels/email/ceo-nylas-client.js';
 import {
   LIST_EVENTS_MAX_TOTAL,
-  NYLAS_MAX_PAGE_SIZE,
   type NylasCalendarEvent,
 } from '../../channels/calendar/nylas-calendar-client.js';
 import { NylasSdkTimeoutError } from 'nylas';
@@ -159,7 +158,8 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
   };
 
   // The calendar client (Nylas SDK) does not retry a 429, so give each calendar call one retry
-  // after a pause that doubles with every 429 this scan has seen on the calendar side.
+  // after a pause that doubles with every 429 this scan has seen on the calendar side. `run`
+  // counts its own requests (a retried listing starts again from its first page).
   let calendarDelayMs = PAGE_DELAY_MS;
   async function calendarCall<T>(run: () => Promise<T>): Promise<T> {
     try {
@@ -169,7 +169,6 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
       coverage.rateLimited++;
       calendarDelayMs = Math.min(calendarDelayMs * 2, MAX_CALENDAR_DELAY_MS);
       await sleep(calendarDelayMs);
-      coverage.requests++;
       return run();
     }
   }
@@ -178,8 +177,10 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
     if (!haveBudget(MAX_REQUESTS, 'listCalendars')) return;
     const client = await deps.mailboxes.calendarClient(id);
     await pace();
-    coverage.requests++;
-    const primary = (await calendarCall(() => client.listCalendars())).find((c) => c.isPrimary);
+    const primary = (await calendarCall(() => {
+      coverage.requests++;
+      return client.listCalendars();
+    })).find((c) => c.isPrimary);
     if (!primary) {
       // Nothing read from this calendar: the coverage must not read as complete.
       logger.warn({ mailboxId: id }, 'deep-dive scan: no primary calendar; skipping this calendar');
@@ -198,10 +199,13 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
           onIncomplete: () => {
             incomplete = true;
           },
+          // Count every page request as it goes out; pace the pages after the first.
+          beforePage: async (page) => {
+            if (page > 0) await sleep(PAGE_DELAY_MS);
+            coverage.requests++;
+          },
         }),
       );
-      // listEvents pages internally at 200 events; count each page it must have taken.
-      coverage.requests += Math.max(1, Math.ceil(batch.length / NYLAS_MAX_PAGE_SIZE));
       for (const e of batch) if (!events.has(e.id)) events.set(e.id, e);
       if (incomplete || batch.length >= LIST_EVENTS_MAX_TOTAL) {
         capped('calendar window listing incomplete', { mailboxId: id, windowStart: new Date(start).toISOString() });

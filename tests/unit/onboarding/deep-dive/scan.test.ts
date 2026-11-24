@@ -72,7 +72,7 @@ function sdkError(statusCode: number): Error {
   return Object.assign(new Error(`nylas ${statusCode}`), { statusCode });
 }
 
-type ListEventsOpts = { expandRecurring?: boolean; onIncomplete?: () => void };
+type ListEventsOpts = { expandRecurring?: boolean; onIncomplete?: () => void; beforePage?: (page: number) => void | Promise<void> };
 
 function fakeCalendar(
   events: NylasCalendarEvent[] = [],
@@ -90,8 +90,11 @@ function fakeCalendar(
     ]),
     listEvents: vi.fn(async (calendarId: string, timeMin: string, timeMax: string, o?: ListEventsOpts) => {
       calls.push({ calendarId, timeMin, timeMax, opts: o });
-      if (opts.listEvents) return opts.listEvents(calls.length, o ?? {});
-      return calls.length === 1 ? events : [];
+      // Like the real client: one beforePage per 200-event page, the first before anything is read.
+      await o?.beforePage?.(0);
+      const out = opts.listEvents ? await opts.listEvents(calls.length, o ?? {}) : calls.length === 1 ? events : [];
+      for (let p = 1; p < Math.ceil(out.length / 200); p++) await o?.beforePage?.(p);
+      return out;
     }),
   };
   return { client: client as unknown as NylasCalendarClient, calls };
@@ -382,6 +385,26 @@ describe('scanHistory', () => {
       expect(result.messages).toHaveLength(2);
       // An unread calendar is not complete coverage.
       expect(result.coverage.truncated).toBe(true);
+    });
+
+    it('counts and paces every page a calendar window takes, not one per window', async () => {
+      const mail = fakeMail({ pages: () => [] });
+      // Window 1 pages through 25 empty pages (the client's page cap) and returns nothing.
+      const cal = fakeCalendar([], {
+        listEvents: async (n, o) => {
+          if (n === 1) for (let p = 1; p < 25; p++) await o.beforePage?.(p);
+          return [];
+        },
+      });
+      const sleeps: number[] = [];
+      const d = { ...deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client }), sleep: async (ms: number) => { sleeps.push(ms); } };
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      // listCalendars + 25 pages + 12 one-page windows + 2 mail folders.
+      expect(result.coverage.requests).toBe(1 + 25 + 12 + 2);
+      // 15 calls paced by the scan, plus the window's 24 later pages.
+      expect(sleeps.filter((ms) => ms === 1000)).toHaveLength(15 + 24);
     });
 
     it('marks truncated when a calendar window reports an incomplete listing', async () => {

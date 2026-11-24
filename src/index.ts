@@ -3952,7 +3952,6 @@ async function main(): Promise<void> {
       isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
     deepDive,
   });
-  onboardingWatcher.start();
 
   // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
   // General meetings infrastructure; runs only when a calendar can be read.
@@ -4753,8 +4752,10 @@ async function main(): Promise<void> {
     await shutdown(1);
   }
 
+  // The onboarding watcher and the deep dive's boot resume start after the email adapters, so a
+  // run they resume that fails at once can still email its failure notice.
+  onboardingWatcher.start();
   // A scanning/drafting run at boot was orphaned by the restart (Start may schedule one): resume it.
-  // After the email adapters start, so a run that fails at once can still email its failure notice.
   void deepDive.resumeAtBoot().catch((err: unknown) => {
     logger.error({ err }, 'deep-dive: boot resume failed; the watcher retries once the run looks stalled');
   });

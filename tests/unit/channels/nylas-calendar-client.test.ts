@@ -402,6 +402,20 @@ describe('NylasCalendarClient', () => {
         expect(calls[1]![0].queryParams).toMatchObject({ pageToken: 'cursor-2' });
       });
 
+      it('awaits beforePage before each page request', async () => {
+        const order: string[] = [];
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockImplementationOnce(async () => { order.push('req-0'); return { ...page(0, 200), nextCursor: 'cursor-2' }; })
+          .mockImplementationOnce(async () => { order.push('req-1'); return { ...page(200, 50) }; });
+
+        await client.listEvents('cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', {
+          limit: 250,
+          beforePage: async (p) => { order.push(`before-${p}`); },
+        });
+
+        expect(order).toEqual(['before-0', 'req-0', 'before-1', 'req-1']);
+      });
+
       it('stops early when Nylas runs out of events before maxResults', async () => {
         (sdk.events.list as ReturnType<typeof vi.fn>)
           .mockResolvedValueOnce({ ...page(0, 200) }); // no nextCursor — last page

@@ -25,8 +25,9 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
 - **Order** (the request and message budgets are shared across the whole run):
   1. Each mailbox's calendar: `listCalendars()` (1 request), then the primary calendar
      (`isPrimary`) listed in `CALENDAR_WINDOW_DAYS` (7-day) windows, `expandRecurring: true`,
-     `limit` 1,000 per window. 90 days is 13 windows. A window
-     is counted as `ceil(events / 200)` requests (at least 1), Nylas's page size. No primary
+     `limit` 1,000 per window. 90 days is 13 windows. Each of a
+     window's page requests (up to 25) is counted as it goes out, through `listEvents`'
+     `beforePage`, and pages after the first wait `PAGE_DELAY_MS`. No primary
      calendar: warn, skip that calendar and mark the scan truncated. A window that hit 1,000
      events or reported `onIncomplete` marks the scan truncated.
   2. Each mailbox's `SENT` folder via `listAllMessages`, with `VOICE_SAMPLE_SIZE` requests held
@@ -49,7 +50,7 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
   does not retry, so each calendar call gets one retry after a pause that starts at
   2 × `PAGE_DELAY_MS` and doubles, up to 30 s, with every calendar 429 or status-0 error in the
   scan (the SDK's `NylasSdkTimeoutError` counts as status 0; each
-  counted in `rateLimited` and as a request). A transient error that outlasts the retries — 429,
+  counted in `rateLimited`; a retried listing's pages are counted again). A transient error that outlasts the retries — 429,
   5xx, or status 0 (the fetch itself failed: DNS, a reset, a timeout) — ends only the step it
   happened in: the scan is marked truncated with a warning and the next step runs. A listing
   keeps the pages it read before the failing one (`listAllMessages` returns them with `endedOn`
