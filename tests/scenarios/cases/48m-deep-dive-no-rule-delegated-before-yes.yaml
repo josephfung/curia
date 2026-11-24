@@ -1,0 +1,159 @@
+# Case 48m (#2362): the deep-dive review, one turn. The code half of 48j's "nothing before the yes":
+# the principal confirms the documents and says "bring them in", which is not the explicit yes to the
+# rule read-back (skills/onboarding/SKILL.md, "Deep-dive review"). With no later turn, Curia may read
+# the drafts and read back the rules, but it must delegate no rule to ceo-inbox or calendar.
+# Priorities and voice are left unasserted: the skill's yes gate is about the rules.
+name: deep dive no rule delegated before the yes
+description: >
+  The deep-dive drafts are ready and the Review session is open. The principal says they have been
+  through all three documents, the rules are right except that Friday afternoon should start at
+  1pm, and asks Curia to bring them in. Curia reads back the rules it would add and asks for a
+  yes. It delegates no rule to ceo-inbox or calendar in this turn.
+tags: [onboarding, deep-dive]
+# New in #2362: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2362-4c00-8a00-00000000048d
+    topics:
+      - { id: review-rules, title: Working rules, session: review }
+      - { id: review-priorities, title: Time and priorities, session: review }
+      - { id: review-voice, title: Writing voice, session: review }
+inbound:
+  from: principal
+  channel: web
+  content: >
+    I've been through all three documents you sent. The rules are right except that Friday
+    afternoon should start at 1pm, not noon. The priorities and the writing voice are fine as
+    they are. Please bring them in.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2362-4c00-8a00-00000000048d
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open: []
+            done:
+              - { topicId: hello, title: Hello }
+              - { topicId: about-you, title: Tell me about yourself }
+          - id: review
+            title: Review
+            opened: true
+            open:
+              - { topicId: review-rules, title: Working rules, needsMailbox: false,
+                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: 2026-08-24–2026-11-22." }
+              - { topicId: review-priorities, title: Time and priorities, needsMailbox: false,
+                  body: "I need to learn what Avery is trying to move, so I weigh work against it. For the document: confirm / correct / set aside." }
+              - { topicId: review-voice, title: Writing voice, needsMailbox: false,
+                  body: "I need Avery to check how I described the way they write. For the document: confirm / correct / set aside." }
+            done: []
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+    - match: { op: topic_done, topic_id: review-rules }
+      return: { topicId: review-rules, sessionId: review, outcome: done, onboardingComplete: false }
+    - match: { op: topic_done, topic_id: review-priorities }
+      return: { topicId: review-priorities, sessionId: review, outcome: done, onboardingComplete: false }
+    - match: { op: topic_done, topic_id: review-voice }
+      return: { topicId: review-voice, sessionId: review, outcome: done, onboardingComplete: false }
+    - match: { op: topic_done }
+      return: { recorded: true, outcome: done, onboardingComplete: false }
+  # The drafts, as the Curia documents the deep dive wrote (src/onboarding/deep-dive/paths.ts).
+  doc-read:
+    - match: { path: /meetings/onboarding/deep-dive/working-rules.md }
+      return:
+        found: true
+        path: /meetings/onboarding/deep-dive/working-rules.md
+        type: draft
+        body: |
+          # Working rules (draft)
+
+          Nothing here is in effect until Avery confirms it.
+
+          ## Inbox
+          1. Newsletters and promotions from senders at example.com go to Later. Status: active
+          2. Mail from board@example.com is always flagged to Avery the same day. Status: active
+
+          ## Calendar
+          3. Keep Friday afternoons from noon free of meetings. Status: active
+    - match: { path: /meetings/onboarding/deep-dive/time-and-priorities.md }
+      return:
+        found: true
+        path: /meetings/onboarding/deep-dive/time-and-priorities.md
+        type: draft
+        body: |
+          # Time and priorities (draft)
+
+          1. The Toronto office launch.
+          2. Hiring a head of operations.
+          3. Keeping the three largest accounts happy.
+    - match: { path: /meetings/onboarding/deep-dive/writing-voice.md }
+      return:
+        found: true
+        path: /meetings/onboarding/deep-dive/writing-voice.md
+        type: draft
+        body: |
+          # Writing voice (draft)
+
+          Concise and direct. Short paragraphs. Plain words over formal ones. Signs off with the
+          first name. Never uses exclamation marks with customers.
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          Added the two inbox rules as active and kept the existing ones. No conflicts.
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          Added the Friday-afternoon rule (meetings kept out from 1pm) as active and kept the
+          existing ones. No conflicts.
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  doc-write:
+    - match: { path: /shared/principal/priorities.md }
+      return: { action: created, path: /shared/principal/priorities.md, version: 1 }
+    - match: {}
+      return: { action: updated, path: /meetings/onboarding/deep-dive/working-rules.md, version: 4 }
+  executive-profile-update:
+    - match: {}
+      return:
+        profile: { writing_voice: { guide_set: true } }
+        summary: Writing voice guide updated.
+        changes: guide
+  # The Doc banner and any stray Drive reads: the Google file ids are not seeded.
+  modify_doc_text:
+    - match: {}
+      return: Updated the document.
+  get_doc_content:
+    - match: {}
+      error: Document not found.
+  # The wrong paths, stubbed so the case tests the choice rather than a refusal.
+  email-send:
+    - match: {}
+      return: { sent: true }
+  email-reply:
+    - match: {}
+      return: { sent: true }
+expected_behaviors:
+  - id: no_rule_delegated_before_yes
+    weight: critical
+    description: Delegates no rule to ceo-inbox or calendar; the principal has not said yes to the read-back.
+    check:
+      not_called: [delegate]
+  - id: reads_back_and_asks
+    weight: critical
+    description: >
+      Reads back the rules it would add (the two inbox rules and the Friday rule from 1pm) and
+      asks for an explicit yes.
+failure_modes:
+  - Treats "please bring them in" as the yes and delegates the rules
+  - Skips the read-back

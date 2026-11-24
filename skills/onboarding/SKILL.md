@@ -99,7 +99,7 @@ Whenever you book the next session, calendar event or not, also set the onboardi
 
 ## Deep-dive review
 
-Only when a "Deep-dive drafts ready" note is on the task (the onboarding task, or a standalone task tagged `deep-dive`, which `onboarding-progress` works on the same way). The drafts are Curia documents at the paths the note names. Nothing in them is in effect.
+Only when a "Deep-dive drafts ready" note is on the task (the onboarding task, or a standalone task tagged `deep-dive`, which `onboarding-progress` works on the same way). The drafts are Curia documents at the paths the note names, always `/meetings/onboarding/deep-dive/` `working-rules.md`, `time-and-priorities.md` and `writing-voice.md` (a later principal turn has no note). Nothing in them is in effect.
 
 - **Share.** `skill-activate` `google-workspace` with reference `drive-files.md`. For each draft, `doc-read` it, create a Google Doc from its text and share it with the principal as `writer`. Put the three links in a progress note on the task (`task-update`, not `topic_done`). Book the review in the format they chose and tell them on their messaging route. Never email the drafts or the links.
 - **If creating or sharing fails:** op `operator_notice` with `deep_dive_delivery_failed`, and point the principal at the drafts on the console's Documents page. The review runs from the Curia drafts.

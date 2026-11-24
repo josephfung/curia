@@ -71,27 +71,30 @@ tool_stubs:
   doc-read:
     - match: { path: /meetings/onboarding/deep-dive/working-rules.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/working-rules.md
-        version: 3
-        content: |
+        type: draft
+        body: |
           # Working rules (draft)
 
           1. Newsletters from senders at example.com go to Later. Status: active
           2. Keep Friday afternoons free of meetings. Status: active
     - match: { path: /meetings/onboarding/deep-dive/time-and-priorities.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/time-and-priorities.md
-        version: 2
-        content: |
+        type: draft
+        body: |
           # Time and priorities (draft)
 
           1. The Toronto office launch.
           2. Hiring a head of operations.
     - match: { path: /meetings/onboarding/deep-dive/writing-voice.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/writing-voice.md
-        version: 2
-        content: |
+        type: draft
+        body: |
           # Writing voice (draft)
 
           Concise and direct. Short paragraphs. Signs off with the first name.
@@ -179,6 +182,11 @@ expected_behaviors:
     check:
       not_called: [onboarding-progress]
       with: { op: topic_done }
+  - id: no_google_links
+    weight: critical
+    description: The reply names no Google Docs link; none was created.
+    check:
+      reply_excludes: ["docs\\.google\\.com"]
   - id: points_to_console_drafts
     weight: critical
     description: >

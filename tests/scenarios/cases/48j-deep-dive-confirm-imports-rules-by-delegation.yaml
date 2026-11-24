@@ -46,7 +46,10 @@ inbound:
     they are. Please bring them in.
   then:
     channel: signal
-    content: Yes, add those rules, and go ahead with the priorities and the voice too.
+    content: >
+      Yes, add those three rules: the two inbox rules (newsletters from example.com to Later,
+      board mail flagged the same day) and Fridays free from 1pm. Go ahead with the priorities
+      and the voice too.
 tool_stubs:
   onboarding-progress:
     - match: { op: status }
@@ -65,7 +68,7 @@ tool_stubs:
             opened: true
             open:
               - { topicId: review-rules, title: Working rules, needsMailbox: false,
-                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside." }
+                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: 2026-08-24–2026-11-22." }
               - { topicId: review-priorities, title: Time and priorities, needsMailbox: false,
                   body: "I need to learn what Avery is trying to move, so I weigh work against it. For the document: confirm / correct / set aside." }
               - { topicId: review-voice, title: Writing voice, needsMailbox: false,
@@ -87,9 +90,10 @@ tool_stubs:
   doc-read:
     - match: { path: /meetings/onboarding/deep-dive/working-rules.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/working-rules.md
-        version: 3
-        content: |
+        type: draft
+        body: |
           # Working rules (draft)
 
           Nothing here is in effect until Avery confirms it.
@@ -102,9 +106,10 @@ tool_stubs:
           3. Keep Friday afternoons from noon free of meetings. Status: active
     - match: { path: /meetings/onboarding/deep-dive/time-and-priorities.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/time-and-priorities.md
-        version: 2
-        content: |
+        type: draft
+        body: |
           # Time and priorities (draft)
 
           1. The Toronto office launch.
@@ -112,9 +117,10 @@ tool_stubs:
           3. Keeping the three largest accounts happy.
     - match: { path: /meetings/onboarding/deep-dive/writing-voice.md }
       return:
+        found: true
         path: /meetings/onboarding/deep-dive/writing-voice.md
-        version: 2
-        content: |
+        type: draft
+        body: |
           # Writing voice (draft)
 
           Concise and direct. Short paragraphs. Plain words over formal ones. Signs off with the
@@ -187,8 +193,22 @@ expected_behaviors:
     description: Writes the voice with executive-profile-update, carrying the guide and the confirmation note.
     check:
       called: executive-profile-update
-      contains: { guide: concise, note: deep dive }
+      contains: { note: deep dive }
       success: true
+  - id: calendar_rule_has_correction
+    weight: important
+    description: The calendar delegation carries the principal's correction, Friday from 1pm.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "1pm" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "1 pm" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "13:00" }
   - id: rules_topic_done
     weight: important
     description: Marks the working-rules topic done (corrected counts as done).
