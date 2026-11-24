@@ -597,6 +597,57 @@ step is recorded before its wake, so a failed write never repeats one. An event-
 is due from 12 hours before its event until it is settled, instead of the ±12-hour window,
 so a late call still loads it (`expires_at` still bounds it); a cancelled one never is.
 
+### The deep dive (#2362)
+
+Curia reads about 90 days of the principal's mail and calendar once, stores a summary, and
+drafts three documents for the principal to review. Every later step reads the summary, never
+the mailbox. Code in `src/onboarding/deep-dive/` (its README documents each heuristic); design:
+`docs/wip/2026-11-23-deep-dive-design.md`.
+
+- **Triggers.** A principal mailbox connecting while onboarding is open, and onboarding Start
+  when a mailbox is already connected. Either calls `startOnce()`, which claims the run state
+  (config store `onboarding/deep_dive`: `scanning`, `drafting`, `delivered` or `failed`) under
+  an advisory lock, so an install runs it once. A run left `scanning` or `drafting` is resumed at
+  boot, and by the watcher when stalled, from its last finished stage. With no mailbox, no run.
+- **The scan.** Metadata only (participants, subjects, folders, event times), paced at one
+  request a second with the Nylas backoff on a 429, and capped so it stays inside the free-tier
+  limits: 90 days, 15,000 messages, 1,500 requests, and a bounded sample of sent bodies for
+  voice (`limits.ts`). Hitting a cap ends that step as truncated, not failed; the coverage is
+  recorded and the drafts say so.
+- **The history summary.** `/meetings/onboarding/deep-dive/history-summary.md`: correspondents,
+  unopened mail, hand-offs, recurring meetings, where time went, each item with evidence ids. It
+  is `editable_by: console` like the playbook, so only the console changes it; the drafts and
+  the contacts backfill trust it.
+- **Contacts backfill.** Two-way correspondents (at least three messages, one each way) and
+  attendees of recurring meetings the principal organised or accepted, minus the principal's own
+  addresses and automated or bulk senders. At most 150, highest volume first, created through
+  the email adapter's path so dedup and organisation routing apply.
+- **The drafts.** One powerful-tier call each, under `/meetings/onboarding/deep-dive/`:
+  `working-rules.md`, `time-and-priorities.md` and `writing-voice.md`, each opening with
+  "nothing here is in effect yet". They use what the principal has said so far and flag
+  conflicts with the current rules; they never replace them. Spend is stored and logged.
+- **Hand-off.** The Review session's topics are opened on the open onboarding task, or on a
+  standalone coordinator task tagged `deep-dive` when onboarding is closed, then a note names the
+  drafts and the contacts count and the coordinator is woken. The coordinator makes a Google Doc
+  of each draft, shares it with the principal as writer, and books the review.
+- **The onboarding hold.** While the run is `scanning` or `drafting`, or delivered with its
+  review topics still open, the onboarding task does not complete. A `failed` run releases it.
+- **Re-runs.** The `deep-dive-run` tool (the principal asks; coordinator-only, discovered rather
+  than pinned), `POST /api/onboarding/deep-dive`, or the console button. Each clears the run
+  state and starts again, on an install that finished onboarding or never ran the dive.
+- **Failure.** The run is marked `failed`, the operator gets `deep_dive_failed`, and the open
+  onboarding task gets a note so the review topics can be declined. If the drafts were written
+  but the note, wake or Google share failed, the run stays `delivered` and the operator gets
+  `deep_dive_delivery_failed`; the review runs from the Curia drafts.
+
+**The Review session** has four topics: `review-rules`, `review-priorities`, `review-voice` and
+`next-step`. Each draft is offered as confirm, correct or set aside. Nothing is imported until
+the principal confirms that document and the coordinator has read the rules back to them.
+Confirmed rules go to ceo-inbox and calendar to write in their own formats, priorities to
+`/shared/principal/priorities.md`, and voice through `executive-profile-update`. Each outcome is
+recorded with `topic_done` (done, or declined for a set-aside). An install whose playbook was
+seeded earlier keeps its old Review section (never overwritten).
+
 ### Operator notices
 
 `notifyOperator` (`src/onboarding/notify-operator.ts`) records a progress note on the
@@ -604,8 +655,8 @@ onboarding task, logs a warning, and emails the operator through the one system-
 `OutboundGateway.sendNotification` (#2710, [ADR-068](../adr/068-operator-notices.md)). The
 watcher and the subscribers raise each event at most once per onboarding.
 
-The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
-`web_search_failed`. All four are operator-routed in `NOTIFICATION_AUDIENCES`
+The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked`,
+`web_search_failed`, `deep_dive_failed` and `deep_dive_delivery_failed`. All six are operator-routed in `NOTIFICATION_AUDIENCES`
 (`src/notifications/audience.ts`), so the gateway addresses them from the current `operator`
 setting: the operator's email when one is set, and the principal's when none is — a "Myself"
 install behaves exactly as before. The setting, not the original Setup choice, decides: an
@@ -617,8 +668,8 @@ trust. Nothing model-supplied reaches it: a tool call's `details` are context fo
 note, the log and the `onboarding.operator_notice` audit row (key names only) and never the
 email. Bodies carry no principal content — no message text, addresses or objectives.
 
-`onboarding-progress` op `operator_notice` raises only `web_search_failed`: it is the one notice
-only the model can see, and the other three are detected in code. It goes through the same
+`onboarding-progress` op `operator_notice` raises only `web_search_failed` and
+`deep_dive_delivery_failed`, the notices only the model can see; the others are detected in code. It goes through the same
 once-per-run dedupe as everything else (`OnboardingService.raiseOperatorNotice`), so a repeated
 call emails once and adds no second note — and answers `{ alreadyRaised: true }` rather than a
 failure, so the model does not retry it. `operatorNotified` records what was raised; a notice
