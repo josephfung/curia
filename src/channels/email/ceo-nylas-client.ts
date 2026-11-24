@@ -796,6 +796,8 @@ export class CeoNylasClient {
     let attempt = 0;
     for (;;) {
       this.throwIfCancelled(operation);
+      // Counted before the fetch: an attempt that fails without a response still went out.
+      if (stats) stats.requests++;
       let res: Response;
       try {
         res = await fetch(url, init);
@@ -804,10 +806,7 @@ export class CeoNylasClient {
         this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
         throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
       }
-      if (stats) {
-        stats.requests++;
-        if (res.status === 429) stats.rateLimited = true;
-      }
+      if (stats && res.status === 429) stats.rateLimited = true;
 
       // 429 is always retriable (rejected before processing). 5xx only on GET
       // (POST/PUT may have been processed before the gateway returned 5xx).

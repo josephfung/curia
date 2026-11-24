@@ -18,18 +18,20 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
 
 - **Window:** `WINDOW_DAYS` (90) back from `now`. Mail uses `receivedAfter`/`receivedBefore`
   (Unix seconds); the calendar uses ISO bounds.
-- **Only the given mailbox ids.** Ids no longer connected are skipped with a warning.
+- **Only the given mailbox ids.** Ids no longer connected are skipped with a warning and
+  mark the scan truncated.
+- **Pace:** `PAGE_DELAY_MS` before every call the scan makes except its first, across steps
+  and mailboxes; `listAllMessages` paces its own later pages.
 - **Order** (the request and message budgets are shared across the whole run):
   1. Each mailbox's calendar: `listCalendars()` (1 request), then the primary calendar
      (`isPrimary`) listed in `CALENDAR_WINDOW_DAYS` (7-day) windows, `expandRecurring: true`,
-     `limit` 1,000 per window, `PAGE_DELAY_MS` between windows. 90 days is 13 windows. A window
+     `limit` 1,000 per window. 90 days is 13 windows. A window
      is counted as `ceil(events / 200)` requests (at least 1), Nylas's page size. No primary
      calendar: warn, skip that calendar and mark the scan truncated. A window that hit 1,000
      events or reported `onIncomplete` marks the scan truncated.
   2. Each mailbox's `SENT` folder via `listAllMessages`, with `VOICE_SAMPLE_SIZE` requests held
      back for step 3.
-  3. Up to `VOICE_SAMPLE_SIZE` sent bodies via `getMessage` (1 request each, `PAGE_DELAY_MS`
-     apart), chosen as in *Voice sample* below. A body that is gone (404) is skipped with a warning.
+  3. Up to `VOICE_SAMPLE_SIZE` sent bodies via `getMessage` (1 request each), chosen as in *Voice sample* below. A body that is gone (404) is skipped with a warning.
   4. Each mailbox's received mail via `listAllMessages` with no folder filter — the bulk, so it
      goes last. Everything in the window counts except messages in `SENT`, `DRAFT`, `SPAM` or
      `TRASH`, so archived mail (Gmail mail out of `INBOX`) is received mail too.
@@ -45,7 +47,8 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
   mailbox's Sent listing, the voice bodies, each mailbox's received listing. `listAllMessages`
   retries 429s and 5xx and doubles its page delay after a 429. The calendar client (Nylas SDK)
   does not retry, so each calendar call gets one retry after a pause that starts at
-  2 × `PAGE_DELAY_MS` and doubles with every calendar 429 or status-0 error in the scan (each
+  2 × `PAGE_DELAY_MS` and doubles, up to 30 s, with every calendar 429 or status-0 error in the
+  scan (the SDK's `NylasSdkTimeoutError` counts as status 0; each
   counted in `rateLimited` and as a request). A transient error that outlasts the retries — 429,
   5xx, or status 0 (the fetch itself failed: DNS, a reset, a timeout) — ends only the step it
   happened in: the scan is marked truncated with a warning and the next step runs. A listing
@@ -88,7 +91,7 @@ sender is a principal address is *principal-sent*; any other message is *receive
 - `domain`: the part after `@`. `kind`: `classifyEmailSender(email)`.
 - `twoWay`: `received ≥ 1` and `sent ≥ 1` and `received + sent ≥ TWO_WAY_MIN_MESSAGES` (3).
 - `medianReplyMinutes`: for each received message, the minutes until the next principal-sent
-  message in the same `threadId` (to anyone); the median per sender, rounded; `null` when no
+  message in the same `threadId` (to anyone; a message with no `threadId` has no reply time); the median per sender, rounded; `null` when no
   received message was followed by one.
 - Sorted by `received + sent` descending, then address. Not capped.
 
@@ -101,7 +104,7 @@ end, grouped by sender domain (unread archived mail was dealt with, so it is not
 
 Principal-sent messages whose subject starts `Fwd:`, `Fw:` or `FW:` (any case, optional space
 before the colon), to the first non-principal recipient (To, then Cc). Forwards to no one but
-the principal are skipped. One item per (thread, recipient); newest first.
+the principal are skipped. One item per (thread, recipient), or per message when it has no `threadId`; newest first.
 
 ### Calendar
 
@@ -115,7 +118,7 @@ count for nothing except declined/moved.
   5.5–8.5 `weekly`, 12.5–15.5 `biweekly`, 26–35 `monthly`, else `every N days`.
   `minutesPerOccurrence` = median duration. `title` = the latest occurrence's title.
   `attendees` = non-principal, non-declining participants across occurrences, sorted. Ordered
-  by attended occurrences × minutes, descending, then series id.
+  by total attended minutes, descending, then series id.
 - **`medianMinutes`:** median length of attended events (0 when none).
 - **`bufferMinutesMedian`:** attended events grouped by principal-local start date; the gap
   from each event's start back to the latest end so far that day (overlap = 0); gaps over 120

@@ -315,11 +315,14 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
           .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
           .mockRejectedValueOnce(new TypeError('fetch failed'));
         const client = new CeoNylasClient('key', 'grant', logger);
+        const pages: Array<{ requests: number; rateLimited: boolean }> = [];
 
-        const result = await client.listAllMessages({ onPage: () => true });
+        const result = await client.listAllMessages({ onPage: (p) => { pages.push(p); return true; } });
 
         expect(result.messages.map((m) => m.id)).toEqual(['a']);
         expect(result).toMatchObject({ truncated: true, endedOn: 'network' });
+        // The attempt that got no response still went out, so it counts.
+        expect(pages).toEqual([{ requests: 1, rateLimited: false }, { requests: 1, rateLimited: false }]);
       });
 
       it('still throws when the first page fails', async () => {

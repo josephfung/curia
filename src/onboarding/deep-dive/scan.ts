@@ -28,6 +28,7 @@ import {
   NYLAS_MAX_PAGE_SIZE,
   type NylasCalendarEvent,
 } from '../../channels/calendar/nylas-calendar-client.js';
+import { NylasSdkTimeoutError } from 'nylas';
 import { nylasStatus } from '../../channels/email/nylas-message-id.js';
 import type { HistorySummary } from './history-summary.js';
 import {
@@ -51,7 +52,7 @@ export interface ScanDeps {
   mailboxes: Pick<PrincipalMailboxes, 'list' | 'ceoClient' | 'calendarClient'>;
   logger: Logger;
   now: Date;
-  /** Pause between calendar listings and body fetches. Defaults to a real timer; tests pass a no-op. */
+  /** Pause between the scan's calls and before a calendar retry. Defaults to a real timer; tests pass a no-op. */
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -63,9 +64,17 @@ export interface ScanResult {
   coverage: HistorySummary['coverage'];
 }
 
+/** Longest pause before a calendar retry, as for the mail listing's backoff. */
+const MAX_CALENDAR_DELAY_MS = 30_000;
+
+/** nylasStatus, plus the calendar SDK's timeout (no status of its own) as status 0: a failed fetch. */
+function scanStatus(err: unknown): number | undefined {
+  return err instanceof NylasSdkTimeoutError ? 0 : nylasStatus(err);
+}
+
 /** A calendar error worth one paced retry: a 429, or status 0. */
 function isRateLimitEnd(err: unknown): boolean {
-  const status = nylasStatus(err);
+  const status = scanStatus(err);
   return status === 429 || status === 0;
 }
 
@@ -93,6 +102,7 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
   const missing = mailboxIds.filter((id) => !views.some((v) => v.id === id));
   if (missing.length > 0) {
     logger.warn({ missing }, 'deep-dive scan: mailboxes no longer connected; scanning the rest');
+    coverage.truncated = true;
   }
   const principal = new Set(selected.map((v) => normaliseAddress(v.address)).filter((a) => a !== ''));
 
@@ -134,11 +144,19 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
     try {
       await run();
     } catch (err) {
-      const kind = transientEndKind(nylasStatus(err));
+      const kind = transientEndKind(scanStatus(err));
       if (kind === null) throw err;
       endedOnError(kind, what, fields, err);
     }
   }
+
+  // A PAGE_DELAY_MS pause before each call the scan makes, except its first, so step and mailbox
+  // boundaries keep the pace too. listAllMessages paces its own later pages.
+  let calledBefore = false;
+  const pace = async (): Promise<void> => {
+    if (calledBefore) await sleep(PAGE_DELAY_MS);
+    calledBefore = true;
+  };
 
   // The calendar client (Nylas SDK) does not retry a 429, so give each calendar call one retry
   // after a pause that doubles with every 429 this scan has seen on the calendar side.
@@ -149,7 +167,7 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
     } catch (err) {
       if (!isRateLimitEnd(err)) throw err;
       coverage.rateLimited++;
-      calendarDelayMs *= 2;
+      calendarDelayMs = Math.min(calendarDelayMs * 2, MAX_CALENDAR_DELAY_MS);
       await sleep(calendarDelayMs);
       coverage.requests++;
       return run();
@@ -159,6 +177,7 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
   async function readCalendar(id: string): Promise<void> {
     if (!haveBudget(MAX_REQUESTS, 'listCalendars')) return;
     const client = await deps.mailboxes.calendarClient(id);
+    await pace();
     coverage.requests++;
     const primary = (await calendarCall(() => client.listCalendars())).find((c) => c.isPrimary);
     if (!primary) {
@@ -167,9 +186,9 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
       coverage.truncated = true;
       return;
     }
-    for (let start = from.getTime(), first = true; start < now.getTime(); start += CALENDAR_WINDOW_DAYS * DAY_MS, first = false) {
+    for (let start = from.getTime(); start < now.getTime(); start += CALENDAR_WINDOW_DAYS * DAY_MS) {
       if (!haveBudget(MAX_REQUESTS, 'listEvents')) return;
-      if (!first) await sleep(PAGE_DELAY_MS);
+      await pace();
       const end = Math.min(start + CALENDAR_WINDOW_DAYS * DAY_MS, now.getTime());
       let incomplete = false;
       const batch = await calendarCall(() =>
@@ -200,6 +219,7 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
     }
     if (!haveBudget(requestLimit, what)) return;
     const client = await ceo(id);
+    await pace();
     const result = await client.listAllMessages({
       ...(folder !== null ? { folder } : {}),
       receivedAfter,
@@ -229,9 +249,9 @@ export async function scanHistory(deps: ScanDeps, mailboxIds: string[]): Promise
 
   async function readVoiceBodies(): Promise<void> {
     const sent = messages.filter((m) => m.folders.includes(SENT_FOLDER));
-    for (const [i, m] of pickVoiceCandidates(sent, principal, VOICE_SAMPLE_SIZE).entries()) {
+    for (const m of pickVoiceCandidates(sent, principal, VOICE_SAMPLE_SIZE)) {
       if (!haveBudget(MAX_REQUESTS, 'getMessage')) return;
-      if (i > 0) await sleep(PAGE_DELAY_MS);
+      await pace();
       coverage.requests++;
       try {
         sentBodies.push(await (await ceo(mailboxOf.get(m.id)!)).getMessage(m.id));

@@ -1,3 +1,4 @@
+import { NylasSdkTimeoutError } from 'nylas';
 import pino from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 import { scanHistory, type ScanDeps } from '../../../../src/onboarding/deep-dive/scan.js';
@@ -315,6 +316,50 @@ describe('scanHistory', () => {
       expect(result.coverage).toMatchObject({ truncated: false, rateLimited: 1 });
     });
 
+    it('treats an SDK timeout as transient: retried once, then only the calendar step ends', async () => {
+      const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : []) });
+      const cal = fakeCalendar([], {
+        listEvents: async (n) => {
+          if (n === 1) return [event('e1')];
+          throw new NylasSdkTimeoutError('https://api.example.com/v3/grants/g/events', 90_000);
+        },
+      });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client });
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(cal.calls).toHaveLength(3);
+      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
+      expect(result.coverage).toMatchObject({ truncated: true, errors: 1 });
+    });
+
+    it('caps the calendar retry pause and paces every call after the first', async () => {
+      const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : []) });
+      const retried = new Set<number>();
+      // Every window is rate-limited once, then succeeds on its retry.
+      let window = 0;
+      const cal = fakeCalendar([], {
+        listEvents: async () => {
+          if (!retried.has(window)) {
+            retried.add(window);
+            throw sdkError(429);
+          }
+          window++;
+          return [];
+        },
+      });
+      const sleeps: number[] = [];
+      const d = { ...deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': cal.client }), sleep: async (ms: number) => { sleeps.push(ms); } };
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(result.coverage).toMatchObject({ truncated: false, rateLimited: 13 });
+      expect(Math.max(...sleeps)).toBe(30_000);
+      // listCalendars, 13 windows, Sent, 2 bodies, received: 18 calls, 17 paced; plus 13 retry pauses.
+      expect(sleeps.filter((ms) => ms === 1000)).toHaveLength(17);
+      expect(sleeps).toHaveLength(17 + 13);
+    });
+
     it('propagates a calendar auth failure', async () => {
       const mail = fakeMail({ pages: () => [] });
       const cal = fakeCalendar([], { listEvents: async () => { throw sdkError(401); } });
@@ -384,6 +429,16 @@ describe('scanHistory', () => {
       expect(result.messages.map((m) => m.id)).toContain('i1');
       expect(result.coverage.truncated).toBe(true);
     });
+  });
+
+  it('marks coverage truncated when a requested mailbox is no longer connected', async () => {
+    const mail = fakeMail({ pages: () => [] });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+
+    const result = await scanHistory(d, ['mb-1', 'mb-gone']);
+
+    expect(mail.listCalls).toHaveLength(2); // the connected mailbox is still read
+    expect(result.coverage.truncated).toBe(true);
   });
 
   it('counts a message in both Inbox and Sent once', async () => {
