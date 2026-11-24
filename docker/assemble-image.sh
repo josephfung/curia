@@ -111,33 +111,60 @@ if ! "$SCRIPT_DIR/buildx-retry.sh" "${args[@]}"; then
   exit 1
 fi
 
-# Read back what the first tag now names: the index's digest (what cosign signs)
-# and its platforms (every architecture must be in it). The concurrency group
-# cancels an older run for the same publish target, so normally nothing else
-# writes this tag meanwhile. (A release and a manual re-publish of the same tag
-# are kept in separate groups on purpose; run both at once and either may sign
-# the other's index. That needs two operator actions at once, and is accepted.)
+# Read back what the tags now name, once, and derive everything from that one read.
+# The digest cosign signs is the sha256 of the index's exact bytes, confirmed by
+# reading the index back BY that digest (immutable, unlike a tag), and the platform
+# check runs on the same bytes. A second read of a mutable tag could return another
+# run's index (a release and a re-publish of one tag run in separate concurrency
+# groups) and sign something that was never checked. Bytes go through files, not
+# $(...), which would drop a trailing newline and change the hash.
 # From here on the tags have moved, so a failure says so: the alert must not read
 # as "nothing was published".
 moved="the tags were already moved to the new index, which is NOT signed"
-if ! raw="$(read_registry docker buildx imagetools inspect --raw "$first_tag")"; then
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+read_raw_to() { # file ref: inspect --raw into a file, tried three times
+  local attempt
+  for attempt in 1 2 3; do
+    if docker buildx imagetools inspect --raw "$2" > "$1"; then
+      return 0
+    fi
+    [ "$attempt" -eq 3 ] || sleep "${ASSEMBLE_READ_DELAY:-5}"
+  done
+  return 1
+}
+if ! read_raw_to "$work/index.json" "$first_tag"; then
   echo "assemble-image: could not read back ${first_tag}; ${moved}" >&2
   exit 1
 fi
-if ! manifest="$(read_registry docker buildx imagetools inspect "$first_tag" --format '{{json .Manifest}}')"; then
-  echo "assemble-image: could not read ${first_tag}'s digest; ${moved}" >&2
-  exit 1
-fi
-digest="$(printf '%s' "$manifest" | python3 -c '
+# The bytes as served; and without a trailing newline, in case the client added one.
+candidates="$(python3 -c '
+import hashlib, sys
+raw = open(sys.argv[1], "rb").read()
+seen = []
+for body in (raw, raw.rstrip(b"\n")):
+    d = "sha256:" + hashlib.sha256(body).hexdigest()
+    if d not in seen:
+        seen.append(d)
+print(" ".join(seen))
+' "$work/index.json")"
+digest=""
+for candidate in $candidates; do
+  if read_raw_to "$work/by-digest.json" "${IMAGE}@${candidate}" \
+      && python3 -c '
 import json, sys
-value = json.load(sys.stdin).get("digest")
-sys.stdout.write(value if isinstance(value, str) else "")
-')"
+same = json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))
+sys.exit(0 if same else 1)
+' "$work/index.json" "$work/by-digest.json"; then
+    digest="$candidate"
+    break
+  fi
+done
 if ! printf '%s\n' "$digest" | grep -Eq "$DIGEST_RE"; then
-  echo "assemble-image: ${first_tag} has no sha256 digest after assembly (got '${digest}'); ${moved}" >&2
+  echo "assemble-image: could not confirm the digest of ${first_tag}'s index by reading it back by digest; ${moved}" >&2
   exit 1
 fi
-missing="$(printf '%s' "$raw" | missing_platforms "$ARCHES")"
+missing="$(missing_platforms "$ARCHES" < "$work/index.json")"
 if [ -n "$missing" ]; then
   echo "assemble-image: ${first_tag} is missing platform(s): ${missing}; ${moved}" >&2
   exit 1

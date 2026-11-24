@@ -109,6 +109,10 @@ jobs:
     outputs:
       # The release tag being published or re-published; empty for an edge build.
       tag: ${{ steps.resolve.outputs.tag }}
+      # What every job checks out for it: `refs/tags/<tag>`, never the bare name, which
+      # checkout resolves to a branch when one of that name exists, and build-arch's legs
+      # check out at different times. Empty for an edge build (the jobs use github.sha).
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
     steps:
       - name: Resolve and validate the publish target
         id: resolve
@@ -201,6 +205,11 @@ jobs:
               }
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "checkout_ref=refs/tags/$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "checkout_ref=" >> "$GITHUB_OUTPUT"
+          fi
           # Surfaced as a notice so the resolved target shows on the run summary
           # page, not only inside the step log. This is an incident-response
           # button: "which thing did I just publish?" should be answerable at a
@@ -302,14 +311,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On a manual re-publish, check out the requested tag so the built
-          # image really is that release's source. For release/push triggers the
-          # resolved tag is the release tag or empty, so this falls back to the
-          # commit the run was triggered for. `github.sha`, not the branch name:
+          # On a manual re-publish, check out the requested tag (as refs/tags/,
+          # see resolve's checkout_ref) so the built image really is that
+          # release's source. For release/push triggers the resolved tag is the
+          # release tag or empty, so this falls back to the commit the run was
+          # triggered for. `github.sha`, not the branch name:
           # build-arch's legs and this job start at different times, and a leg
           # re-run days later would otherwise build a newer main than the other
           # leg did, and the run would sign one image made of both.
-          ref: ${{ needs.resolve.outputs.tag || github.sha }}
+          ref: ${{ needs.resolve.outputs.checkout_ref || github.sha }}
 
       # metadata-action stamps `org.opencontainers.image.revision` from
       # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
@@ -524,14 +534,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On a manual re-publish, check out the requested tag so the built
-          # image really is that release's source. For release/push triggers the
-          # resolved tag is the release tag or empty, so this falls back to the
-          # commit the run was triggered for. `github.sha`, not the branch name:
+          # On a manual re-publish, check out the requested tag (as refs/tags/,
+          # see resolve's checkout_ref) so the built image really is that
+          # release's source. For release/push triggers the resolved tag is the
+          # release tag or empty, so this falls back to the commit the run was
+          # triggered for. `github.sha`, not the branch name:
           # build-arch's legs and this job start at different times, and a leg
           # re-run days later would otherwise build a newer main than the other
           # leg did, and the run would sign one image made of both.
-          ref: ${{ needs.resolve.outputs.tag || github.sha }}
+          ref: ${{ needs.resolve.outputs.checkout_ref || github.sha }}
 
       # metadata-action stamps `org.opencontainers.image.revision` from
       # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
@@ -661,6 +672,28 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
         run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."
+
+      # An edge build publishes the commit the run was triggered for (github.sha, so every
+      # leg builds the same source). A "Re-run failed jobs" of an older run would then move
+      # :edge back from a newer main commit that has since published. So before any tag
+      # moves, the commit must still be main's head; otherwise this run is superseded, and
+      # the way to republish :edge is a fresh dispatch from main. Release builds and
+      # re-publishes name their own tag and are not affected. A failed lookup refuses too:
+      # unknown is not "still the head".
+      - name: Refuse to move :edge off main's current head
+        if: steps.meta.outputs.tags != '' && needs.resolve.outputs.tag == ''
+        env:
+          BUILT: ${{ github.sha }}
+        run: |
+          if ! head="$(git ls-remote origin refs/heads/main | cut -f1)" || [ -z "$head" ]; then
+            echo "::error::Could not read main's head to check that :edge would not move backwards. Nothing was tagged; re-run once GitHub answers."
+            exit 1
+          fi
+          if [ "$head" != "$BUILT" ]; then
+            echo "::error::This run built ${BUILT}, but main is now at ${head}. Moving :edge here would roll it back, so nothing was tagged. To republish :edge, dispatch docker-publish from main."
+            exit 1
+          fi
+          echo "main is still at ${BUILT}; :edge may move to it."
 
       # Every platform leg of this image (build-arch) left its digest as an artifact. A leg
       # that failed or was skipped left none, and assemble-image.sh refuses to tag the image

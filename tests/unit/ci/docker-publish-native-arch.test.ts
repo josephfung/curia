@@ -107,6 +107,17 @@ describe('docker-publish native per-architecture builds', () => {
     }
   });
 
+  it('refuses to move :edge unless the run built main\'s current head', () => {
+    // A re-run of an older run's failed build job would otherwise roll :edge back.
+    const guardAt = build.steps.findIndex((s) => s.name === "Refuse to move :edge off main's current head");
+    const guard = build.steps[guardAt]!;
+    expect(guard.if).toBe("steps.meta.outputs.tags != '' && needs.resolve.outputs.tag == ''");
+    expect(guard.env?.BUILT).toBe('${{ github.sha }}');
+    expect(guard.run).toContain('git ls-remote origin refs/heads/main');
+    expect(guard.run).toMatch(/"\$head" != "\$BUILT"[\s\S]*exit 1/);
+    expect(guardAt).toBeLessThan(build.steps.findIndex((s) => s.id === 'build'));
+  });
+
   it('writes tags only after every leg, and still runs (to fail and alert) when one failed', () => {
     expect(build.needs).toEqual(['resolve', 'build-arch']);
     expect(build.if).toBe("${{ !cancelled() && needs.resolve.result == 'success' }}");

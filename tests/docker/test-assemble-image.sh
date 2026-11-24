@@ -26,11 +26,25 @@ has_line() { grep -F -x -q -e "$2" "$1"; }
 
 AMD="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 ARM="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-INDEX="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+# The index JSON the stub serves for a set of architectures, exactly as served
+# (print adds the trailing newline), and the digest a registry would give it.
+index_json() { # "arch arch..."
+  python3 -c '
+import json, sys
+manifests = [{"platform": {"os": "linux", "architecture": a}} for a in sys.argv[1].split()]
+manifests.append({"platform": {"os": "unknown", "architecture": "unknown"}})
+print(json.dumps({"manifests": manifests}))
+' "$1"
+}
+digest_of() { index_json "$1" | python3 -c 'import hashlib, sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'; }
+INDEX="$(digest_of "amd64 arm64")"
 
 # stub dir platforms [amd64-leg-arch] [arm64-leg-arch] [raw-failures]:
 # `inspect --raw <tag>` lists `platforms` (the assembled index); `inspect --raw
-# <image>@<digest>` lists the arch that leg actually holds (default: its own).
+# <image>@<digest>` lists the arch that leg actually holds (default: its own),
+# or, for the digest of the assembled index's bytes, that index (as a registry
+# serves a manifest by its digest), unless the file `no_by_digest` exists.
 # Every index also carries an attestation manifest (platform unknown/unknown), as
 # buildx writes one. The first `raw-failures` raw reads fail, as a registry blip.
 install_docker_stub() {
@@ -54,7 +68,19 @@ case "\$*" in
     if [ "\$n" -le "\$(cat "\$dir/raw_failures")" ]; then echo "unexpected EOF" >&2; exit 1; fi
     ref="\$5"
     case "\$ref" in
-      *@sha256:*) src="\$dir/leg_\${ref#*@}" ;;
+      *@sha256:*)
+        src="\$dir/leg_\${ref#*@}"
+        if [ ! -f "\$src" ]; then
+          [ ! -f "\$dir/no_by_digest" ] || { echo "manifest unknown" >&2; exit 1; }
+          src="\$dir/platforms"
+          want="\$(python3 -c '
+import hashlib, json, sys
+manifests = [{"platform": {"os": "linux", "architecture": a}} for a in open(sys.argv[1]).read().split()]
+manifests.append({"platform": {"os": "unknown", "architecture": "unknown"}})
+print("sha256:" + hashlib.sha256((json.dumps({"manifests": manifests}) + "\\n").encode()).hexdigest())
+' "\$src")"
+          [ "\${ref#*@}" = "\$want" ] || { echo "manifest unknown" >&2; exit 1; }
+        fi ;;
       *) src="\$dir/platforms" ;;
     esac
     python3 -c '
@@ -64,9 +90,6 @@ manifests = [{"platform": {"os": "linux", "architecture": a}} for a in arches]
 manifests.append({"platform": {"os": "unknown", "architecture": "unknown"}})
 print(json.dumps({"manifests": manifests}))
 ' "\$src"
-    exit 0 ;;
-  "buildx imagetools inspect "*"--format"*)
-    printf '%s\n' '{"digest":"$INDEX"}'
     exit 0 ;;
 esac
 echo "unexpected docker call: \$*" >&2
@@ -128,6 +151,14 @@ d="$tmpdir/a4b"; install_docker_stub "$d" "amd64 arm64" amd64 amd64; digests "$d
 run "$d"
 check_eq "arm64 leg holding amd64: exits 1" "1" "$?"
 if [ -f "$d/create_args" ]; then bad "  ...but it tagged"; else ok "  ...and nothing was tagged"; fi
+
+# 4e. The registry does not serve the index by the digest of its bytes: sign nothing.
+d="$tmpdir/a4e"; install_docker_stub "$d" "amd64 arm64"; digests "$d" "$AMD" "$ARM"
+: > "$d/no_by_digest"
+run "$d"
+check_eq "digest not confirmed by digest read: exits 1" "1" "$?"
+if [ -s "$d/github_output" ]; then bad "  ...but a digest was written"; else ok "  ...and no digest was written"; fi
+if grep -q "already moved" "$d/stderr"; then ok "  ...saying the tags already moved"; else bad "  ...without saying the tags moved"; fi
 
 # 4c. A registry blip on a read is retried, and the publish still succeeds.
 d="$tmpdir/a4c"; install_docker_stub "$d" "amd64 arm64" amd64 arm64 2; digests "$d" "$AMD" "$ARM"
