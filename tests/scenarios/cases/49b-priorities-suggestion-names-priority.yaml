@@ -46,6 +46,17 @@ inbound:
     I've been asked to speak on a fintech panel on the evening of {{date:today+8}}. It's about three hours
     with travel. Should I do it? Give me your recommendation.
 tool_stubs:
+  # A run checks the panel date with the calendar specialist first: a working day, and the
+  # evening is free.
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          {{day:today+8}}: 9:00–9:30 AM leadership stand-up; 11:00 AM–12:00 PM investor call
+          (Series B); 2:00–3:00 PM sales pipeline review. Nothing after 3:00 PM, so the evening
+          is free. The days either side hold only regular working-hours meetings, with no
+          travel or evening commitments.
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000049b, sensitivity: internal }
