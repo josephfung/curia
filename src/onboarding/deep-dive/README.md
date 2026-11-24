@@ -151,7 +151,9 @@ capped at 25 rows:
 - **series**, key = series id (see `recurringMeetings` for its title): attended hours of each
   recurring series; `messages` = 0.
 
-Hours are rounded to two decimals.
+Person and organization hours count only events the principal organised or accepted, as for
+recurring series: an unanswered invite's attendees are an outsider's to choose. Hours are
+rounded to two decimals.
 
 ### Voice sample
 

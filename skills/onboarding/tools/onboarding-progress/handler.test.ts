@@ -267,6 +267,26 @@ describe('onboarding-progress', () => {
       const last = await closeEveryTopic(w);
       expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
     });
+
+    it('does not complete when the hand-off finishes during the check: its Review topics hold it open', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('drafting'));
+      // The hand-off lands at the first read of the run state: Review topic opened, then delivered.
+      const realGet = w.store.get.bind(w.store);
+      let handedOff = false;
+      w.store.get = (key: string) => {
+        if (key === 'onboarding/deep_dive' && !handedOff && w.sub('propose-rhythm')?.status === 'done') {
+          handedOff = true;
+          w.tasks.push(task({ id: 'review-1', parentTaskId: 'parent', tags: ['onboarding', 'onboarding:topic:review-drafts', 'onboarding:session:review'] }));
+          w.store.set(key, deepDive('delivered'));
+        }
+        return realGet(key);
+      };
+      const last = await closeEveryTopic(w);
+      expect(handedOff).toBe(true);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+    });
   });
 
   it('does not complete the parent while the ongoing-rhythm session has not been opened', async () => {

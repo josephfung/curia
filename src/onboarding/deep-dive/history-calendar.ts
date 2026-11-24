@@ -253,7 +253,9 @@ export function summariseCalendar(
   const seriesHours = new Map<string, number>();
   for (const e of attended) {
     const hours = minutesOf(e) / 60;
-    const attendees = outsideAttendees(e, principal);
+    // An invite the principal never organised or accepted is anyone's to send: its attendees
+    // would reach the time-and-priorities draft as time spent with them.
+    const attendees = principalJoined(e, principal) ? outsideAttendees(e, principal) : [];
     for (const a of attendees) attendeeHours.set(a, (attendeeHours.get(a) ?? 0) + hours);
     for (const d of new Set(attendees.map(domainOf))) {
       if (d !== '') domainHours.set(d, (domainHours.get(d) ?? 0) + hours);

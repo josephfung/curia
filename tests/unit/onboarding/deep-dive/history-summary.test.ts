@@ -131,6 +131,27 @@ describe('summarise', () => {
     it('keeps a series the principal accepted at least once', () => {
       expect(recurringIds(series('once', (i) => (i === 2 ? 'yes' : 'noreply')))).toEqual(['once']);
     });
+
+    it("counts a one-off meeting's attendees as time spent only when the principal took part", () => {
+      // Three 30-minute one-offs per guest; `status` is the principal's answer.
+      const oneOffs = (guest: string, status: string, organizerEmail?: string): NylasCalendarEvent[] =>
+        Array.from({ length: 3 }, (_, i) => ({
+          id: `${guest}-${i}`, title: 'Chat', description: '', location: '',
+          startTime: START.plus({ days: i }).toSeconds(), endTime: START.plus({ days: i, minutes: 30 }).toSeconds(),
+          startDate: null, endDate: null,
+          participants: [{ email: ME, name: 'Avery', status }, { email: guest, name: '', status: 'yes' }],
+          conferencing: null, status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
+          ...(organizerEmail ? { organizerEmail } : {}),
+        }));
+      const events = [
+        ...oneOffs('pitch@outsider.example.org', 'noreply', 'pitch@outsider.example.org'),
+        ...oneOffs('kim@client.example.com', 'yes'),
+        ...oneOffs('lee@team.example.com', 'noreply', ME),
+      ];
+      const s = summarise(input({ messages: [], sentBodies: [], events }));
+      expect(s.timeSpent.filter((t) => t.calendarHours > 0).map((t) => t.key).sort())
+        .toEqual(['client.example.com', 'kim@client.example.com', 'lee@team.example.com', 'team.example.com']);
+    });
   });
 
   it('finds a kept-clear Friday-afternoon block', () => {

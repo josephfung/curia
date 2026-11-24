@@ -102,11 +102,14 @@ function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, nam
  * already closed is left. Returns whether onboarding is complete.
  */
 async function completeIfDone({ svc, repo, parent, ctx }: Deps): Promise<boolean> {
+  // Read the run state before the children: the hand-off opens the Review topics before it marks
+  // the run delivered, so a run seen as not running has its topics in the snapshot below.
+  const deepDiveRunning = await svc.deepDiveRunning();
   const children = await listChildren(repo, parent.id);
   const topics = topicSubtasks(children, ctx.log);
   if (!topics.some((t) => t.sessionId === ONGOING_RHYTHM_SESSION)) return false;
   if (topics.some((t) => isOpenTask(t.task))) return false;
-  if (await svc.deepDiveRunning()) {
+  if (deepDiveRunning) {
     ctx.log.info({ taskId: parent.id }, 'onboarding: every topic is closed, but the deep dive is still running');
     return false;
   }
