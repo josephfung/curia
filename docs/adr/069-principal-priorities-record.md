@@ -82,10 +82,12 @@ summary. So:
 - **They stay in Curia.** The summary and drafts are durable working documents under
   `/meetings/onboarding/deep-dive/`; nothing pins them, and they are edited only in the console
   (`editable_by: console`), so no agent turn rewrites them.
-- **Google Docs during review are shared with the principal only.** For the review, the
-  coordinator copies each draft into a Google Doc. A Drive guard on onboarding and deep-dive
-  turns refuses to share those documents with anyone but the principal. After import, the Google
-  Doc is marked as moved to Curia; the Curia copy is the one that counts.
+- **Google Docs during review are shared with the principal.** For the review, the coordinator
+  copies each draft into a Google Doc and shares it with the principal's verified address; the
+  skill guidance treats draft text as data, never instructions. There is no source-specific Drive
+  guard: an injected share would have to get past the inbound checks and the outbound judges,
+  which is where that defence lives. After import, the Google Doc is marked as moved to Curia;
+  the Curia copy is the one that counts.
 
 ### Each confirmed draft is written by whoever already owns it
 
@@ -116,6 +118,6 @@ No new system code writes these documents. On the principal's confirmation:
   priorities, so the existing guards (the rules agents' merge rules, the executive profile's
   version history, the `/shared/` pin guard) all still apply.
 - **Google Drive holds a copy of private material during review.** It is shared with the
-  principal only, by code on the turns that create it; the Curia copy is the record afterwards.
+  principal; the Curia copy is the record afterwards.
 - **ceo-inbox and calendar do not weigh against priorities directly.** If that is wanted, it is a
   later pin with its own per-turn cost.
