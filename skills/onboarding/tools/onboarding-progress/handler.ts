@@ -33,6 +33,7 @@ import {
   listChildren,
   ONGOING_RHYTHM_SESSION,
   RECURRING_SESSION,
+  reviewStillAhead,
   topicSubtasks,
   type TopicSubtask,
 } from '../../../../src/onboarding/subtasks.js';
@@ -105,8 +106,9 @@ function isDeepDiveTask(task: TaskRow): boolean {
 
 /**
  * The task this call works on: the turn's own task's root when it is an open deep-dive review
- * task, else the open onboarding task, else the open deep-dive review task (a principal's reply
- * that arrived bound to no task, after onboarding).
+ * task; else the open onboarding task while its Review topics are still to come (as the hand-off
+ * decides, so both pick the same task); else the open deep-dive review task (a principal's reply
+ * that arrived bound to no task); else the open onboarding task.
  */
 async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow | null> {
   const bound = boundTaskFromMetadata(ctx.taskMetadata);
@@ -115,10 +117,10 @@ async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow 
     if (root && isDeepDiveTask(root) && isOpenTask(root)) return root;
   }
   const onboarding = await findOpenOnboardingTask(repo);
-  if (onboarding) return onboarding;
+  if (onboarding && (await reviewStillAhead(repo, onboarding.id, ctx.log))) return onboarding;
   // Open ones only, filtered in the query: closed review tasks must not crowd the open one off the page.
   const reviews = await repo.listTasks({ tag: DEEP_DIVE_TASK_TAG, statuses: OPEN_STATUSES, createdBy: ONBOARDING_CREATED_BY, limit: 10 });
-  return reviews.find((t) => t.parentTaskId === null && isOpenTask(t)) ?? null;
+  return reviews.find((t) => t.parentTaskId === null && isOpenTask(t)) ?? onboarding;
 }
 
 /** The top of a task's parent chain, or null when a task on it is missing or the chain is too deep. */

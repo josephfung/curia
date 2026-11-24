@@ -500,6 +500,26 @@ describe('onboarding-progress', () => {
       expect(w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules'))!.parentTaskId).toBe('dd');
     });
 
+    it('a turn bound to no task picks onboarding while its Review topics are ahead, then the deep-dive task', async () => {
+      const w = reviewWorld({ withParent: true });
+      await w.run({ op: 'open_session', session_id: 'review' });
+      const onParent = (topic: string) =>
+        w.tasks.find((t) => t.tags.includes(`onboarding:topic:${topic}`) && t.parentTaskId === 'parent');
+      expect(onParent('review-rules')).toBeDefined();
+      for (const topic of ['review-rules', 'review-priorities', 'review-voice']) {
+        await w.run({ op: 'topic_done', topic_id: topic, outcome: 'done', note: 'Confirmed.' });
+      }
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).not.toBe('done');
+
+      // Onboarding's Review topics are closed, so the hand-off put the new drafts on 'dd'.
+      await w.run({ op: 'open_session', session_id: 'review' });
+      const rules = w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules') && t.parentTaskId === 'dd');
+      expect(rules).toBeDefined();
+      const done = await w.run({ op: 'topic_done', topic_id: 'review-rules', outcome: 'done', note: 'Confirmed.' });
+      expect(done).toMatchObject({ success: true, data: { topicId: 'review-rules' } });
+      expect(rules!.status).toBe('done');
+    });
+
     it('a deep-dive tag on a task onboarding did not make does not count', async () => {
       const w = makeWorld({ withParent: false });
       w.tasks.push(task({ id: 'fake', tags: ['deep-dive'], createdBy: 'coordinator' }));

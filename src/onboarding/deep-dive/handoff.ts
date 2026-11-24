@@ -14,16 +14,10 @@ import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
-import {
-  DEEP_DIVE_TASK_TAG,
-  ONBOARDING_CREATED_BY,
-  REVIEW_DOCUMENT_TOPICS,
-  REVIEW_NEXT_STEP_TOPIC,
-  REVIEW_SESSION,
-} from '../constants.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, REVIEW_SESSION } from '../constants.js';
 import { raiseOperatorNoticeOnce } from '../notify-operator-once.js';
 import { findOpenOnboardingTask, OPEN_STATUSES } from '../state.js';
-import { isOpenTask, listChildren, topicSubtasks } from '../subtasks.js';
+import { isOpenTask, reviewStillAhead } from '../subtasks.js';
 import { noteAndWakeCoordinator } from '../subscribers.js';
 import type { HistorySummary } from './history-summary.js';
 import { DRAFT_KINDS } from './prompts.js';
@@ -114,7 +108,7 @@ async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance)
   const { taskRepo, logger } = deps;
   const onboarding = await findOpenOnboardingTask(taskRepo);
   if (onboarding) {
-    if (await reviewStillAhead(deps, onboarding.id)) return onboarding;
+    if (await reviewStillAhead(taskRepo, onboarding.id, logger)) return onboarding;
     // openSession never reopens a closed topic, so drafts handed to this task would land on
     // finished topics and the wake would complete onboarding instead of reviewing them.
     logger.info({ taskId: onboarding.id }, 'deep-dive: onboarding\'s Review topics are all closed; using a standalone review task');
@@ -147,20 +141,6 @@ async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance)
   logger.info({ taskId: created.id }, 'deep-dive: no onboarding open; created a standalone review task');
   await activateOnboardingSkill(deps, created.id);
   return created;
-}
-
-/**
- * Whether the onboarding task's Review document topics are still to come: none opened, or one open.
- * A playbook seeded before the document topics existed (walk-drafts) is judged on its other Review
- * topics, as the onboarding-progress tool completes a standalone review task on them.
- */
-async function reviewStillAhead(deps: RunDeps, onboardingTaskId: string): Promise<boolean> {
-  const review = topicSubtasks(await listChildren(deps.taskRepo, onboardingTaskId), deps.logger).filter(
-    (t) => t.sessionId === REVIEW_SESSION,
-  );
-  let deciding = review.filter((t) => (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(t.topicId));
-  if (deciding.length === 0) deciding = review.filter((t) => t.topicId !== REVIEW_NEXT_STEP_TOPIC);
-  return deciding.length === 0 || deciding.some((t) => isOpenTask(t.task));
 }
 
 /**
