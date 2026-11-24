@@ -1,6 +1,6 @@
 # Case 49c (#2362, ADR-069): a priority is done and a new goal is stated. Rule: the
-# coordinator's pinned_context entry for /shared/principal/priorities.md ("When a goal is stated
-# or changes, propose updating this; move superseded ones to the document its `past:` field
+# coordinator's pinned_context entry for /shared/principal/priorities.md ("When the principal states
+# or changes a goal, propose updating this; move superseded ones to the document its `past:` field
 # names"). The seeded document's `past:` points somewhere other than the default
 # (/meetings/principal/priorities-past.md), so a write to the default path shows the
 # coordinator guessed the location instead of following the pointer (ADR-069: the pointer, not

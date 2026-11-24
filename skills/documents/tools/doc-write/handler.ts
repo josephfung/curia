@@ -28,6 +28,8 @@ import { EDITABLE_BY_KEY, editableBy } from '../../../../src/memory/console-only
 import { PRIORITIES_PATH, priorityFrontmatterDefaults } from '../../../../src/memory/priorities-doc.js';
 import { toLocalIso } from '../../../../src/time/timestamp.js';
 
+const PRIORITIES_KEPT_KEYS = ['title', 'past', 'format'];
+
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
 /**
@@ -311,9 +313,20 @@ export class DocWriteHandler implements ToolHandler {
           if (!existing) {
             return { success: false, error: `Document not found at ${normalized} — use create mode first` };
           }
+          // replace swaps the stored frontmatter for the one given, so a caller that sends only
+          // as_of would drop past: and format:. Keep the stored values of the standard keys the
+          // caller leaves out (#2362); as_of stays the caller's.
+          const replaceFrontmatter = normalized === PRIORITIES_PATH && input.frontmatter !== undefined
+            ? {
+                ...Object.fromEntries(
+                  Object.entries(existing.frontmatter).filter(([key]) => PRIORITIES_KEPT_KEYS.includes(key)),
+                ),
+                ...input.frontmatter,
+              }
+            : input.frontmatter;
           result = await repo.update(normalized, {
             type: input.type,
-            frontmatter: input.frontmatter,
+            frontmatter: replaceFrontmatter,
             body: input.body,
             expectedVersion: input.expected_version,
             expectedId: existing.id,

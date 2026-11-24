@@ -448,6 +448,35 @@ describe('DocWriteHandler', () => {
       expect(call.frontmatter).toMatchObject({ title: 'Mine', as_of: '2020-01-01', extra: 1, past: PAST });
     });
 
+    it('replace keeps stored past and format when the caller sends only as_of', async () => {
+      const stored = makeDoc({
+        path: PRIORITIES,
+        version: 3,
+        frontmatter: { title: 'Priorities', as_of: '2026-01-01', past: PAST, format: 'F' },
+      });
+      const update = vi.fn().mockResolvedValue({ ok: true, document: stored });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(stored), update });
+      const result = await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'replace', body: '## New', expected_version: 3,
+        frontmatter: { as_of: '2026-11-24' },
+      }, repo));
+      expect(result.success).toBe(true);
+      expect(update.mock.calls[0]![1].frontmatter).toEqual({
+        title: 'Priorities', as_of: '2026-11-24', past: PAST, format: 'F',
+      });
+    });
+
+    it('replace lets the caller override past', async () => {
+      const stored = makeDoc({ path: PRIORITIES, version: 1, frontmatter: { past: PAST, format: 'F' } });
+      const update = vi.fn().mockResolvedValue({ ok: true, document: stored });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(stored), update });
+      await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'replace', body: 'x', expected_version: 1,
+        frontmatter: { past: '/meetings/other.md' },
+      }, repo));
+      expect(update.mock.calls[0]![1].frontmatter).toMatchObject({ past: '/meetings/other.md', format: 'F' });
+    });
+
     it('does not add defaults to other documents', async () => {
       const repo = makeRepo();
       await new DocWriteHandler().execute(makeCtx({
