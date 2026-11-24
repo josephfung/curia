@@ -20,10 +20,19 @@
 # layers, which is what makes a retried push cheap. `ignore-error=true` means a
 # cache-service blip cannot fail a build that already pushed.
 #
+# Two modes. Tagged (the default) builds every platform in one build and pushes
+# the tags. By digest (PUSH_BY_DIGEST=true) builds one platform on a runner of
+# that architecture and pushes it untagged: docker-publish runs one such leg per
+# platform, natively, and docker/assemble-image.sh joins the digests under the
+# tags. The arm64 leg used to run under QEMU on an amd64 runner, about 13 of the
+# curia image's 14 minutes.
+#
 # Runs on the GitHub-hosted runner. Do not COPY this into an image.
 #
 # Env:
-#   TAGS         newline-separated image tags (required)
+#   TAGS         newline-separated image tags (required unless PUSH_BY_DIGEST)
+#   PUSH_BY_DIGEST  true: push untagged by digest to IMAGE (default false)
+#   IMAGE        registry/owner/name, no tag (required with PUSH_BY_DIGEST)
 #   LABELS       newline-separated key=value labels (optional)
 #   DOCKERFILE   path relative to the build context (required)
 #   CACHE_SCOPE  GHA cache scope, [A-Za-z0-9_.-]+ (required; one per image)
@@ -33,7 +42,26 @@
 #   GITHUB_OUTPUT  digest is appended here for the cosign step (required)
 set -euo pipefail
 
-if [ -z "${TAGS:-}" ]; then
+PUSH_BY_DIGEST="${PUSH_BY_DIGEST:-false}"
+case "$PUSH_BY_DIGEST" in
+  true|false) ;;
+  *)
+    echo "publish-image: PUSH_BY_DIGEST must be true or false (got '$PUSH_BY_DIGEST')" >&2
+    exit 2
+    ;;
+esac
+if [ "$PUSH_BY_DIGEST" = true ]; then
+  if [ -z "${IMAGE:-}" ]; then
+    echo "publish-image: IMAGE is required with PUSH_BY_DIGEST=true" >&2
+    exit 2
+  fi
+  # A tag here would be pushed before the other platform exists: the tags belong
+  # to assemble-image.sh, once every platform is in.
+  if [ -n "${TAGS:-}" ]; then
+    echo "publish-image: TAGS must be empty with PUSH_BY_DIGEST=true (assemble-image.sh applies them)" >&2
+    exit 2
+  fi
+elif [ -z "${TAGS:-}" ]; then
   echo "publish-image: TAGS is required" >&2
   exit 2
 fi
@@ -68,7 +96,6 @@ args=(
   docker buildx build
   --file "$DOCKERFILE"
   --platform "$PLATFORMS"
-  --push
   --metadata-file "$metadata"
   --cache-from "type=gha,scope=${CACHE_SCOPE}"
   --cache-to "type=gha,mode=max,scope=${CACHE_SCOPE},ignore-error=true"
@@ -83,10 +110,15 @@ fi
 # `<<<` supplies the trailing newline a last tag would otherwise lack, so every
 # non-empty line becomes exactly one argv element. Tags and labels are not
 # word-split: a label value may contain spaces.
-while IFS= read -r tag; do
-  [ -n "$tag" ] || continue
-  args+=(--tag "$tag")
-done <<< "$TAGS"
+if [ "$PUSH_BY_DIGEST" = true ]; then
+  args+=(--output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true")
+else
+  args+=(--push)
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    args+=(--tag "$tag")
+  done <<< "$TAGS"
+fi
 
 while IFS= read -r label; do
   [ -n "$label" ] || continue
@@ -97,7 +129,7 @@ tag_count=0
 for arg in "${args[@]}"; do
   [ "$arg" = "--tag" ] && tag_count=$((tag_count + 1))
 done
-if [ "$tag_count" -eq 0 ]; then
+if [ "$PUSH_BY_DIGEST" = false ] && [ "$tag_count" -eq 0 ]; then
   echo "publish-image: TAGS contained no tag" >&2
   exit 2
 fi
@@ -107,7 +139,9 @@ args+=("$CONTEXT")
 "$SCRIPT_DIR/buildx-retry.sh" "${args[@]}"
 
 # buildx writes containerimage.digest as the manifest-list digest when pushing
-# multiple platforms. That is the digest cosign must sign.
+# multiple platforms. That is the digest cosign must sign. By digest, it is the
+# one platform's index (its image plus the SBOM and provenance attestations),
+# which assemble-image.sh takes as input.
 digest="$(python3 -c '
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as fh:
