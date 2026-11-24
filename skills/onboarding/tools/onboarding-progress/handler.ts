@@ -47,6 +47,8 @@ const TOOL_OPERATOR_EVENTS = ['web_search_failed', 'deep_dive_delivery_failed'] 
 const OUTCOMES = ['done', 'declined'] as const;
 const NOTE_MAX = 2000;
 const HOMEWORK_TAG = 'onboarding:homework';
+/** The Review session's scheduling topic: it never holds a standalone review task open. */
+const NEXT_STEP_TOPIC = 'next-step';
 /** How far up a task's parents the root lookup walks before giving up. */
 const ROOT_DEPTH_MAX = 20;
 
@@ -110,7 +112,7 @@ function isDeepDiveTask(task: TaskRow): boolean {
 async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow | null> {
   const bound = boundTaskFromMetadata(ctx.taskMetadata);
   if (bound) {
-    const root = await rootTask(repo, bound.taskId);
+    const root = await rootTask(repo, bound.taskId, ctx.log);
     if (root && isDeepDiveTask(root) && isOpenTask(root)) return root;
   }
   const onboarding = await findOpenOnboardingTask(repo);
@@ -121,12 +123,16 @@ async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow 
 }
 
 /** The top of a task's parent chain, or null when a task on it is missing or the chain is too deep. */
-async function rootTask(repo: TaskRepo, taskId: string): Promise<TaskRow | null> {
+async function rootTask(repo: TaskRepo, taskId: string, log: ToolContext['log']): Promise<TaskRow | null> {
   let task = await repo.getTask(taskId);
   for (let depth = 0; task && task.parentTaskId !== null; depth++) {
-    if (depth >= ROOT_DEPTH_MAX) return null;
+    if (depth >= ROOT_DEPTH_MAX) {
+      log.warn({ taskId, depth }, 'onboarding-progress: task parent chain too deep; not using the turn\'s task');
+      return null;
+    }
     task = await repo.getTask(task.parentTaskId);
   }
+  if (!task) log.warn({ taskId }, 'onboarding-progress: a task on the turn\'s parent chain is missing; not using the turn\'s task');
   return task;
 }
 
@@ -166,13 +172,19 @@ async function completeIfDone({ svc, repo, parent, ctx }: Deps): Promise<boolean
   const topics = topicSubtasks(children, ctx.log);
   if (isDeepDiveTask(parent)) {
     // A standalone review task is done once its document topics are closed. Next step (a rhythm
-    // question for onboarding) does not hold it open; an open one is cancelled with it.
-    const docs = topics.filter((t) => t.sessionId === REVIEW_SESSION && isReviewDocumentTopic(t.topicId));
-    if (docs.length === 0) {
-      ctx.log.warn({ taskId: parent.id }, 'onboarding: the deep-dive review task has no review topics, so it cannot complete on them');
-      return false;
+    // question for onboarding) does not hold it open; an open one is cancelled with it. A playbook
+    // seeded before the document topics existed (walk-drafts) completes on its other Review topics.
+    const review = topics.filter((t) => t.sessionId === REVIEW_SESSION);
+    let deciding = review.filter((t) => isReviewDocumentTopic(t.topicId));
+    if (deciding.length === 0) {
+      deciding = review.filter((t) => t.topicId !== NEXT_STEP_TOPIC);
+      ctx.log.warn(
+        { taskId: parent.id },
+        'onboarding: the deep-dive review task has no document topics (an older playbook); completing on its other Review topics',
+      );
+      if (deciding.length === 0) return false;
     }
-    if (docs.some((t) => isOpenTask(t.task))) return false;
+    if (deciding.some((t) => isOpenTask(t.task))) return false;
     for (const t of topics) {
       if (isOpenTask(t.task)) await repo.updateTask(t.task.id, { status: 'cancelled', progressNote: 'Deep-dive review complete: not needed.' }, ctx.agentId);
     }

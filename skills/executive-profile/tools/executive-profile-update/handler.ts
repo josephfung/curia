@@ -1,7 +1,7 @@
 // handler.ts — executive-profile-update skill.
 //
-// Updates the executive's writing voice profile. Elevated sensitivity —
-// requires principal CallerContext. Accepts partial updates: only the fields
+// Updates the executive's writing voice profile. Normal sensitivity (tool.json): no principal
+// CallerContext is required, so callers gate its use. Accepts partial updates: only the fields
 // provided are merged onto the current profile. Unchanged fields keep
 // their existing values.
 
@@ -38,7 +38,8 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
       return { success: false, error: 'Input must include a "writing_voice" object with the fields to update.' };
     }
 
-    // guide and note are optional top-level strings. A blank note counts as absent.
+    // guide and note are optional top-level strings. A blank one counts as absent: a blank guide
+    // must never wipe the current one.
     const { guide: rawGuide, note: rawNote } = ctx.input as { guide?: unknown; note?: unknown };
     if (rawGuide !== undefined && typeof rawGuide !== 'string') {
       return { success: false, error: '"guide" must be a string.' };
@@ -46,7 +47,7 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
     if (rawNote !== undefined && typeof rawNote !== 'string') {
       return { success: false, error: '"note" must be a string.' };
     }
-    const guide = rawGuide?.trim();
+    const guide = rawGuide?.trim() || undefined;
     if (guide !== undefined && guide.length > MAX_GUIDE_CHARS) {
       return { success: false, error: `"guide" is ${guide.length} characters; the maximum is ${MAX_GUIDE_CHARS}.` };
     }

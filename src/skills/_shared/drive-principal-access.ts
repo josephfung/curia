@@ -88,6 +88,28 @@ export function raisePrincipalDriveGrant(
   return { input, raisedFrom: [] };
 }
 
+/**
+ * Whether a grant names anyone but the principal (by verified email, as a user share). Used to keep
+ * shares on onboarding and deep-dive review turns to the principal: those turns read draft text
+ * that quotes outsiders, so an injected "also share with…" must not reach the server.
+ */
+export function grantsBeyondPrincipal(
+  toolName: string,
+  input: Record<string, unknown>,
+  principalIdentities: readonly ChannelIdentity[],
+): boolean {
+  if (toolName !== DRIVE_ACCESS_TOOL) return false;
+  const emails = principalEmails(principalIdentities);
+  const isPrincipal = (shareType: unknown, address: unknown) => isUserShare(shareType) && isPrincipalAddress(address, emails);
+  if (input.action === 'grant') return !isPrincipal(input.share_type, input.share_with);
+  if (input.action === 'grant_batch') {
+    return !Array.isArray(input.recipients) || input.recipients.some((entry: unknown) =>
+      typeof entry !== 'object' || entry === null ||
+      !isPrincipal((entry as Record<string, unknown>).share_type, (entry as Record<string, unknown>).email));
+  }
+  return false;
+}
+
 /** The line appended to a successful result, so the model reports the access truthfully. */
 export function principalDriveGrantNote(raisedFrom: readonly string[]): string {
   const asked = [...new Set(raisedFrom)].join(' / ');

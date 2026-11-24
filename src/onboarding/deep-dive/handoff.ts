@@ -66,6 +66,9 @@ export async function handoffStage(
   // Delivered before anyone is told. The write is guarded, so a superseded run stops here and never
   // announces its drafts; and a note or wake that fails after it cannot fail a run whose drafts are
   // written. That failure is a delivery problem: the operator hears deep_dive_delivery_failed.
+  // Accepted gap: a process exit between this write and the note/wake loses the announcement (a
+  // delivered run is not resumed, and no notice is sent). The order is kept because it is what
+  // stops a superseded run from announcing its drafts.
   const delivered = await advance((s) => ({ ...s, status: 'delivered', reviewTaskId: parent.id }));
   try {
     await noteAndWakeCoordinator(

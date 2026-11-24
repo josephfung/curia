@@ -45,6 +45,13 @@ describe('ExecutiveProfileUpdateHandler guide and note', () => {
     expect(saved.formality).toBe(7);
   });
 
+  it('keeps the current guide when the given one is blank', async () => {
+    const service = makeService();
+    const result = await handler.execute(makeContext(service, { writing_voice: {}, guide: '  \n ' }));
+    expect(result.success).toBe(true);
+    expect(service.update.mock.calls[0]![0].writingVoice.guide).toBe('Existing guide.');
+  });
+
   it('replaces the guide when given, trimmed', async () => {
     const service = makeService();
     const result = await handler.execute(

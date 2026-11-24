@@ -35,7 +35,7 @@ function task(p: Partial<TaskRow> & { id: string }): TaskRow {
   return { status: 'open', tags: [], parentTaskId: null, createdBy: 'onboarding', title: p.id, ...p } as TaskRow;
 }
 
-function makeWorld(opts: { withParent?: boolean } = {}) {
+function makeWorld(opts: { withParent?: boolean; playbook?: string } = {}) {
   const tasks: TaskRow[] = [];
   if (opts.withParent ?? true) tasks.push(task({ id: 'parent', tags: ['onboarding'], status: 'waiting', waitingOnContactId: PRINCIPAL_CONTACT_ID }));
   let nextId = 1;
@@ -121,7 +121,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     scheduler: { enqueueTaskWake: vi.fn() },
     configStore,
     stateLock: (fn) => fn(),
-    workingDocsRepo: { read: vi.fn(async () => ({ body: PLAYBOOK, frontmatter: { editable_by: 'console' } })), create: vi.fn() } as unknown as WorkingDocsRepo,
+    workingDocsRepo: { read: vi.fn(async () => ({ body: opts.playbook ?? PLAYBOOK, frontmatter: { editable_by: 'console' } })), create: vi.fn() } as unknown as WorkingDocsRepo,
     principalName: async () => 'Avery Example',
     principalContactId: async () => PRINCIPAL_CONTACT_ID,
     principalHasIdentity: async () => true,
@@ -391,8 +391,8 @@ describe('onboarding-progress', () => {
 
   describe('a standalone deep-dive review task (#2362)', () => {
     // The task the hand-off makes when no onboarding is open: tagged deep-dive, made by onboarding.
-    const reviewWorld = (opts: { withParent?: boolean } = {}) => {
-      const w = makeWorld({ withParent: opts.withParent ?? false });
+    const reviewWorld = (opts: { withParent?: boolean; playbook?: string } = {}) => {
+      const w = makeWorld({ withParent: opts.withParent ?? false, ...(opts.playbook ? { playbook: opts.playbook } : {}) });
       w.tasks.push(task({ id: 'dd', tags: ['deep-dive'] }));
       const bound = (taskId: string) => ({ taskMetadata: { boundTask: { taskId } } } as Partial<ToolContext>);
       return { ...w, bound };
@@ -441,7 +441,45 @@ describe('onboarding-progress', () => {
       try {
         const status = await w.run({ op: 'status' }, w.bound('dd'));
         expect(status).toMatchObject({ success: true, data: { onboardingComplete: false } });
-        expect(warn).toHaveBeenCalledWith({ taskId: 'dd' }, expect.stringContaining('no review topics'));
+        expect(warn).toHaveBeenCalledWith({ taskId: 'dd' }, expect.stringContaining('no document topics'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('on an older playbook, completes once its other Review topics close', async () => {
+      // Installs seeded before the document topics keep the old Review section: walk-drafts, next-step.
+      const oldPlaybook = [
+        '# Ongoing rhythm <!-- session: ongoing-rhythm -->',
+        '## Propose a rhythm <!-- topic: propose-rhythm -->',
+        'x',
+        '# Review <!-- session: review -->',
+        '## Walk through the drafts <!-- topic: walk-drafts -->',
+        'I go through the drafts.',
+        '## Next step <!-- topic: next-step -->',
+        'When do we talk next?',
+      ].join('\n');
+      const w = reviewWorld({ playbook: oldPlaybook });
+      const warn = vi.spyOn(logger, 'warn');
+      try {
+        await w.run({ op: 'open_session', session_id: 'review' }, w.bound('dd'));
+        const last = await w.run({ op: 'topic_done', topic_id: 'walk-drafts', outcome: 'done', note: 'Confirmed.' }, w.bound('dd'));
+        expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
+        expect(w.tasks.find((t) => t.id === 'dd')!.status).toBe('done');
+        expect(w.sub('next-step').status).toBe('cancelled');
+        expect(warn).toHaveBeenCalledWith({ taskId: 'dd' }, expect.stringContaining('other Review topics'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('warns and falls through when the turn\'s task is missing', async () => {
+      const w = reviewWorld();
+      const warn = vi.spyOn(logger, 'warn');
+      try {
+        const opened = await w.run({ op: 'open_session', session_id: 'review' }, w.bound('gone'));
+        expect(opened.success).toBe(true);
+        expect(warn).toHaveBeenCalledWith({ taskId: 'gone' }, expect.stringContaining('missing'));
       } finally {
         warn.mockRestore();
       }

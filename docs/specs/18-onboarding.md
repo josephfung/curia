@@ -669,11 +669,14 @@ note, the log and the `onboarding.operator_notice` audit row (key names only) an
 email. Bodies carry no principal content — no message text, addresses or objectives.
 
 `onboarding-progress` op `operator_notice` raises only `web_search_failed` and
-`deep_dive_delivery_failed`, the notices only the model can see; the others are detected in code. It goes through the same
-once-per-run dedupe as everything else (`OnboardingService.raiseOperatorNotice`), so a repeated
-call emails once and adds no second note — and answers `{ alreadyRaised: true }` rather than a
-failure, so the model does not retry it. `operatorNotified` records what was raised; a notice
-whose task note could not be written gives its event back, so a retry raises it.
+`deep_dive_delivery_failed`, the notices only the model can see; the others are detected in code. It is
+deduped like everything else (`OnboardingService.raiseOperatorNotice`): once per run on the
+onboarding task, where `operatorNotified` records what was raised, and once per event on a
+standalone deep-dive review task, where the record is the task's own `Operator notice: <event>`
+note, checked under the state lock. The deep dive's own `deep_dive_delivery_failed` goes through
+the same check. A repeated call emails once and adds no second note, and answers
+`{ alreadyRaised: true }` rather than a failure, so the model does not retry it. A notice whose
+task note could not be written gives its event back, so a retry raises it.
 
 ### Done
 

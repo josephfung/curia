@@ -22,7 +22,8 @@ import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { principalDriveGrantNote, raisePrincipalDriveGrant } from './_shared/drive-principal-access.js';
+import { grantsBeyondPrincipal, principalDriveGrantNote, raisePrincipalDriveGrant } from './_shared/drive-principal-access.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY } from '../onboarding/constants.js';
 import type {
   McpSecretDeclaration,
   McpServerEntry,
@@ -350,6 +351,20 @@ export function buildMcpToolHandler(params: {
       // No call-time calendar identity guard here (#1957): Calendar is never on the
       // google-workspace --tools allowlist, so its tools are never registered. If #1330
       // ever puts them back on purpose, restore guardMcpCalendarIdentity from history.
+
+      // On an onboarding or deep-dive review task's turn, Drive shares go to the principal only:
+      // the turn reads draft text quoting outsiders (#2362). boundTask is stamped by the scheduler
+      // and stripped from inbound metadata, so its tags and createdBy are trusted.
+      const bound = ctx.taskMetadata?.['boundTask'] as { tags?: unknown; createdBy?: unknown } | undefined;
+      if (
+        session.serverId === 'google-workspace' &&
+        bound?.createdBy === ONBOARDING_CREATED_BY &&
+        Array.isArray(bound.tags) && bound.tags.some((t) => t === 'onboarding' || t === DEEP_DIVE_TASK_TAG) &&
+        grantsBeyondPrincipal(toolName, ctx.input, principalIdentities)
+      ) {
+        logger.warn({ server: session.serverId, tool: toolName }, 'Drive share beyond the principal refused on an onboarding turn');
+        return { success: false, error: 'On this task, files may be shared only with the principal, at their own verified address.' };
+      }
 
       // The principal always gets edit access to a Drive file shared with them.
       const grant = session.serverId === 'google-workspace'

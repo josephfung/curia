@@ -764,6 +764,47 @@ describe('buildMcpToolHandler — Drive grants to the principal', () => {
     expect(roles).toEqual(['reader', 'writer']);
   });
 
+  describe('on an onboarding or deep-dive review turn, shares go only to the principal', () => {
+    const boundTo = (tags: string[], createdBy: string | null, input: Record<string, unknown>) =>
+      ({ ...grantCtx(input), taskMetadata: { boundTask: { taskId: 't-1', tags, createdBy } } }) as unknown as
+        import('../../../src/skills/types.js').ToolContext;
+    const outsider = { file_id: 'doc-1', action: 'grant', share_with: 'ea@attacker.example', role: 'writer' };
+
+    it('refuses a grant to anyone else on a deep-dive review task, and sends nothing', async () => {
+      const callTool = vi.fn();
+      const result = await handlerFor('google-workspace', callTool).execute(boundTo(['deep-dive'], 'onboarding', outsider));
+      expect(result.success).toBe(false);
+      expect(result.success ? '' : result.error).toMatch(/only with the principal/);
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it('refuses a batch that adds anyone else on an onboarding task', async () => {
+      const callTool = vi.fn();
+      const batch = {
+        file_id: 'doc-1', action: 'grant_batch',
+        recipients: [{ email: 'ceo@example.test', role: 'writer' }, { email: 'ea@attacker.example', role: 'writer' }],
+      };
+      const result = await handlerFor('google-workspace', callTool).execute(boundTo(['onboarding'], 'onboarding', batch));
+      expect(result.success).toBe(false);
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it('allows the share to the principal on that turn', async () => {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+      const result = await handlerFor('google-workspace', callTool).execute(boundTo(['deep-dive'], 'onboarding', readerGrant));
+      expect(result.success).toBe(true);
+      expect(callTool).toHaveBeenCalledOnce();
+    });
+
+    it('leaves other turns alone: unbound, or a task onboarding did not make', async () => {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+      const handler = handlerFor('google-workspace', callTool);
+      expect((await handler.execute(grantCtx(outsider))).success).toBe(true);
+      expect((await handler.execute(boundTo(['deep-dive'], 'coordinator', outsider))).success).toBe(true);
+      expect(callTool).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('leaves another server’s tool of the same name alone', async () => {
     const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
     const result = await handlerFor('other-server', callTool).execute(grantCtx(readerGrant));
