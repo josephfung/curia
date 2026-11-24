@@ -24,7 +24,7 @@ import { INBOX_RULES_PATH } from '../../principal-mailboxes/rules-doc.js';
 import { RESEARCH_BRIEF_PATH } from '../playbook.js';
 import { DRAFT_MAX_TOKENS } from './limits.js';
 import type { HistorySummary } from './history-summary.js';
-import { buildDraftPrompt, DRAFT_KINDS, type DraftInputs, type DraftKind } from './prompts.js';
+import { buildDraftPrompt, DRAFT_KINDS, DRAFT_PREAMBLE, type DraftInputs, type DraftKind } from './prompts.js';
 
 export type { DraftInputs, DraftKind } from './prompts.js';
 
@@ -63,6 +63,11 @@ export async function readDraftInputs(deps: ReadDraftInputsDeps, summary: Histor
   };
 }
 
+/**
+ * Drafting reads the mailbox only through the stored summary (ruling 2). Never add a mailbox
+ * client here, and build this object explicitly at the call site rather than spreading a wider
+ * deps bag into it, so one cannot arrive by accident.
+ */
 export interface DraftDeps {
   providerRouter: LLMProvider;
   modelRouter: ModelRouter;
@@ -70,6 +75,14 @@ export interface DraftDeps {
   estimateCost: ReturnType<typeof createEstimateCostUsd>;
   modelRegistry: ModelRegistry;
   logger: Logger;
+}
+
+/** A draft failed; carries the spend of the calls already made so the run can record it. */
+export class DraftError extends Error {
+  constructor(message: string, readonly spendUsd: number, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'DraftError';
+  }
 }
 
 type TextResponse = Extract<LLMResponse, { type: 'text' }>;
@@ -117,14 +130,25 @@ async function draftOne(deps: DraftDeps, kind: DraftKind, inputs: DraftInputs): 
   if (response.type !== 'text') {
     const reason = response.type === 'error' ? response.error.message : `non-text response (${response.type})`;
     deps.logger.error({ kind, model: resolved.model, type: response.type }, 'deep-dive drafting: model call failed');
-    throw new Error(`deep-dive draft "${kind}" failed: ${reason}`);
+    throw new DraftError(`deep-dive draft "${kind}" failed: ${reason}`, 0);
   }
   const costUsd = deps.estimateCost(response.provenance.actualModel, response.usage, deps.logger);
   await publishLlmCall(deps, response, prompt, latencyMs, costUsd);
+  if (response.content.trim() === '') {
+    // A reasoning model that thinks through the whole output cap returns empty text.
+    deps.logger.error({ kind, model: resolved.model, costUsd }, 'deep-dive drafting: model returned an empty draft');
+    throw new DraftError(`deep-dive draft "${kind}" failed: empty response`, costUsd);
+  }
+  if (!response.content.trimStart().startsWith(DRAFT_PREAMBLE)) {
+    deps.logger.warn({ kind, model: resolved.model }, 'deep-dive drafting: draft does not open with the preamble');
+  }
   return { text: response.content, costUsd };
 }
 
-/** One powerful-tier call per draft, in order; throws on the first failure. */
+/**
+ * One powerful-tier call per draft, in order. Throws a DraftError on the first failure, with
+ * `spendUsd` covering every call made so far (the failed one included when it was billed).
+ */
 export async function draftDocuments(
   deps: DraftDeps,
   inputs: DraftInputs,
@@ -132,9 +156,16 @@ export async function draftDocuments(
   const drafts = {} as Record<DraftKind, string>;
   let spendUsd = 0;
   for (const kind of DRAFT_KINDS) {
-    const { text, costUsd } = await draftOne(deps, kind, inputs);
-    drafts[kind] = text;
-    spendUsd += costUsd;
+    let result: { text: string; costUsd: number };
+    try {
+      result = await draftOne(deps, kind, inputs);
+    } catch (err) {
+      const failedCost = err instanceof DraftError ? err.spendUsd : 0;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new DraftError(message, spendUsd + failedCost, { cause: err });
+    }
+    drafts[kind] = result.text;
+    spendUsd += result.costUsd;
   }
   deps.logger.info({ spendUsd }, 'deep-dive drafting: drafts written');
   return { drafts, spendUsd };

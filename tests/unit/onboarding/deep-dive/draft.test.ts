@@ -9,11 +9,13 @@ import type { WorkingDocsRepo } from '../../../../src/db/working-docs-repo.js';
 import type { WritingVoice } from '../../../../src/executive/types.js';
 import {
   CALENDAR_RULES_PATH,
+  DraftError,
   draftDocuments,
   readDraftInputs,
   type DraftInputs,
 } from '../../../../src/onboarding/deep-dive/draft.js';
 import {
+  CHECK_WITH_YOU_HEADING,
   DRAFT_PREAMBLE,
   PRIORITIES_QUESTION,
   PROMPT_TOP_CORRESPONDENTS,
@@ -195,6 +197,15 @@ describe('draftDocuments', () => {
     const priorities = prompts.find((p) => p.includes('time-and-priorities'))!;
     expect(priorities).toContain(PRIORITIES_QUESTION);
     expect(priorities).toMatch(/do not (state|infer).*goals/i);
+    expect(priorities).toContain(`Put the \`${CHECK_WITH_YOU_HEADING}\` section before the closing question.`);
+    expect(priorities).toContain(`The document's last line is this question on its own line, exactly: ${PRIORITIES_QUESTION}`);
+  });
+
+  it('uses research-brief items marked confirmed or corrected, in their corrected form', async () => {
+    const { deps, promptOf } = setup();
+    await draftDocuments(deps, inputs());
+    expect(promptOf(0)).toContain('Use only items marked confirmed or corrected, and for a corrected item use the corrected version.');
+    expect(promptOf(0)).toContain('Ignore unmarked and dropped items.');
   });
 
   it('passes existing rules so conflicts can be flagged', async () => {
@@ -240,6 +251,30 @@ describe('draftDocuments', () => {
       provenance: { requestedModel: req.model ?? '', actualModel: req.model ?? '', providerRequestId: 'r' },
     }));
     await expect(draftDocuments(deps, inputs())).rejects.toThrow(/non-text/);
+  });
+
+  it('throws on an empty draft, as when reasoning uses the whole output cap', async () => {
+    const { deps } = setup((req) => textResponse(req, '  \n '));
+    await expect(draftDocuments(deps, inputs())).rejects.toThrow(/empty response/);
+  });
+
+  it('attaches the spend so far when a later draft fails', async () => {
+    let n = 0;
+    const { deps, estimateCost } = setup((req) => {
+      n++;
+      if (n < 3) return textResponse(req, `${DRAFT_PREAMBLE}\n# draft`);
+      return { type: 'error', error: { type: 'provider_error', source: 'fake', message: 'overloaded', retryable: true, context: {}, timestamp: new Date() } } as unknown as LLMResponse;
+    });
+    const err = await draftDocuments(deps, inputs()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DraftError);
+    expect((err as DraftError).message).toMatch(/overloaded/);
+    expect((err as DraftError).spendUsd).toBeCloseTo(estimateCost(POWERFUL, USAGE) * 2, 10);
+  });
+
+  it('counts a billed empty draft in the spend it reports', async () => {
+    const { deps, estimateCost } = setup((req) => textResponse(req, ''));
+    const err = await draftDocuments(deps, inputs()).catch((e: unknown) => e);
+    expect((err as DraftError).spendUsd).toBeCloseTo(estimateCost(POWERFUL, USAGE), 10);
   });
 
   it('throws on a provider error', async () => {

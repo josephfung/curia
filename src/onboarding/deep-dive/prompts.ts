@@ -95,7 +95,7 @@ const KIND_INSTRUCTIONS: Record<DraftKind, string[]> = {
   'time-and-priorities': [
     'Draft the "time-and-priorities" document: where the principal\'s time and attention went in the window, by person, organisation and recurring meeting, in calendar hours and messages.',
     'Describe only what the data shows. Do not state, infer or suggest goals or priorities: the principal names those.',
-    `End the document with this question on its own line, exactly: ${PRIORITIES_QUESTION}`,
+    `Put the \`${CHECK_WITH_YOU_HEADING}\` section before the closing question. The document's last line is this question on its own line, exactly: ${PRIORITIES_QUESTION}`,
   ],
   'writing-voice': [
     'Draft the "writing-voice" document: how the principal writes, from the sent-mail sample.',
@@ -110,7 +110,7 @@ const SHARED_RULES = [
   'Output the document as markdown, with no code fence and nothing before or after it.',
   `The first line is exactly: ${DRAFT_PREAMBLE}`,
   'Base every statement on the data. Do not invent people, meetings, numbers or habits.',
-  'The research brief is background found before Curia met the principal. Use only items the brief marks as confirmed; ignore every other item.',
+  'The research brief is background found before Curia met the principal; the principal marks each item confirmed, corrected or dropped. Use only items marked confirmed or corrected, and for a corrected item use the corrected version. Ignore unmarked and dropped items.',
   `Compare what you draft with the principal's stated preferences and working hours, and with the existing inbox rules, calendar rules and voice profile. Never replace or resolve any of them: list each contradiction or conflict under a \`${CHECK_WITH_YOU_HEADING}\` heading near the end, one bullet each, naming both sides. If there are none, write "Nothing to check." under that heading.`,
   'If coverage.truncated is true, the scan stopped early (a cap or errors), so older mail may be missing: say near the top which period the data covers (the window, and that it is incomplete).',
   'If there is too little history to go on (only a handful of messages or events), say so plainly and keep the document short rather than guessing.',
