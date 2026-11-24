@@ -518,6 +518,14 @@ describe('onboarding-progress', () => {
       const done = await w.run({ op: 'topic_done', topic_id: 'review-rules', outcome: 'done', note: 'Confirmed.' });
       expect(done).toMatchObject({ success: true, data: { topicId: 'review-rules' } });
       expect(rules!.status).toBe('done');
+
+      // A turn bound to onboarding itself still works on onboarding, not on 'dd'.
+      const opened = await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' }, w.bound('parent'));
+      expect(opened.success).toBe(true);
+      const rhythm = w.tasks.find((t) => t.tags.includes('onboarding:topic:propose-rhythm'))!;
+      expect(rhythm.parentTaskId).toBe('parent');
+      const rhythmDone = await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'Weekly.' }, w.bound(rhythm.id));
+      expect(rhythmDone).toMatchObject({ success: true, data: { topicId: 'propose-rhythm' } });
     });
 
     it('a deep-dive tag on a task onboarding did not make does not count', async () => {

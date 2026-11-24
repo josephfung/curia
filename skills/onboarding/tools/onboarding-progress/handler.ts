@@ -106,17 +106,16 @@ function isDeepDiveTask(task: TaskRow): boolean {
 
 /**
  * The task this call works on: the turn's own task's root when it is an open deep-dive review
- * task; else the open onboarding task while its Review topics are still to come (as the hand-off
- * decides, so both pick the same task); else the open deep-dive review task (a principal's reply
- * that arrived bound to no task); else the open onboarding task.
+ * task or the open onboarding task; else the open onboarding task while its Review topics are
+ * still to come (as the hand-off decides, so both pick the same task); else the open deep-dive
+ * review task (a principal's reply that arrived bound to no task); else the open onboarding task.
  */
 async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow | null> {
   const bound = boundTaskFromMetadata(ctx.taskMetadata);
-  if (bound) {
-    const root = await rootTask(repo, bound.taskId, ctx.log);
-    if (root && isDeepDiveTask(root) && isOpenTask(root)) return root;
-  }
+  const root = bound ? await rootTask(repo, bound.taskId, ctx.log) : null;
+  if (root && isDeepDiveTask(root) && isOpenTask(root)) return root;
   const onboarding = await findOpenOnboardingTask(repo);
+  if (onboarding && root?.id === onboarding.id) return onboarding;
   if (onboarding && (await reviewStillAhead(repo, onboarding.id, ctx.log))) return onboarding;
   // Open ones only, filtered in the query: closed review tasks must not crowd the open one off the page.
   const reviews = await repo.listTasks({ tag: DEEP_DIVE_TASK_TAG, statuses: OPEN_STATUSES, createdBy: ONBOARDING_CREATED_BY, limit: 10 });
