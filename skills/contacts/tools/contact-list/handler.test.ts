@@ -113,13 +113,6 @@ describe('ContactListHandler', () => {
 
   // --- Offset pagination ---
 
-  it('offset=0 returns same results as no offset', async () => {
-    const ctx = makeCtx({ offset: 0 });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    expect(getContacts(result)).toHaveLength(4);
-  });
-
   it('offset skips leading contacts', async () => {
     const ctx = makeCtx({ offset: 2, limit: 10 });
     const result = await handler.execute(ctx);

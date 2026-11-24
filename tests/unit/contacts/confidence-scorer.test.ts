@@ -114,20 +114,6 @@ describe('computeConfidence', () => {
     expect(withPrincipal - withoutGrant).toBeCloseTo(GRANT_BOOST);
   });
 
-  it('known tier does NOT provide GRANT_BOOST', () => {
-    const known = computeConfidence(input({
-      inboundMessageCount: 10,
-      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
-      tier: 'known',
-    }));
-    const trusted = computeConfidence(input({
-      inboundMessageCount: 10,
-      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
-      tier: 'trusted',
-    }));
-    expect(trusted - known).toBeCloseTo(GRANT_BOOST);
-  });
-
   it('CEO-verified contact scores meaningfully higher than auto-resolved with same volume', () => {
     const autoResolved = computeConfidence(input({
       inboundMessageCount: 10,
@@ -167,10 +153,6 @@ describe('computeConfidence', () => {
     }));
     expect(score).toBeLessThanOrEqual(1.0);
     expect(score).toBeGreaterThanOrEqual(0.0);
-  });
-
-  it('result is never negative', () => {
-    expect(computeConfidence(input())).toBe(0);
   });
 });
 

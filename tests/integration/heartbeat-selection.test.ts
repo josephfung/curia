@@ -96,12 +96,24 @@ describeIf('selectHeartbeatCandidates', () => {
     expect(got).toHaveLength(0);
   });
 
-  it('excludes a task blocked by an unfinished task', async () => {
-    const blocker = await seedTask(pool, { title: 'blocker', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
-    await seedTask(pool, { title: 'blocked', status: 'blocked', sourceAgentId: 'ceo-inbox', blockedBy: blocker, updatedAt: hoursAgo(10) });
-    const got = await selectHeartbeatCandidates(pool, opts);
-    // only the blocker (open, idle) is eligible; the blocked child is excluded
-    expect(got.map((c) => c.id)).toEqual([blocker]);
+  it('excludes an otherwise eligible stale task blocked by an unfinished task', async () => {
+    const agentId = 'heartbeat-blocker-test';
+    const blocker = await seedTask(pool, {
+      title: 'blocker',
+      status: 'open',
+      sourceAgentId: agentId,
+      updatedAt: hoursAgo(1),
+    });
+    const child = await seedTask(pool, {
+      title: 'blocked',
+      status: 'blocked',
+      sourceAgentId: agentId,
+      blockedBy: blocker,
+      updatedAt: hoursAgo(opts.staleWaitThresholdHours + 12),
+    });
+    // A dedicated agent keeps unrelated tasks out of the child's per-agent result slot.
+    const got = await selectHeartbeatCandidates(pool, { ...opts, eligibleAgents: [agentId] });
+    expect(got.map((c) => c.id)).not.toContain(child);
   });
 
   it('includes a blocked task once its blocker is done (stale-wait path)', async () => {

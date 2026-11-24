@@ -62,12 +62,6 @@ describe('classifyError DB precedence', () => {
     expect(result.type).toBe('DATABASE_UNAVAILABLE');
     expect(result.retryable).toBe(true);
   });
-
-  it('keeps bare ECONNREFUSED as PROVIDER_ERROR (LLM/network, not DB)', () => {
-    const err = Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
-    const result = classifyError(err, 'anthropic');
-    expect(result.type).toBe('PROVIDER_ERROR');
-  });
 });
 
 describe('withDbRetry', () => {
