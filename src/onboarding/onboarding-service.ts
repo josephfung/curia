@@ -55,7 +55,7 @@ import {
   PRINCIPAL_RESTART_EXIT_DELAY_SECONDS,
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
-import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
+import { notifyOperator, type OperatorEvent, type OperatorNotifier, type OperatorNotice } from './notify-operator.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import type { DeepDiveService } from './deep-dive/service.js';
 import { isRunning as isDeepDiveRunning, readDeepDiveState } from './deep-dive/state.js';
@@ -276,6 +276,19 @@ export class OnboardingService {
       notice,
     );
     return { alreadyRaised: false, recorded };
+  }
+
+  /**
+   * Raise an operator notice on a standalone deep-dive review task (#2362). That task belongs to
+   * no onboarding run, so there is no run state to dedupe against: each call records the note and
+   * emails once. The tool lets the model raise only the notices it alone can see.
+   */
+  async raiseReviewTaskNotice(taskId: string, event: OperatorEvent, notice: OperatorNotice = {}): Promise<{ recorded: boolean }> {
+    const { taskRepo, logger, operatorNotifier } = this.deps;
+    const result = operatorNotifier
+      ? await operatorNotifier(taskId, event, notice)
+      : await notifyOperator({ taskRepo, logger }, taskId, event, notice);
+    return { recorded: result.recorded };
   }
 
   async status(): Promise<OnboardingStatus> {

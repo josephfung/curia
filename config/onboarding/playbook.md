@@ -119,11 +119,24 @@ I need to agree what happens next so {principal} is never left waiting.
 
 # Review <!-- session: review -->
 
-## Walk through the drafts <!-- topic: walk-drafts -->
-I need to learn from {principal}'s reaction to real work. I go through the
-drafts I made, one at a time, and adjust to what they tell me.
+## Working rules <!-- topic: review-rules -->
+I need {principal} to check the rules I drafted from how they handle their
+mail and calendar before I follow any of them.
+For the document: confirm / correct / set aside.
+- Which of these rules are right as written?
+- Which should change, and which should go?
+
+## Time and priorities <!-- topic: review-priorities -->
+Here's where your time went. What are you actually trying to move?
+I need to learn what {principal} is trying to move, so I weigh work against
+it. For the document: confirm / correct / set aside.
+- Are these the right priorities, in the right order?
+- Is anything taking time it should not?
+
+## Writing voice <!-- topic: review-voice -->
+I need {principal} to check how I described the way they write before I
+write like them. For the document: confirm / correct / set aside.
 - Is this how you would have said it?
-- Too long, too short, too formal, too casual?
 - Anything I should never write, or always write?
 
 ## Next step <!-- topic: next-step -->

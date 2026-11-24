@@ -5,14 +5,15 @@
 // onboarding) it goes on a standalone coordinator task tagged `deep-dive`, with the onboarding
 // skill active, so the review works the same way. That task's id is recorded the moment it is
 // created, so a resumed run reuses it rather than making a second. Then the Review session's
-// topics are opened, the task gets a note naming the drafts and is woken, and the run is
-// `delivered`.
+// topics are opened, the run is `delivered`, and the task gets a note naming the drafts and is
+// woken. A note or wake that fails then leaves the run delivered and tells the operator
+// (`deep_dive_delivery_failed`): the drafts exist, only the hand-off was lost.
 
 import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
-import { ONBOARDING_CREATED_BY } from '../constants.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY } from '../constants.js';
 import { findOpenOnboardingTask } from '../state.js';
 import { isOpenTask } from '../subtasks.js';
 import { noteAndWakeCoordinator } from '../subscribers.js';
@@ -24,8 +25,7 @@ import type { DeepDiveState } from './state.js';
 
 /** The playbook session whose topics review the drafts. */
 export const REVIEW_SESSION = 'review';
-/** Tag of the standalone review task made when no onboarding is open. */
-export const DEEP_DIVE_TASK_TAG = 'deep-dive';
+export { DEEP_DIVE_TASK_TAG };
 const ONBOARDING_SKILL = 'onboarding';
 
 /** A window bound as the principal's local date (the UTC date if the zone is unusable). */
@@ -64,14 +64,22 @@ export async function handoffStage(
     );
   }
 
-  // Re-check before telling anyone: a superseded run must not announce its drafts.
-  await advance((s) => s);
-  await noteAndWakeCoordinator(
-    { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
-    parent,
-    handoffNote(summary, state.backfilled ?? 0, deps.timezone()),
-  );
-  return advance((s) => ({ ...s, status: 'delivered', reviewTaskId: parent.id }));
+  // Delivered before anyone is told. The write is guarded, so a superseded run stops here and never
+  // announces its drafts; and a note or wake that fails after it cannot fail a run whose drafts are
+  // written. That failure is a delivery problem: the operator hears deep_dive_delivery_failed.
+  const delivered = await advance((s) => ({ ...s, status: 'delivered', reviewTaskId: parent.id }));
+  try {
+    await noteAndWakeCoordinator(
+      { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
+      parent,
+      handoffNote(summary, state.backfilled ?? 0, deps.timezone()),
+    );
+  } catch (err) {
+    logger.error({ err, taskId: parent.id }, 'deep-dive: drafts written, but the ready note or the coordinator wake failed');
+    // The notifier never throws: it records its own note and logs a failed send.
+    if (deps.notifyOperator) await deps.notifyOperator(parent.id, 'deep_dive_delivery_failed');
+  }
+  return delivered;
 }
 
 /**

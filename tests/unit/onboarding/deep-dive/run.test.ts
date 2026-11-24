@@ -309,6 +309,46 @@ describe('runDeepDive', () => {
     });
   });
 
+  it('records delivered before it notes the drafts or wakes the coordinator', async () => {
+    const t = setup({ openTask: true, docs: { [SUMMARY_PATH]: summaryDoc() } });
+    await t.seed(drafting);
+    let statusAtNote: string | undefined;
+    t.taskRepo.updateTask.mockImplementation(async () => {
+      statusAtNote = (await t.read())?.status;
+      return {};
+    });
+    let statusAtWake: string | undefined;
+    t.scheduler.enqueueTaskWake.mockImplementation(async () => {
+      statusAtWake = (await t.read())?.status;
+      return {};
+    });
+    await runDeepDive(t.deps, drafting);
+    expect(statusAtNote).toBe('delivered');
+    expect(statusAtWake).toBe('delivered');
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'onb-1' });
+  });
+
+  it('a hand-off note that fails leaves the run delivered and tells the operator deep_dive_delivery_failed', async () => {
+    const t = setup({ openTask: true, docs: { [SUMMARY_PATH]: summaryDoc() } });
+    await t.seed(drafting);
+    t.taskRepo.updateTask.mockRejectedValueOnce(new Error('db blip'));
+    await runDeepDive(t.deps, drafting);
+    // The drafts are written: a lost note is a delivery problem, not a failed run.
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'onb-1', draftPaths: ALL_DRAFTS, error: null });
+    expect(t.notifyOperator).toHaveBeenCalledTimes(1);
+    expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_delivery_failed');
+  });
+
+  it('a wake that fails after the note also leaves the run delivered, with the delivery notice', async () => {
+    const t = setup({ docs: { [SUMMARY_PATH]: summaryDoc() } });
+    await t.seed(drafting);
+    t.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
+    await runDeepDive(t.deps, drafting);
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
+    expect(t.notifyOperator).toHaveBeenCalledWith('review-1', 'deep_dive_delivery_failed');
+    expect(t.notifyOperator).not.toHaveBeenCalledWith(expect.anything(), 'deep_dive_failed');
+  });
+
   it('creates one standalone deep-dive task when onboarding is closed', async () => {
     const t = setup({ docs: { [SUMMARY_PATH]: summaryDoc(summary({ coverage: { ...summary().coverage, truncated: true } })) } });
     await t.seed(drafting);

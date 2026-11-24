@@ -24,6 +24,7 @@ export const OPERATOR_EVENTS = [
   'web_search_failed',
   'mailbox_signin_blocked',
   'deep_dive_failed',
+  'deep_dive_delivery_failed',
 ] as const;
 export type OperatorEvent = (typeof OPERATOR_EVENTS)[number];
 
@@ -142,6 +143,15 @@ function noticeText(
           "Curia's one-time review of the principal's mail and calendar history stopped with an error.",
           '',
           "Onboarding carries on without it. The cause is in Curia's logs.",
+        ],
+      };
+    case 'deep_dive_delivery_failed':
+      return {
+        subject: 'Curia onboarding: the mailbox history drafts could not be handed over',
+        lines: [
+          "Curia reviewed the principal's mail and calendar history and wrote its drafts, but could not hand them over for review.",
+          '',
+          'The drafts are saved in Curia under /meetings/onboarding/deep-dive/ and can be opened from the Documents page in the console.',
         ],
       };
   }
