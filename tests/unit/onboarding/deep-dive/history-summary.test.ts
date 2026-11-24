@@ -94,6 +94,45 @@ describe('summarise', () => {
     expect(s.meetingShape.medianMinutes).toBe(60);
   });
 
+  describe("recurring series need the principal's participation", () => {
+    const ME = 'ceo@acme.example.com';
+    const START = DateTime.fromISO('2026-10-05T10:00', { zone: 'America/Toronto' }); // a Monday
+    // Four weekly occurrences of one series; `status(i)` is the principal's answer to occurrence i.
+    function series(id: string, status: (i: number) => string | null, organizerEmail?: string): NylasCalendarEvent[] {
+      return Array.from({ length: 4 }, (_, i) => ({
+        id: `${id}-${i}`, masterEventId: id, title: `Series ${id}`, description: '', location: '',
+        startTime: START.plus({ weeks: i }).toSeconds(), endTime: START.plus({ weeks: i, minutes: 30 }).toSeconds(),
+        startDate: null, endDate: null,
+        participants: [
+          ...(status(i) === null ? [] : [{ email: ME, name: 'Avery', status: status(i)! }]),
+          { email: `guest-${id}@example.net`, name: '', status: 'yes' },
+        ],
+        conferencing: null, status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
+        ...(organizerEmail ? { organizerEmail } : {}),
+      }));
+    }
+    const recurringIds = (events: NylasCalendarEvent[]) =>
+      summarise(input({ messages: [], sentBodies: [], events })).recurringMeetings.map((r) => r.seriesId).sort();
+
+    it('drops a series the principal never answered or was never on', () => {
+      expect(recurringIds([...series('unanswered', () => 'noreply'), ...series('absent', () => null)])).toEqual([]);
+    });
+
+    it('drops a series the principal declined every time, so its attendees reach no backfill', () => {
+      const events = series('declined', () => 'no', 'spam@example.org');
+      const s = summarise(input({ messages: [], sentBodies: [], events }));
+      expect(s.recurringMeetings).toEqual([]);
+    });
+
+    it('keeps a series the principal organised, even with no answer recorded', () => {
+      expect(recurringIds(series('mine', () => 'noreply', 'CEO@acme.example.com'))).toEqual(['mine']);
+    });
+
+    it('keeps a series the principal accepted at least once', () => {
+      expect(recurringIds(series('once', (i) => (i === 2 ? 'yes' : 'noreply')))).toEqual(['once']);
+    });
+  });
+
   it('finds a kept-clear Friday-afternoon block', () => {
     const zone = 'America/Toronto';
     const events: NylasCalendarEvent[] = [];

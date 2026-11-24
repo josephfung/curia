@@ -8,6 +8,7 @@
 // topics are opened, the task gets a note naming the drafts and is woken, and the run is
 // `delivered`.
 
+import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
@@ -27,11 +28,16 @@ export const REVIEW_SESSION = 'review';
 export const DEEP_DIVE_TASK_TAG = 'deep-dive';
 const ONBOARDING_SKILL = 'onboarding';
 
+/** A window bound as the principal's local date (the UTC date if the zone is unusable). */
+function localDate(iso: string, timezone: string): string {
+  return DateTime.fromISO(iso, { zone: timezone }).toISODate() ?? iso.slice(0, 10);
+}
+
 /** The progress note that tells the coordinator the drafts are ready. */
-export function handoffNote(summary: HistorySummary, backfilled: number): string {
+export function handoffNote(summary: HistorySummary, backfilled: number, timezone: string): string {
   const paths = DRAFT_KINDS.map((k) => DRAFT_PATHS[k]).join(', ');
   const coverage =
-    `${summary.window.from.slice(0, 10)}–${summary.window.to.slice(0, 10)}` +
+    `${localDate(summary.window.from, timezone)}–${localDate(summary.window.to, timezone)}` +
     (summary.coverage.truncated ? ', truncated' : '');
   return (
     `Deep-dive drafts ready: ${paths}. Contacts added: ${backfilled}. Coverage: ${coverage}. ` +
@@ -63,7 +69,7 @@ export async function handoffStage(
   await noteAndWakeCoordinator(
     { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
     parent,
-    handoffNote(summary, state.backfilled ?? 0),
+    handoffNote(summary, state.backfilled ?? 0, deps.timezone()),
   );
   return advance((s) => ({ ...s, status: 'delivered', reviewTaskId: parent.id }));
 }

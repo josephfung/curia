@@ -3528,6 +3528,8 @@ async function main(): Promise<void> {
     workingDocsRepo,
     taskRepo,
     contactService,
+    // Curia's own addresses, boot accounts and any added since (as the inbox filter reads them).
+    officeAddresses: async () => [...resolvedEmailAccounts.map((a) => a.selfEmail), ...(await curiaEmailAddresses())],
     // onboardingService is built below with this service; the hand-off only calls it at run time.
     onboardingService: { openSession: (parent, sessionId) => onboardingService.openSession(parent, sessionId) },
     scheduler: schedulerService,

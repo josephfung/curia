@@ -71,7 +71,7 @@ export interface OperatorNoticeResult {
 }
 
 /** A notice to send, bound to its delivery deps. Injected where the gateway is not in reach. */
-export type OperatorNotifier = (taskId: string, event: OperatorEvent, notice?: OperatorNotice) => Promise<OperatorNoticeResult>;
+export type OperatorNotifier = (taskId: string | null, event: OperatorEvent, notice?: OperatorNotice) => Promise<OperatorNoticeResult>;
 
 /** Bind the delivery deps, so a caller that only knows the task and the event can send one. */
 export function createOperatorNotifier(deps: NotifyOperatorDeps): OperatorNotifier {
@@ -149,21 +149,25 @@ function noticeText(
 
 /**
  * Record an operator notice on the onboarding task and email it to the operator. Never throws.
+ * `taskId` null (a deep dive that failed with no task to note it on, #2362): nothing is recorded
+ * on a task, `recorded` is false, and the notice is still logged, emailed and audited.
  * `recorded` is false when the progress note could not be written (logged). The email is
  * best-effort beside the record: a failed send is logged, and does not un-record the notice. The audit call is best-effort too: once the note is written
  * the notice counts as recorded.
  */
 export async function notifyOperator(
   deps: NotifyOperatorDeps,
-  taskId: string,
+  taskId: string | null,
   event: OperatorEvent,
   notice: OperatorNotice = {},
 ): Promise<OperatorNoticeResult> {
-  try {
-    await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
-  } catch (err) {
-    deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
-    return { recorded: false };
+  if (taskId !== null) {
+    try {
+      await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
+    } catch (err) {
+      deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
+      return { recorded: false };
+    }
   }
   // Detail values can carry model-supplied text, so logs and audit get the key names only
   // (review checklist: ids and counts, not content). Only typed facts are emailed.
@@ -195,5 +199,5 @@ export async function notifyOperator(
     // Best-effort: the notice is already on the task; a failed audit must not report it unrecorded.
     deps.logger.error({ err, taskId, event }, 'onboarding: operator notice audit failed — the notice is recorded on the task');
   }
-  return { recorded: true };
+  return { recorded: taskId !== null };
 }

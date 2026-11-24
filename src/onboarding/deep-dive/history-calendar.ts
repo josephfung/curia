@@ -67,6 +67,15 @@ function principalDeclined(e: NylasCalendarEvent, principal: ReadonlySet<string>
   return e.participants.some((p) => principal.has(normaliseAddress(p.email)) && p.status === 'no');
 }
 
+/**
+ * Whether the principal took part in the event: organised it, or accepted it. An invite nobody
+ * answered (or declined) is anyone's to send, so it says nothing about the principal's routine.
+ */
+function principalJoined(e: NylasCalendarEvent, principal: ReadonlySet<string>): boolean {
+  if (e.organizerEmail !== undefined && principal.has(normaliseAddress(e.organizerEmail))) return true;
+  return e.participants.some((p) => principal.has(normaliseAddress(p.email)) && p.status === 'yes');
+}
+
 function wasMoved(e: NylasCalendarEvent): boolean {
   return e.originalStartTime !== undefined && e.startTime !== null && e.originalStartTime !== e.startTime;
 }
@@ -116,6 +125,9 @@ function recurring(events: readonly Timed[], attended: ReadonlySet<string>, prin
   for (const [seriesId, list] of bySeries) {
     const starts = [...new Set(list.map((e) => e.startTime))].sort((a, b) => a - b);
     if (starts.length < RECURRING_MIN_OCCURRENCES) continue;
+    // Security: a series the principal never organised or accepted is an outsider's invite. Kept,
+    // its attendees would become contacts and its title would reach the drafting prompt.
+    if (!list.some((e) => principalJoined(e, principal))) continue;
     const latest = [...list].sort((a, b) => b.startTime - a.startTime || compareStrings(a.id, b.id))[0]!;
     const minutes = median(list.map(minutesOf)) ?? 0;
     const attendees = new Set<string>();

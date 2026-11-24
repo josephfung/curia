@@ -115,7 +115,9 @@ count for nothing except declined/moved.
 
 - **Recurring meetings:** timed events grouped by `masterEventId`, or by their own id when
   they carry `recurrence` (a master). A group with ≥ 3 distinct start times in the window
-  counts. `cadence` from the median gap between consecutive starts: ≤ 1.5 days `daily`,
+  counts, but only when the principal organised the series (`organizerEmail`) or accepted
+  (`yes`) at least one occurrence: an unanswered or declined invite is an outsider's, and its
+  attendees and title must not reach the backfill or the drafts. `cadence` from the median gap between consecutive starts: ≤ 1.5 days `daily`,
   5.5–8.5 `weekly`, 12.5–15.5 `biweekly`, 26–35 `monthly`, else `every N days`.
   `minutesPerOccurrence` = median duration. `title` = the latest occurrence's title.
   `attendees` = non-principal, non-declining participants across occurrences, sorted. Ordered

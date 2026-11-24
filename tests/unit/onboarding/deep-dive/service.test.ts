@@ -46,6 +46,7 @@ function setup(opts: { mailboxIds?: string[]; run?: (s: DeepDiveState) => Promis
     workingDocsRepo: {} as never,
     taskRepo: {} as never,
     contactService: {} as never,
+    officeAddresses: async () => [],
     onboardingService: {} as never,
     scheduler: {} as never,
     providerRouter: {} as never,

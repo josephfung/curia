@@ -11,12 +11,18 @@ import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { classifyEmailSender, deriveOrgLabelFromDomain } from '../../contacts/contact-service.js';
 import { isNonOrgDomain } from '../../contacts/non-org-domains.js';
+import { normalizeForComparison } from '../../channels/email/message-converter.js';
 import { BACKFILL_CAP } from './limits.js';
 import type { HistorySummary } from './history-summary.js';
 import { domainOf, normaliseAddress } from './summary-util.js';
 
 export interface BackfillDeps {
   contactService: Pick<ContactService, 'resolveByChannelIdentity' | 'createContactWithKgOutcome' | 'linkIdentity' | 'deleteContact'>;
+  /**
+   * Curia's own mailbox addresses (every account, disabled ones included). Never a contact: the
+   * email adapter skips the office's own address the same way, plus-addresses included.
+   */
+  officeAddresses: () => Promise<string[]>;
   logger: Logger;
 }
 
@@ -34,9 +40,11 @@ const RESOURCE_DOMAIN = 'resource.calendar.google.com';
  * The correspondents who write both ways (people only), busiest first, then the recurring-meeting
  * attendees not already listed, in the order of how many recurring meetings they attend.
  */
-function candidatesOf(summary: HistorySummary): Candidate[] {
+function candidatesOf(summary: HistorySummary, officeAddresses: readonly string[]): Candidate[] {
   const principal = new Set(summary.principalAddresses.map(normaliseAddress));
-  const usable = (email: string): boolean => email !== '' && !principal.has(email) && domainOf(email) !== RESOURCE_DOMAIN;
+  const office = new Set(officeAddresses.map(normalizeForComparison));
+  const usable = (email: string): boolean =>
+    email !== '' && !principal.has(email) && !office.has(normalizeForComparison(email)) && domainOf(email) !== RESOURCE_DOMAIN;
   const out = new Map<string, Candidate>();
 
   const people = summary.correspondents
@@ -67,7 +75,7 @@ export async function backfillContacts(
   summary: HistorySummary,
 ): Promise<{ created: number; existing: number; skipped: number }> {
   const { contactService, logger } = deps;
-  const all = candidatesOf(summary);
+  const all = candidatesOf(summary, await deps.officeAddresses());
   let created = 0;
   let existing = 0;
   let skipped = 0;
@@ -112,7 +120,8 @@ export async function backfillContacts(
         skipped++;
       }
     } catch (err) {
-      logger.warn({ err }, 'deep-dive backfill: skipped a candidate after an error');
+      // The address stays out of the log: the candidate's place and source identify it well enough.
+      logger.warn({ err, index, source }, 'deep-dive backfill: skipped a candidate after an error');
       skipped++;
     }
   }

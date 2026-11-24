@@ -63,6 +63,8 @@ export interface RunDeps {
   taskRepo: Pick<TaskRepo, 'listTasks' | 'updateTask' | 'getTask' | 'createTask' | 'setActiveSkillsBlock'>;
   /** The contacts backfill writes through it. */
   contactService: BackfillDeps['contactService'];
+  /** Curia's own mailbox addresses: never backfilled as contacts. */
+  officeAddresses: BackfillDeps['officeAddresses'];
   /** The hand-off opens the Review session's topics on the review task. */
   onboardingService: Pick<OnboardingService, 'openSession'>;
   /** The hand-off wakes the coordinator on the review task. */
@@ -206,7 +208,7 @@ async function backfillStage(
     return state;
   }
   const result = await withHeartbeat(deps, state.startedAt, now, () =>
-    backfillContacts({ contactService: deps.contactService, logger }, summary),
+    backfillContacts({ contactService: deps.contactService, officeAddresses: deps.officeAddresses, logger }, summary),
   );
   logger.info(result, 'deep-dive: contacts backfilled');
   return advance((s) => ({ ...s, backfilled: result.created }));
@@ -262,7 +264,13 @@ async function draftStage(
     } catch (err) {
       if (err instanceof DraftError && err.spendUsd > 0) {
         const spent = err.spendUsd;
-        await advance((s) => ({ ...s, spendUsd: s.spendUsd + spent }));
+        try {
+          await advance((s) => ({ ...s, spendUsd: s.spendUsd + spent }));
+        } catch (recordErr) {
+          if (recordErr instanceof SupersededError) throw recordErr;
+          // The draft's own error is what the run fails with; a lost spend write must not hide it.
+          logger.error({ err: recordErr, spendUsd: spent, kind }, 'deep-dive: could not record the failed draft\'s spend');
+        }
       }
       throw err;
     }
@@ -388,7 +396,7 @@ async function recordFailure(deps: RunDeps, startedAt: string, err: unknown, now
     logger.warn({ startedAt }, 'deep-dive: the failed run was superseded or finished; state left as is');
     return;
   }
-  let task: { id: string } | null;
+  let task: { id: string } | null = null;
   try {
     task = await findOpenOnboardingTask(deps.taskRepo);
     if (!task && marked.reviewTaskId !== null) {
@@ -396,24 +404,24 @@ async function recordFailure(deps: RunDeps, startedAt: string, err: unknown, now
       task = review && isOpenTask(review) ? review : null;
     }
   } catch (lookupErr) {
-    logger.error({ err: lookupErr, startedAt }, 'deep-dive: could not look up the task to note the failure on; no failure notice sent');
-    return;
+    logger.error({ err: lookupErr, startedAt }, 'deep-dive: could not look up the task to note the failure on');
   }
-  if (!task) {
-    logger.error({ startedAt }, 'deep-dive: run failed with no onboarding or review task open; no notice sent');
-    return;
+  if (task) {
+    try {
+      await noteAndWakeCoordinator(
+        { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
+        task,
+        failureNote(marked.draftPaths),
+      );
+    } catch (noteErr) {
+      logger.error({ err: noteErr, taskId: task.id }, 'deep-dive: could not note the failure or wake the coordinator');
+    }
+  } else {
+    logger.error({ startedAt }, 'deep-dive: run failed with no onboarding or review task to note it on');
   }
-  try {
-    await noteAndWakeCoordinator(
-      { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
-      task,
-      failureNote(marked.draftPaths),
-    );
-  } catch (noteErr) {
-    logger.error({ err: noteErr, taskId: task.id }, 'deep-dive: could not note the failure or wake the coordinator');
-  }
+  // Every failure reaches the operator; with no task the notice is emailed but noted nowhere.
   if (deps.notifyOperator) {
     // The notifier never throws: it records its own note and logs a failed send.
-    await deps.notifyOperator(task.id, 'deep_dive_failed');
+    await deps.notifyOperator(task?.id ?? null, 'deep_dive_failed');
   }
 }

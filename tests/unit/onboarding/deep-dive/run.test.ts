@@ -164,6 +164,7 @@ function setup(opts: {
     workingDocsRepo,
     taskRepo: taskRepo as never,
     contactService: contactService as never,
+    officeAddresses: async () => ['curia@example.com'],
     onboardingService: onboardingService as never,
     scheduler: scheduler as never,
     providerRouter: { id: 'fake-router' } as never,
@@ -284,7 +285,8 @@ describe('runDeepDive', () => {
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('onb-1', {
       progressNote:
         `Deep-dive drafts ready: ${ALL_DRAFTS.join(', ')}. Contacts added: 2. ` +
-        `Coverage: 2026-08-25–2026-11-23. ${NOTE_TAIL}`,
+        // The window bounds are midnight UTC: in the principal's zone (Toronto) that is the day before.
+        `Coverage: 2026-08-24–2026-11-22. ${NOTE_TAIL}`,
     });
     expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'onb-1', agentId: 'coordinator' }));
     expect(await t.read()).toMatchObject({
@@ -327,7 +329,7 @@ describe('runDeepDive', () => {
     });
     expect(t.onboardingService.openSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'review-1' }), 'review');
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('review-1', {
-      progressNote: expect.stringContaining('Coverage: 2026-08-25–2026-11-23, truncated. Copy each'),
+      progressNote: expect.stringContaining('Coverage: 2026-08-24–2026-11-22, truncated. Copy each'),
     });
     expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'review-1' }));
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
@@ -474,13 +476,47 @@ describe('runDeepDive', () => {
     expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_failed');
   });
 
-  it('marks failed but sends no notice when no onboarding task is open', async () => {
+  it('marks failed and still tells the operator when no task is open to note it on', async () => {
     const t = setup({ openTask: false, scan: async () => { throw new Error('grant revoked'); } });
     await t.seed();
     await runDeepDive(t.deps, running);
     expect((await t.read())?.status).toBe('failed');
-    expect(t.notifyOperator).not.toHaveBeenCalled();
+    expect(t.notifyOperator).toHaveBeenCalledWith(null, 'deep_dive_failed');
     expect(t.taskRepo.updateTask).not.toHaveBeenCalled();
+    expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
+  });
+
+  it('tells the operator when the task to note the failure on cannot be looked up', async () => {
+    const t = setup({ openTask: true, scan: async () => { throw new Error('grant revoked'); } });
+    t.taskRepo.listTasks.mockRejectedValue(new Error('db down'));
+    await t.seed();
+    await runDeepDive(t.deps, running);
+    expect((await t.read())?.status).toBe('failed');
+    expect(t.notifyOperator).toHaveBeenCalledWith(null, 'deep_dive_failed');
+  });
+
+  it('fails with the draft error even when recording its spend fails', async () => {
+    const t = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      draft: async () => { throw new DraftError('deep-dive draft "working-rules" failed: empty response', 0.7); },
+    });
+    await t.seed({ ...drafting, backfilled: 2 });
+    const set = t.configStore.set;
+    let failNext = false;
+    t.draft.mockImplementationOnce(async () => {
+      failNext = true;
+      throw new DraftError('deep-dive draft "working-rules" failed: empty response', 0.7);
+    });
+    t.configStore.set = async (ns: string, k: string, v: string) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('config store down');
+      }
+      return set(ns, k, v);
+    };
+    await runDeepDive(t.deps, { ...drafting, backfilled: 2 });
+    expect(await t.read()).toMatchObject({ status: 'failed', spendUsd: 0, error: expect.stringContaining('empty response') });
   });
 
   it('a failure of a superseded run leaves the newer run alone', async () => {
