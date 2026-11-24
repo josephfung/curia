@@ -203,42 +203,7 @@ expected_behaviors:
     check:
       called: delegate
       with: { agent: calendar }
-      contains: { task: Friday }
       min: 1
-  - id: calendar_rule_is_a_restriction
-    weight: critical
-    description: >
-      The calendar delegation carries a standing restriction (keep the time free of meetings), not
-      a booking such as "schedule a meeting Friday at 1pm".
-    check:
-      any_of:
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "free" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "no meetings" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "block" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "avoid" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "keep clear" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "protect" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "decline" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "don't book" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "do not book" }
   - id: priorities_written
     weight: critical
     description: Writes the priorities to /shared/principal/priorities.md with doc-write.
@@ -253,20 +218,6 @@ expected_behaviors:
       called: executive-profile-update
       contains: { guide: concise, note: deep dive }
       success: true
-  - id: calendar_rule_has_correction
-    weight: important
-    description: The calendar delegation carries the principal's correction, Friday from 1pm.
-    check:
-      any_of:
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "1pm" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "1 pm" }
-        - called: delegate
-          with: { agent: calendar }
-          contains: { task: "13:00" }
   - id: rules_topic_done
     weight: important
     description: Marks the working-rules topic done (corrected counts as done).
@@ -330,6 +281,12 @@ expected_behaviors:
       inbox rules and the Friday-afternoon rule, with the 1pm correction) and asks for a yes,
       and delegates nothing until the principal's explicit yes on the second turn. "Please bring
       them in" is not that yes. The delegations to ceo-inbox and calendar happen after it.
+  - id: calendar_rule_is_the_corrected_restriction
+    weight: critical
+    # Judged, not keyword-matched: a word list can't tell a standing rule from a booking.
+    description: >
+      The calendar delegation asks for a standing rule keeping Friday afternoons free of meetings
+      from 1pm (the principal's correction), not a one-off booking or the draft's noon start.
   - id: receipt_names_where
     weight: nice-to-have
     description: >
