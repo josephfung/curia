@@ -50,8 +50,8 @@ describe('docker-publish retry wiring (#1864)', () => {
   const step = build.steps.find((candidate) => candidate.id === 'build');
 
   it('retries inside the build and assemble steps, so a recovered attempt stays a success', () => {
-    expect(archStep?.run).toBe('bash docker/publish-image.sh');
-    expect(step?.run).toBe('bash docker/assemble-image.sh');
+    expect(archStep?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/publish-image.sh"');
+    expect(step?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/assemble-image.sh"');
     for (const s of [archStep, step]) {
       expect(s?.['continue-on-error']).toBeUndefined();
       expect(s?.if ?? '').not.toMatch(/always\s*\(/);
@@ -84,7 +84,7 @@ describe('docker-publish retry wiring (#1864)', () => {
   // day. The retry must stay inside the sign step for the same reason as above.
   it('signs through the retrying script, inside the step', () => {
     const sign = build.steps.find((candidate) => candidate.run?.includes('sign-image.sh'));
-    expect(sign?.run).toBe('bash docker/sign-image.sh');
+    expect(sign?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/sign-image.sh"');
     expect(sign?.['continue-on-error']).toBeUndefined();
     expect(build.steps.some((candidate) => /^\s*cosign sign\b/m.test(candidate.run ?? ''))).toBe(false);
     const script = readFileSync(join(ROOT, 'docker/sign-image.sh'), 'utf8');

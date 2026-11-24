@@ -45,6 +45,7 @@ dir="$1"
 printf '%s\n' "\$*" >> "\$dir/calls"
 case "\$*" in
   "buildx imagetools create "*)
+    if [ -f "\$dir/fail_create" ]; then echo "ERROR: failed to push: denied" >&2; exit 1; fi
     printf '%s\n' "\$@" > "\$dir/create_args"
     exit 0 ;;
   "buildx imagetools inspect --raw "*)
@@ -133,6 +134,14 @@ d="$tmpdir/a4c"; install_docker_stub "$d" "amd64 arm64" amd64 arm64 2; digests "
 run "$d"
 check_eq "two failed reads, then success: exits 0" "0" "$?"
 check_eq "  ...writes the index digest" "digest=$INDEX" "$(cat "$d/github_output")"
+
+# 4d. The tag push itself fails (unclassified, so not retried): say tags may have moved.
+d="$tmpdir/a4d"; install_docker_stub "$d" "amd64 arm64"; digests "$d" "$AMD" "$ARM"
+printf '%s\n' 'create' > "$d/fail_create"
+run "$d"
+check_eq "failed tag push: exits 1" "1" "$?"
+if grep -q "some tags may already point" "$d/stderr"; then ok "  ...saying tags may have moved"; else bad "  ...without saying tags may have moved"; fi
+if [ -s "$d/github_output" ]; then bad "  ...but a digest was written"; else ok "  ...and no digest was written"; fi
 
 # 5. Required inputs.
 d="$tmpdir/a5"; install_docker_stub "$d" "amd64 arm64"; digests "$d" "$AMD" "$ARM"

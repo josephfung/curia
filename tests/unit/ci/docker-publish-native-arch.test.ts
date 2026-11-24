@@ -87,11 +87,31 @@ describe('docker-publish native per-architecture builds', () => {
     for (const d of downloads) expect(d.with?.pattern).toBeUndefined();
   });
 
+  it('runs the publish helpers from this workflow revision, outside the build context', () => {
+    // A re-publish checks out an older release; its docker/*.sh predate PUSH_BY_DIGEST and
+    // assemble-image.sh, so running them from that checkout fails every re-publish.
+    for (const job of [arch, build]) {
+      const tools = job.steps.find((s) => s.uses?.startsWith('actions/checkout@') && s.with?.path === '.publish-tools');
+      expect(tools?.with).toMatchObject({ ref: '${{ github.sha }}', 'sparse-checkout': 'docker', 'persist-credentials': false });
+      const toolsAt = job.steps.indexOf(tools!);
+      const moveAt = job.steps.findIndex((s) => (s.run ?? '').includes('mv .publish-tools "$RUNNER_TEMP/publish-tools"'));
+      const firstBuildAt = job.steps.findIndex((s) => s.id === 'build');
+      expect(toolsAt).toBeGreaterThan(-1);
+      expect(moveAt).toBeGreaterThan(toolsAt);
+      expect(firstBuildAt).toBeGreaterThan(moveAt);
+      for (const s of job.steps) {
+        if (/docker\/[a-z-]+\.sh/.test(s.run ?? '')) {
+          expect(s.run).toMatch(/^bash "\$RUNNER_TEMP\/publish-tools\/docker\/[a-z-]+\.sh"$/);
+        }
+      }
+    }
+  });
+
   it('writes tags only after every leg, and still runs (to fail and alert) when one failed', () => {
     expect(build.needs).toEqual(['resolve', 'build-arch']);
     expect(build.if).toBe("${{ !cancelled() && needs.resolve.result == 'success' }}");
     const assemble = stepById(build, 'build')!;
-    expect(assemble.run).toBe('bash docker/assemble-image.sh');
+    expect(assemble.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/assemble-image.sh"');
     expect(assemble.env?.TAGS).toBe('${{ steps.meta.outputs.tags }}');
     // Tag and digest values reach the shell through env, never interpolated into it.
     for (const job of [arch, build]) {

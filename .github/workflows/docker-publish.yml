@@ -326,6 +326,24 @@ jobs:
       # fail the run although the other images publish, so that leg is skipped: with
       # `meta` skipped it has no tags, and the build and sign steps (guarded on tags)
       # skip with it.
+      # The publish helpers (docker/*.sh) come from this workflow's own revision, not from
+      # the checkout above: a manual re-publish checks out an older release, whose copies
+      # predate PUSH_BY_DIGEST and assemble-image.sh and would fail every re-publish. The
+      # release checkout stays the build context and the source of the revision label.
+      # Moved out of the workspace so the build context never contains it.
+      - name: Check out this workflow's publish helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .publish-tools
+          sparse-checkout: docker
+          persist-credentials: false
+
+      - name: Move the publish helpers out of the build context
+        run: |
+          rm -rf "$RUNNER_TEMP/publish-tools"
+          mv .publish-tools "$RUNNER_TEMP/publish-tools"
+
       - name: Check the image's Dockerfile exists in this source
         id: buildable
         env:
@@ -412,7 +430,7 @@ jobs:
           # overwrite each other's layers.
           CACHE_SCOPE: ${{ matrix.image }}-${{ matrix.arch }}
           BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
-        run: bash docker/publish-image.sh
+        run: bash "$RUNNER_TEMP/publish-tools/docker/publish-image.sh"
 
       # A file named after the architecture, holding the digest, so `build` can download
       # every leg of an image into one directory.
@@ -432,7 +450,9 @@ jobs:
           name: digest-${{ matrix.image }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 1
+          # "Re-run failed jobs" reruns only the failed build job, which needs these from
+          # the original attempt; GitHub allows re-runs for 30 days.
+          retention-days: 30
 
   build:
     # Joins each image's per-architecture legs (build-arch) under its tags, then signs it.
@@ -528,6 +548,24 @@ jobs:
       # fail the run although the other images publish, so that leg is skipped: with
       # `meta` skipped it has no tags, and the build and sign steps (guarded on tags)
       # skip with it.
+      # The publish helpers (docker/*.sh) come from this workflow's own revision, not from
+      # the checkout above: a manual re-publish checks out an older release, whose copies
+      # predate PUSH_BY_DIGEST and assemble-image.sh and would fail every re-publish. The
+      # release checkout stays the build context and the source of the revision label.
+      # Moved out of the workspace so the build context never contains it.
+      - name: Check out this workflow's publish helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .publish-tools
+          sparse-checkout: docker
+          persist-credentials: false
+
+      - name: Move the publish helpers out of the build context
+        run: |
+          rm -rf "$RUNNER_TEMP/publish-tools"
+          mv .publish-tools "$RUNNER_TEMP/publish-tools"
+
       - name: Check the image's Dockerfile exists in this source
         id: buildable
         env:
@@ -653,7 +691,7 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGESTS_DIR: ${{ runner.temp }}/digests
-        run: bash docker/assemble-image.sh
+        run: bash "$RUNNER_TEMP/publish-tools/docker/assemble-image.sh"
 
       - name: Install cosign
         if: steps.meta.outputs.tags != ''
@@ -667,7 +705,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
-        run: bash docker/sign-image.sh
+        run: bash "$RUNNER_TEMP/publish-tools/docker/sign-image.sh"
 
   # Turn a failed publish into an active notification (#1699).
   #

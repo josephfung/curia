@@ -104,8 +104,12 @@ if [ -z "$first_tag" ]; then
 fi
 args+=("${sources[@]}")
 
-# Same retry rule as the build: only a classified registry/network failure.
-"$SCRIPT_DIR/buildx-retry.sh" "${args[@]}"
+# Same retry rule as the build: only a classified registry/network failure. One
+# create writes every tag, so a failure partway may leave some of them moved.
+if ! "$SCRIPT_DIR/buildx-retry.sh" "${args[@]}"; then
+  echo "assemble-image: the tag push failed; some tags may already point to the new index, which is NOT signed" >&2
+  exit 1
+fi
 
 # Read back what the first tag now names: the index's digest (what cosign signs)
 # and its platforms (every architecture must be in it). The concurrency group
