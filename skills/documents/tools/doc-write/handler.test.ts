@@ -466,6 +466,23 @@ describe('DocWriteHandler', () => {
       });
     });
 
+    it('replace keeps the stored as_of when the caller omits it', async () => {
+      const stored = makeDoc({
+        path: PRIORITIES,
+        version: 2,
+        frontmatter: { title: 'Priorities', as_of: '2026-01-01', past: PAST, format: 'F' },
+      });
+      const update = vi.fn().mockResolvedValue({ ok: true, document: stored });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(stored), update });
+      await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'replace', body: '## New', expected_version: 2,
+        frontmatter: { title: 'Priorities' },
+      }, repo));
+      expect(update.mock.calls[0]![1].frontmatter).toEqual({
+        title: 'Priorities', as_of: '2026-01-01', past: PAST, format: 'F',
+      });
+    });
+
     it('replace lets the caller override past', async () => {
       const stored = makeDoc({ path: PRIORITIES, version: 1, frontmatter: { past: PAST, format: 'F' } });
       const update = vi.fn().mockResolvedValue({ ok: true, document: stored });

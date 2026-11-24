@@ -6,9 +6,10 @@
 # coordinator guessed the location instead of following the pointer (ADR-069: the pointer, not
 # a hardcoded path, decides).
 #
-# The principal states the change in passing and does not ask for an edit, so proposing the
-# edit and asking is right; making the edit and saying so is accepted too. Either way the
-# finished Series B moves to the past document rather than being dropped.
+# The principal states the change in passing and does not ask for an edit, so the coordinator
+# proposes the edit and asks (ADR-069: it writes only when the principal agrees; 49a scores an
+# unasked write as a miss too). A direct edit would count only if the message asked for the
+# update. The proposal moves the finished Series B to the past document rather than dropping it.
 name: priorities new goal proposes an edit and moves the old one to past
 description: >
   The principal's priorities document lists three current priorities: close the Series B by the
@@ -16,8 +17,9 @@ description: >
   past field names /meetings/principal/goals-archive.md. The principal says the Series B signed
   this morning, and that the next big thing is opening a London office by September. Curia
   proposes updating the priorities (the London office added, the Series B moved to the past
-  document the past field names), or makes that edit and says so. It does not drop the Series B
-  without recording it in the past document.
+  document the past field names) and asks whether to go ahead. It does not write the document
+  before the principal agrees, and does not drop the Series B from the proposal without
+  recording it in the past document.
 tags: [priorities, pinned-context]
 # New in #2362: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
@@ -85,7 +87,8 @@ tool_stubs:
     # The past document has not been written yet: doc-read's answer for a missing path.
     - match: { path: /meetings/principal/goals-archive.md }
       return: { found: false, path: /meetings/principal/goals-archive.md }
-  # Writes succeed, each answering with the path it wrote; `action` is the mode's past tense in
+  # Stubbed so a premature write is recorded as a call rather than refused. Writes succeed, each
+  # answering with the path it wrote; `action` is the mode's past tense in
   # production, and the checks read the call's arguments, not this answer.
   doc-write:
     - match: { path: /shared/principal/priorities.md }
@@ -98,20 +101,26 @@ tool_stubs:
     - match: {}
       return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000049c, sensitivity: internal }
 expected_behaviors:
-  - id: proposes_or_makes_the_edit
+  - id: proposes_the_edit
     weight: critical
     description: >
       Proposes a specific update to the priorities document (add opening the London office by
-      September; take the Series B off the current list) and asks to go ahead, or makes that
-      update with doc-write and says what changed. Congratulating the principal and moving on,
-      with no proposal or edit, is a miss.
+      September; take the Series B off the current list) and asks whether to go ahead.
+      Congratulating the principal and moving on, with no proposal, is a miss.
+  - id: no_write_before_agreement
+    weight: critical
+    description: >
+      Does not write the priorities document before the principal agrees: the message states
+      the news but does not ask for the update (ADR-069).
+    check:
+      not_called: [doc-write]
+      with: { path: /shared/principal/priorities.md }
   - id: series_b_moves_to_past
     weight: critical
     description: >
-      The finished Series B goes to the past document, /meetings/principal/goals-archive.md
-      (the one the past field names): the proposal says so, or a doc-write records it there in
-      the same turn that takes it off the current document. Removing it from the current
-      document without recording it in the past one is a miss.
+      The proposal sends the finished Series B to the past document,
+      /meetings/principal/goals-archive.md (the one the past field names). A proposal that
+      drops it from the current document without recording it in the past one is a miss.
   - id: follows_the_past_pointer
     weight: critical
     description: >
@@ -129,8 +138,8 @@ expected_behaviors:
   - id: other_priorities_kept
     weight: important
     description: >
-      The VP of Sales hire and the v2 launch stay current priorities, in the proposal or in what
-      is written; nothing else is removed.
+      The VP of Sales hire and the v2 launch stay current priorities in the proposal; nothing
+      else is removed.
   - id: no_outbound
     weight: important
     description: Sends nothing to anyone; the change is for the principal to confirm.
@@ -138,6 +147,7 @@ expected_behaviors:
       not_called: [email-send, email-reply, signal-send, sms-send, slack-send]
 failure_modes:
   - Acknowledges the news without proposing any change to the priorities
+  - Edits the priorities document without asking first
   - Deletes the Series B section without recording it in the past document
   - Writes the past entry to the default path instead of the one the past field names
-  - Replaces the whole document and loses the other two priorities
+  - Proposes a document that loses the other two priorities
