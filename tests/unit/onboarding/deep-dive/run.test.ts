@@ -336,7 +336,7 @@ describe('runDeepDive', () => {
     // The drafts are written: a lost note is a delivery problem, not a failed run.
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'onb-1', draftPaths: ALL_DRAFTS, error: null });
     expect(t.notifyOperator).toHaveBeenCalledTimes(1);
-    expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_delivery_failed');
+    expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_delivery_failed', {});
   });
 
   it('a wake that fails after the note also leaves the run delivered, with the delivery notice', async () => {
@@ -345,8 +345,26 @@ describe('runDeepDive', () => {
     t.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
     await runDeepDive(t.deps, drafting);
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
-    expect(t.notifyOperator).toHaveBeenCalledWith('review-1', 'deep_dive_delivery_failed');
+    expect(t.notifyOperator).toHaveBeenCalledWith('review-1', 'deep_dive_delivery_failed', {});
     expect(t.notifyOperator).not.toHaveBeenCalledWith(expect.anything(), 'deep_dive_failed');
+  });
+
+  it('sends no second delivery notice when the review task already records one', async () => {
+    const draftDocs = Object.fromEntries(ALL_DRAFTS.map((p) => [p, { path: p, body: '# d', version: 1 }]));
+    const t = setup({
+      docs: { [SUMMARY_PATH]: summaryDoc(), ...draftDocs },
+      tasks: [{
+        id: 'review-7', parentTaskId: null, status: 'open', tags: ['deep-dive'],
+        // The model already raised it for this task (its Google Doc copies failed).
+        progress: { notes: [{ at: '2026-11-23T11:00:00.000Z', note: 'Operator notice: deep_dive_delivery_failed' }] },
+      }],
+    });
+    const midHandoff = { ...drafting, backfilled: 2, draftPaths: ALL_DRAFTS, reviewTaskId: 'review-7', spendUsd: 1.5 };
+    await t.seed(midHandoff);
+    t.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
+    await runDeepDive(t.deps, midHandoff);
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-7' });
+    expect(t.notifyOperator).not.toHaveBeenCalled();
   });
 
   it('creates one standalone deep-dive task when onboarding is closed', async () => {

@@ -16,7 +16,7 @@ export const ONBOARDING_STATE_KEY = 'state';
 export const ONBOARDING_TASK_TAG = 'onboarding';
 
 // Non-terminal task statuses (terminal: done, cancelled).
-const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
+export const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 
 export type OnboardingState = {
   taskId: string;

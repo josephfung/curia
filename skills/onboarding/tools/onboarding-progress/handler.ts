@@ -9,15 +9,21 @@
 //
 // The task worked on is the turn's own task's root when that is a standalone deep-dive review task
 // (#2362: drafts delivered with no onboarding open), else the open onboarding task, else the open
-// deep-dive review task. A deep-dive task completes once its topics are all closed.
+// deep-dive review task. A deep-dive task offers only the Review session and completes once its
+// three document topics are closed.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { OnboardingService } from '../../../../src/onboarding/onboarding-service.js';
 import type { PlaybookSession, PlaybookTopic } from '../../../../src/onboarding/playbook.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
-import { findOpenOnboardingTask } from '../../../../src/onboarding/state.js';
-import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY } from '../../../../src/onboarding/constants.js';
+import { findOpenOnboardingTask, OPEN_STATUSES } from '../../../../src/onboarding/state.js';
+import {
+  DEEP_DIVE_TASK_TAG,
+  ONBOARDING_CREATED_BY,
+  REVIEW_DOCUMENT_TOPICS,
+  REVIEW_SESSION,
+} from '../../../../src/onboarding/constants.js';
 import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
 import type { OperatorEvent } from '../../../../src/onboarding/notify-operator.js';
 import {
@@ -109,7 +115,8 @@ async function resolveParent(repo: TaskRepo, ctx: ToolContext): Promise<TaskRow 
   }
   const onboarding = await findOpenOnboardingTask(repo);
   if (onboarding) return onboarding;
-  const reviews = await repo.listTasks({ tag: DEEP_DIVE_TASK_TAG, createdBy: ONBOARDING_CREATED_BY, limit: 10 });
+  // Open ones only, filtered in the query: closed review tasks must not crowd the open one off the page.
+  const reviews = await repo.listTasks({ tag: DEEP_DIVE_TASK_TAG, statuses: OPEN_STATUSES, createdBy: ONBOARDING_CREATED_BY, limit: 10 });
   return reviews.find((t) => t.parentTaskId === null && isOpenTask(t)) ?? null;
 }
 
@@ -121,6 +128,16 @@ async function rootTask(repo: TaskRepo, taskId: string): Promise<TaskRow | null>
     task = await repo.getTask(task.parentTaskId);
   }
   return task;
+}
+
+function isReviewDocumentTopic(topicId: string): boolean {
+  return (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(topicId);
+}
+
+/** The playbook sessions this parent offers: only Review on a standalone deep-dive review task. */
+function offeredSessions(parent: TaskRow, sessions: PlaybookSession[]): PlaybookSession[] {
+  const own = sessions.filter((s) => s.id !== RECURRING_SESSION);
+  return isDeepDiveTask(parent) ? own.filter((s) => s.id === REVIEW_SESSION) : own;
 }
 
 function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, name: string) {
@@ -148,9 +165,18 @@ async function completeIfDone({ svc, repo, parent, ctx }: Deps): Promise<boolean
   const children = await listChildren(repo, parent.id);
   const topics = topicSubtasks(children, ctx.log);
   if (isDeepDiveTask(parent)) {
-    // A standalone review task has only its Review topics: done once they are all closed.
-    if (topics.length === 0 || topics.some((t) => isOpenTask(t.task))) return false;
-    await repo.completeTask(parent.id, 'Deep-dive review complete: every topic is closed.', ctx.agentId);
+    // A standalone review task is done once its document topics are closed. Next step (a rhythm
+    // question for onboarding) does not hold it open; an open one is cancelled with it.
+    const docs = topics.filter((t) => t.sessionId === REVIEW_SESSION && isReviewDocumentTopic(t.topicId));
+    if (docs.length === 0) {
+      ctx.log.warn({ taskId: parent.id }, 'onboarding: the deep-dive review task has no review topics, so it cannot complete on them');
+      return false;
+    }
+    if (docs.some((t) => isOpenTask(t.task))) return false;
+    for (const t of topics) {
+      if (isOpenTask(t.task)) await repo.updateTask(t.task.id, { status: 'cancelled', progressNote: 'Deep-dive review complete: not needed.' }, ctx.agentId);
+    }
+    await repo.completeTask(parent.id, 'Deep-dive review complete: every document is reviewed.', ctx.agentId);
     ctx.log.info({ taskId: parent.id }, 'onboarding: deep-dive review complete');
     return true;
   }
@@ -188,7 +214,7 @@ async function status(deps: Deps): Promise<ToolResult> {
     isMailboxConnected(ctx),
   ]);
   // The weekly section is for recurring sessions after onboarding, not onboarding topics.
-  const sessions = playbook.filter((s) => s.id !== RECURRING_SESSION);
+  const sessions = offeredSessions(parent, playbook);
   const subs = topicSubtasks(children, ctx.log);
   const index = topicIndex(sessions);
   // Playbook sessions in order, then any session a subtask names that the playbook no longer has.
@@ -224,6 +250,9 @@ async function status(deps: Deps): Promise<ToolResult> {
 async function openSession({ svc, repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
   const sessionId = str(input.session_id);
   if (!sessionId) return fail('open_session requires session_id');
+  if (isDeepDiveTask(parent) && sessionId !== REVIEW_SESSION) {
+    return fail(`A deep-dive review task has only the ${REVIEW_SESSION} session.`);
+  }
   const opened = await svc.openSession(parent, sessionId);
   if (!opened.ok) return fail(`Unknown session_id '${sessionId}'. Playbook sessions: ${opened.sessionIds.join(', ') || '(none)'}`);
   const [children, name] = await Promise.all([listChildren(repo, parent.id), svc.principalDisplayName()]);
@@ -317,18 +346,12 @@ async function operatorNotice({ svc, parent }: Deps, input: Record<string, unkno
   // Model-supplied details go no further than the task note, the log and the audit row — the
   // email carries the event only (#2710).
   const notice = { details: details as Record<string, unknown> | undefined };
-  if (isDeepDiveTask(parent)) {
-    // No onboarding run owns this task, so there is no once-per-run record to check.
-    const { recorded } = await svc.raiseReviewTaskNotice(parent.id, event as OperatorEvent, notice);
-    if (!recorded) return fail('The operator notice could not be recorded on the review task. Try again shortly.');
-    return { success: true, data: { recorded: true } };
-  }
-  // Once per run, like every other operator notice: the service shares the watcher's dedupe, so
-  // a repeated call records nothing and emails nothing.
+  // Once, like every other operator notice: per onboarding run on the onboarding task (the
+  // watcher's dedupe), per event on a deep-dive review task. A repeat records and emails nothing.
   const result = await svc.raiseOperatorNotice(parent.id, event as OperatorEvent, notice);
   // Already raised this run is success, not a failure: it is the dedupe working, and telling the
   // model to retry would only make it loop. Nothing is emailed a second time (#2710).
   if (result.alreadyRaised) return { success: true, data: { alreadyRaised: true } };
-  if (!result.recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
+  if (!result.recorded) return fail('The operator notice could not be recorded on the task. Try again shortly.');
   return { success: true, data: { recorded: true } };
 }

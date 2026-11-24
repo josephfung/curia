@@ -127,9 +127,9 @@ For the document: confirm / correct / set aside.
 - Which should change, and which should go?
 
 ## Time and priorities <!-- topic: review-priorities -->
-Here's where your time went. What are you actually trying to move?
 I need to learn what {principal} is trying to move, so I weigh work against
 it. For the document: confirm / correct / set aside.
+- Here's where your time went. What are you actually trying to move?
 - Are these the right priorities, in the right order?
 - Is anything taking time it should not?
 

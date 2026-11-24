@@ -28,6 +28,11 @@ export const OPERATOR_EVENTS = [
 ] as const;
 export type OperatorEvent = (typeof OPERATOR_EVENTS)[number];
 
+/** The progress note that records a notice on its task: also the per-task once-only record. */
+export function operatorNoticeNote(event: OperatorEvent): string {
+  return `Operator notice: ${event}`;
+}
+
 /** Facts the emailed notice may carry. Typed on purpose: every field here is code-read, not
  *  model-written, so nothing a model put in a tool call can reach the email. */
 export interface OperatorNotice {
@@ -173,7 +178,7 @@ export async function notifyOperator(
 ): Promise<OperatorNoticeResult> {
   if (taskId !== null) {
     try {
-      await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
+      await deps.taskRepo.updateTask(taskId, { progressNote: operatorNoticeNote(event) });
     } catch (err) {
       deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
       return { recorded: false };

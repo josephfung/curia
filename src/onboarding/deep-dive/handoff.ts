@@ -13,7 +13,8 @@ import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
-import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY } from '../constants.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, REVIEW_SESSION } from '../constants.js';
+import { raiseOperatorNoticeOnce } from '../notify-operator-once.js';
 import { findOpenOnboardingTask } from '../state.js';
 import { isOpenTask } from '../subtasks.js';
 import { noteAndWakeCoordinator } from '../subscribers.js';
@@ -23,9 +24,7 @@ import { DRAFT_PATHS } from './paths.js';
 import type { Advance, RunDeps } from './run.js';
 import type { DeepDiveState } from './state.js';
 
-/** The playbook session whose topics review the drafts. */
-export const REVIEW_SESSION = 'review';
-export { DEEP_DIVE_TASK_TAG };
+export { DEEP_DIVE_TASK_TAG, REVIEW_SESSION };
 const ONBOARDING_SKILL = 'onboarding';
 
 /** A window bound as the principal's local date (the UTC date if the zone is unusable). */
@@ -76,8 +75,19 @@ export async function handoffStage(
     );
   } catch (err) {
     logger.error({ err, taskId: parent.id }, 'deep-dive: drafts written, but the ready note or the coordinator wake failed');
-    // The notifier never throws: it records its own note and logs a failed send.
-    if (deps.notifyOperator) await deps.notifyOperator(parent.id, 'deep_dive_delivery_failed');
+    // Once per task, the same record the tool checks, so the model cannot email it a second time.
+    // Never throws: a notice it could not record or send is logged there.
+    await raiseOperatorNoticeOnce(
+      {
+        taskRepo: deps.taskRepo,
+        logger,
+        configStore: deps.configStore,
+        stateLock: deps.stateLock,
+        ...(deps.notifyOperator ? { notifier: deps.notifyOperator } : {}),
+      },
+      parent.id,
+      'deep_dive_delivery_failed',
+    );
   }
   return delivered;
 }
