@@ -267,7 +267,7 @@ export function classifyEmailSender(email: string): 'person' | 'organization' | 
  * Derive a human-readable label from an email domain.
  * Strips the TLD and capitalizes: 'github.com' → 'Github', 'stripe.io' → 'Stripe'.
  */
-function deriveOrgLabelFromDomain(domain: string): string {
+export function deriveOrgLabelFromDomain(domain: string): string {
   const name = domain.split('.')[0] ?? domain;
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
