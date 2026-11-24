@@ -1,10 +1,11 @@
 // handoff.ts — the deep dive's last stage (#2362): hand the drafts to the Review session.
 //
 // The review goes on the onboarding task open *at hand-off time* (the run state names no
-// onboarding task, so a restarted onboarding is handled). With none open (a re-run after
-// onboarding) it goes on a standalone coordinator task tagged `deep-dive`, with the onboarding
-// skill active, so the review works the same way. That task's id is recorded the moment it is
-// created, so a resumed run reuses it rather than making a second. Then the Review session's
+// onboarding task, so a restarted onboarding is handled), unless its Review topics are all closed.
+// Otherwise (a re-run after onboarding, or after its review) it goes on a standalone coordinator
+// task tagged `deep-dive`, with the onboarding skill active, so the review works the same way.
+// That task's id is recorded the moment it is created, so a resumed run reuses it rather than
+// making a second; an earlier run's open review task is cancelled first. Then the Review session's
 // topics are opened, the run is `delivered`, and the task gets a note naming the drafts and is
 // woken. A note or wake that fails then leaves the run delivered and tells the operator
 // (`deep_dive_delivery_failed`): the drafts exist, only the hand-off was lost.
@@ -13,10 +14,10 @@ import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
-import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, REVIEW_SESSION } from '../constants.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, REVIEW_DOCUMENT_TOPICS, REVIEW_SESSION } from '../constants.js';
 import { raiseOperatorNoticeOnce } from '../notify-operator-once.js';
-import { findOpenOnboardingTask } from '../state.js';
-import { isOpenTask } from '../subtasks.js';
+import { findOpenOnboardingTask, OPEN_STATUSES } from '../state.js';
+import { isOpenTask, listChildren, topicSubtasks } from '../subtasks.js';
 import { noteAndWakeCoordinator } from '../subscribers.js';
 import type { HistorySummary } from './history-summary.js';
 import { DRAFT_KINDS } from './prompts.js';
@@ -26,6 +27,8 @@ import type { DeepDiveState } from './state.js';
 
 export { DEEP_DIVE_TASK_TAG, REVIEW_SESSION };
 const ONBOARDING_SKILL = 'onboarding';
+/** Upper bound on earlier review tasks read; normally there is at most one. */
+const STALE_REVIEW_LIMIT = 50;
 
 /** A window bound as the principal's local date (the UTC date if the zone is unusable). */
 function localDate(iso: string, timezone: string): string {
@@ -96,13 +99,20 @@ export async function handoffStage(
 }
 
 /**
- * The task the review goes on: the open onboarding task, else this run's standalone review task
- * if it is still open, else a new standalone one (recorded in the run state at once).
+ * The task the review goes on: the open onboarding task while its Review topics are still to come
+ * (none opened yet, or one still open), else this run's standalone review task if it is still open,
+ * else a new standalone one (recorded in the run state at once). Before a new one is created, an
+ * earlier run's open review task is cancelled: its topics may be half-closed against older drafts.
  */
 async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance): Promise<TaskRow> {
   const { taskRepo, logger } = deps;
   const onboarding = await findOpenOnboardingTask(taskRepo);
-  if (onboarding) return onboarding;
+  if (onboarding) {
+    if (await reviewStillAhead(deps, onboarding.id)) return onboarding;
+    // openSession never reopens a closed topic, so drafts handed to this task would land on
+    // finished topics and the wake would complete onboarding instead of reviewing them.
+    logger.info({ taskId: onboarding.id }, 'deep-dive: onboarding\'s Review topics are all closed; using a standalone review task');
+  }
 
   if (state.reviewTaskId !== null) {
     const prior = await taskRepo.getTask(state.reviewTaskId);
@@ -113,8 +123,9 @@ async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance)
     }
   }
 
-  // Re-check before creating: a superseded run must not leave a review task behind.
+  // Re-check before creating: a superseded run must not leave a review task behind, nor cancel one.
   await advance((s) => s);
+  await cancelStaleReviewTasks(deps);
   const created = await taskRepo.createTask({
     agentId: 'coordinator',
     title: 'Review your deep-dive drafts',
@@ -130,6 +141,39 @@ async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance)
   logger.info({ taskId: created.id }, 'deep-dive: no onboarding open; created a standalone review task');
   await activateOnboardingSkill(deps, created.id);
   return created;
+}
+
+/** Whether the onboarding task's Review document topics are still to come: none opened, or one open. */
+async function reviewStillAhead(deps: RunDeps, onboardingTaskId: string): Promise<boolean> {
+  const topics = topicSubtasks(await listChildren(deps.taskRepo, onboardingTaskId), deps.logger).filter((t) =>
+    (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(t.topicId),
+  );
+  return topics.length === 0 || topics.some((t) => isOpenTask(t.task));
+}
+
+/**
+ * Cancel every open review task an earlier deep dive created (this run's own was reused above, so
+ * any found here is stale). Cancelling also cancels its open topic subtasks (task-repo reconciles
+ * a terminal parent's children). A cancel that fails is logged and skipped: the old task staying
+ * open is the state before this fix, and it must not cost the principal these drafts.
+ */
+async function cancelStaleReviewTasks(deps: RunDeps): Promise<void> {
+  const { taskRepo, logger } = deps;
+  const stale = await taskRepo.listTasks({
+    tag: DEEP_DIVE_TASK_TAG,
+    statuses: OPEN_STATUSES,
+    createdBy: ONBOARDING_CREATED_BY,
+    limit: STALE_REVIEW_LIMIT,
+  });
+  // The model can tag a task deep-dive; the createdBy filter is what makes it the program's.
+  for (const task of stale.filter((t) => !t.parentTaskId && t.createdBy === ONBOARDING_CREATED_BY)) {
+    try {
+      await taskRepo.updateTask(task.id, { status: 'cancelled', progressNote: 'Superseded by a new deep dive.' });
+      logger.info({ taskId: task.id }, 'deep-dive: cancelled an earlier run\'s review task');
+    } catch (err) {
+      logger.error({ err, taskId: task.id }, 'deep-dive: could not cancel an earlier run\'s review task; it stays open');
+    }
+  }
 }
 
 async function activateOnboardingSkill(deps: RunDeps, taskId: string): Promise<void> {

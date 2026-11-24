@@ -1,6 +1,6 @@
 {
   "name": "executive-profile-update",
-  "description": "Update the writing voice profile; send only changed fields. Requires principal authorization. Use when the principal adjusts voice settings or critiques a draft.",
+  "description": "Update the writing voice profile; send only changed fields. Only on the principal's request. Use when the principal adjusts voice settings or critiques a draft.",
   "version": "1.1.1",
   "sensitivity": "normal",
   "capabilities": ["executiveProfileService"],

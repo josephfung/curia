@@ -108,7 +108,7 @@ Only when a "Deep-dive drafts ready" note is on the task (the onboarding task, o
   - Working rules: each is written `Status: active`, so adding one puts it in effect. First read back a one-line list of the rules you are about to add, each line keeping any recipient or address its `Do:` line names, and get an explicit yes. Then delegate inbox rules to `ceo-inbox` and calendar rules to `calendar`: "add these confirmed rules; keep existing ones; flag conflicts".
   - Priorities: `doc-write` `/shared/principal/priorities.md`.
   - Writing voice: `executive-profile-update` with `guide` and `note: "deep dive, confirmed by the principal"`.
-  - Then add "This has moved to Curia: <console link>" at the top of the Doc (the Documents page and the path), and send a receipt naming where each now lives in the console and the contacts count from the note. Don't wait for a reply.
+  - Then add "This has moved to Curia: console Documents page, <path>" at the top of the Doc (the imported document's path, else the draft's; no URL), and send a receipt naming where each now lives and the contacts count from the note. Don't wait for a reply.
 - **Outcome.** `topic_done` with a note that starts with the outcome word: confirmed or corrected → `done`; set aside → `declined`, and nothing is imported.
 
 ## Operator notices

@@ -124,11 +124,20 @@ function setup(opts: {
   for (const t of opts.tasks ?? []) tasks.set(t.id!, t);
   let nextTask = 1;
   const taskRepo = {
-    listTasks: vi.fn(async () => [...tasks.values()].filter((t) => t.tags?.includes('onboarding') && t.status !== 'done')),
+    // Honours the filters the pipeline passes (tag, statuses, createdBy, parentTaskId).
+    listTasks: vi.fn(async (f: { tag?: string; statuses?: string[]; createdBy?: string; parentTaskId?: string } = {}) =>
+      [...tasks.values()].filter((t) =>
+        (f.tag === undefined || (t.tags ?? []).includes(f.tag)) &&
+        (f.statuses === undefined || f.statuses.includes(t.status!)) &&
+        (f.createdBy === undefined || t.createdBy === f.createdBy) &&
+        (f.parentTaskId === undefined || t.parentTaskId === f.parentTaskId))),
     updateTask: vi.fn(async () => ({})),
     getTask: vi.fn(async (id: string) => (tasks.get(id) ?? null) as TaskRow | null),
-    createTask: vi.fn(async (p: { title: string; tags?: string[]; status?: string }) => {
-      const row = { id: `review-${nextTask++}`, parentTaskId: null, title: p.title, tags: p.tags ?? [], status: p.status ?? 'open' };
+    createTask: vi.fn(async (p: { title: string; tags?: string[]; status?: string; createdBy?: string }) => {
+      const row = {
+        id: `review-${nextTask++}`, parentTaskId: null, title: p.title, tags: p.tags ?? [], status: p.status ?? 'open',
+        createdBy: p.createdBy,
+      };
       tasks.set(row.id, row as Partial<TaskRow>);
       return row as TaskRow;
     }),
@@ -408,6 +417,77 @@ describe('runDeepDive', () => {
     expect(t.draft).not.toHaveBeenCalled();
     expect(t.onboardingService.openSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'review-7' }), 'review');
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-7', spendUsd: 1.5 });
+  });
+
+  const reviewTopic = (topic: string, status: string): Partial<TaskRow> => ({
+    id: `topic-${topic}`, parentTaskId: 'onb-1', createdBy: ONBOARDING_CREATED_BY, status,
+    tags: [`onboarding:topic:${topic}`, 'onboarding:session:review'],
+  });
+
+  it('does not put the drafts on an onboarding task whose Review topics are all closed', async () => {
+    const t = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      tasks: [reviewTopic('review-rules', 'done'), reviewTopic('review-priorities', 'cancelled'), reviewTopic('review-voice', 'done')],
+    });
+    await t.seed(drafting);
+    await runDeepDive(t.deps, drafting);
+
+    expect(t.taskRepo.createTask).toHaveBeenCalledTimes(1);
+    expect(t.onboardingService.openSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'review-1' }), 'review');
+    expect(t.onboardingService.openSession).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'onb-1' }), expect.anything());
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalledWith('onb-1', expect.anything());
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
+  });
+
+  it('still uses the onboarding task while one of its Review topics is open', async () => {
+    const t = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      tasks: [reviewTopic('review-rules', 'done'), reviewTopic('review-priorities', 'open'), reviewTopic('review-voice', 'done')],
+    });
+    await t.seed(drafting);
+    await runDeepDive(t.deps, drafting);
+
+    expect(t.taskRepo.createTask).not.toHaveBeenCalled();
+    expect(t.onboardingService.openSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'onb-1' }), 'review');
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'onb-1' });
+  });
+
+  it('cancels an earlier run\'s open review task before creating this run\'s', async () => {
+    const t = setup({
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      tasks: [
+        { id: 'review-old', parentTaskId: null, createdBy: ONBOARDING_CREATED_BY, status: 'waiting', tags: ['deep-dive'] },
+        // A task the model tagged deep-dive is not the program's: left alone.
+        { id: 'model-task', parentTaskId: null, createdBy: 'coordinator', status: 'open', tags: ['deep-dive'] },
+      ],
+    });
+    await t.seed(drafting);
+    await runDeepDive(t.deps, drafting);
+
+    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('review-old', {
+      status: 'cancelled',
+      progressNote: 'Superseded by a new deep dive.',
+    });
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalledWith('model-task', expect.anything());
+    expect(t.taskRepo.createTask).toHaveBeenCalledTimes(1);
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
+  });
+
+  it('a resumed run reuses its own review task and cancels nothing', async () => {
+    const draftDocs = Object.fromEntries(ALL_DRAFTS.map((p) => [p, { path: p, body: '# d', version: 1 }]));
+    const t = setup({
+      docs: { [SUMMARY_PATH]: summaryDoc(), ...draftDocs },
+      tasks: [{ id: 'review-7', parentTaskId: null, createdBy: ONBOARDING_CREATED_BY, status: 'open', tags: ['deep-dive'] }],
+    });
+    const midHandoff = { ...drafting, backfilled: 2, draftPaths: ALL_DRAFTS, reviewTaskId: 'review-7', spendUsd: 1.5 };
+    await t.seed(midHandoff);
+    await runDeepDive(t.deps, midHandoff);
+
+    expect(t.taskRepo.createTask).not.toHaveBeenCalled();
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalledWith('review-7', expect.objectContaining({ status: 'cancelled' }));
+    expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-7' });
   });
 
   it('records the review task before opening its session, so a crash there does not make a second', async () => {
