@@ -1432,6 +1432,18 @@
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-22T01:04:59.119Z"
+    },
+    "priorities offer to start when goals come up": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "priorities suggestion names the relevant priority": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "priorities new goal proposes an edit and moves the old one to past": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
     }
   }
 }

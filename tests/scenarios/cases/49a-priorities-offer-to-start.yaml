@@ -1,0 +1,61 @@
+# Case 49a (#2362, ADR-069): no priorities document yet, and the principal talks about goals.
+# Rule: the coordinator's pinned_context entry for /shared/principal/priorities.md ("If missing,
+# offer to start it when goals come up"). seed.pinned names no document, so the pinned block
+# shows it as not yet created, as on a fresh install. The coordinator writes the document only
+# when the principal agrees (ADR-069), so the right move is an offer, not a write.
+name: priorities offer to start when goals come up
+description: >
+  The coordinator has no priorities document yet. The principal mentions, in passing, what
+  matters this quarter: closing the Series B and hiring a VP of Sales, with everything else
+  secondary. Curia acknowledges and offers to start a priorities document from those goals so it
+  can weigh its work against them. It does not create the document before the principal agrees.
+tags: [priorities, pinned-context]
+# New in #2362: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: principal
+  channel: web
+  content: >
+    Some context for you: this quarter what matters is closing the Series B and hiring a VP of
+    Sales. Everything else is secondary.
+tool_stubs:
+  # Remembering the goals as facts is fair (ADR-069: KG facts are context).
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000049a, sensitivity: internal }
+  # Stubbed so a premature write is recorded as a call rather than refused.
+  doc-write:
+    - match: {}
+      return: { action: created, document: { path: /shared/principal/priorities.md, version: 1 } }
+expected_behaviors:
+  - id: offers_to_start
+    weight: critical
+    description: >
+      Offers to start a priorities document (or a written record of the principal's priorities)
+      from the two goals, and asks whether to go ahead. Merely acknowledging the goals, or saying
+      it will "keep them in mind", is a miss.
+  - id: no_write_before_agreement
+    weight: critical
+    description: Does not create or write the priorities document before the principal agrees.
+    check:
+      not_called: [doc-write]
+      with: { path: /shared/principal/priorities.md }
+  - id: no_other_priorities_doc
+    weight: important
+    description: Does not write the goals into some other document instead of offering.
+    check:
+      not_called: [doc-write]
+      contains: { path: priorit }
+  - id: names_the_goals
+    weight: important
+    description: >
+      The offer reflects the two goals the principal named (the Series B and the VP of Sales
+      hire), not invented ones.
+  - id: no_false_record
+    weight: important
+    description: Does not claim it has already saved the goals as the principal's priorities.
+failure_modes:
+  - Says "noted" and moves on without offering to keep a priorities record
+  - Creates the priorities document without asking
+  - Adds goals the principal did not state
