@@ -313,4 +313,66 @@ describe('CapabilitiesSection', () => {
     expect(sw('Email triage').getAttribute('aria-checked')).toBe('false');
     expect(host!.textContent).toContain('Left for Dana to choose, later in Settings');
   });
+
+  describe('Run the deep dive again', () => {
+    const rerunButton = () => [...host!.querySelectorAll('button')].find((b) => b.textContent === 'Run the deep dive again');
+
+    /** Answers POST /api/onboarding/deep-dive with `answer`, holding it until `release` is called. */
+    function deepDive(answer: { status: number; body: unknown }) {
+      stub();
+      const real = globalThis.fetch;
+      const posts: string[] = [];
+      let release = (): void => {};
+      const held = new Promise<void>((r) => { release = r; });
+      vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+        if (path !== '/api/onboarding/deep-dive') return real(path, init);
+        posts.push(`${init?.method} ${path}`);
+        await held;
+        return new Response(JSON.stringify(answer.body), { status: answer.status, headers: { 'content-type': 'application/json' } });
+      }));
+      return { posts, release };
+    }
+
+    async function press(release: () => void): Promise<void> {
+      await act(async () => { rerunButton()!.click(); });
+      // In flight: the button is disabled until the answer comes back.
+      expect(rerunButton()!.disabled).toBe(true);
+      await act(async () => { release(); await new Promise((r) => setTimeout(r, 0)); });
+      expect(rerunButton()!.disabled).toBe(false);
+    }
+
+    it('asks first, starts a re-run and says so', async () => {
+      const { posts, release } = deepDive({ status: 202, body: { started: true } });
+      const confirm = await render('settings');
+      await press(release);
+      expect(confirm.mock.calls[0]![0]).toContain('Run the deep dive again?');
+      expect(posts).toEqual(['POST /api/onboarding/deep-dive']);
+      expect(host!.querySelector('[role="status"]')!.textContent).toBe('The deep dive started. Its drafts come back for review when it finishes.');
+    });
+
+    it('says plainly when one is already running', async () => {
+      const { release } = deepDive({ status: 409, body: { started: false, reason: 'running' } });
+      await render('settings');
+      await press(release);
+      expect(host!.querySelector('[role="alert"]')!.textContent).toBe('A deep dive is already running.');
+    });
+
+    it('says plainly when no mailbox is connected', async () => {
+      const { release } = deepDive({ status: 409, body: { started: false, reason: 'no_mailbox' } });
+      await render('settings');
+      await press(release);
+      expect(host!.querySelector('[role="alert"]')!.textContent).toBe('Connect Dana’s mailbox first.');
+    });
+
+    it('sends nothing when declined, and is not offered in Setup', async () => {
+      const { posts } = deepDive({ status: 202, body: { started: true } });
+      await render('settings', vi.fn((_text: string) => false));
+      await act(async () => { rerunButton()!.click(); });
+      expect(posts).toEqual([]);
+      act(() => root?.unmount());
+      host?.remove();
+      await render('setup');
+      expect(rerunButton()).toBeUndefined();
+    });
+  });
 });

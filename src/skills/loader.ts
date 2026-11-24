@@ -56,6 +56,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'mailboxDirectory',
   'triageServices',
   'onboardingService',
+  'deepDiveService',
 ]);
 
 /** One discovered on-disk skill: lenient parse for the registry UI + reconciliation.

@@ -4,6 +4,7 @@
 //   GET    /api/onboarding/status       — whether onboarding has started, and the dashboard alert
 //   POST   /api/onboarding/start        — start onboarding; 409 with a code when it cannot
 //   DELETE /api/onboarding/triage-hold  — release the triage hold (Email triage switched on)
+//   POST   /api/onboarding/deep-dive    — run the deep dive again (#2362); 202, or 409 with a reason
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Logger } from '../../../logger.js';
@@ -12,6 +13,7 @@ import { createConfigChange, createOperatorSession } from '../../../bus/events.j
 import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 import { actorFromRequest } from './sessions.js';
 import type { OnboardingService } from '../../../onboarding/onboarding-service.js';
+import type { DeepDiveService } from '../../../onboarding/deep-dive/service.js';
 
 export interface OnboardingRouteOptions {
   webAppBootstrapSecret: string;
@@ -19,6 +21,8 @@ export interface OnboardingRouteOptions {
   bus: EventBus;
   logger: Logger;
   onboarding: Pick<OnboardingService, 'status' | 'start' | 'releaseTriageHold' | 'stopInvitation'>;
+  /** The deep dive (#2362). Without it the re-run route is not mounted. */
+  deepDive?: Pick<DeepDiveService, 'startOnce'>;
 }
 
 // Start mints a 48-hour credential and creates tasks: the auth-sensitive limit setupRoutes uses.
@@ -28,7 +32,7 @@ const START_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } 
  * The audit record of a console onboarding change: config.change, as office identity and the
  * executive profile record theirs. `version` is 1 for "on" (started, held) and 0 for "off".
  */
-function onboardingChange(configType: 'onboarding' | 'onboarding_triage_hold', on: boolean, summary: string, actorSessionId?: string) {
+function onboardingChange(configType: 'onboarding' | 'onboarding_triage_hold' | 'onboarding_deep_dive', on: boolean, summary: string, actorSessionId?: string) {
   return createConfigChange({
     config_type: configType,
     version: on ? 1 : 0,
@@ -40,7 +44,7 @@ function onboardingChange(configType: 'onboarding' | 'onboarding_triage_hold', o
 }
 
 export async function onboardingRoutes(app: FastifyInstance, options: OnboardingRouteOptions): Promise<void> {
-  const { webAppBootstrapSecret, sessions, bus, logger, onboarding } = options;
+  const { webAppBootstrapSecret, sessions, bus, logger, onboarding, deepDive } = options;
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
@@ -135,4 +139,28 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
       return reply.status(500).send({ error: 'Failed to release the triage hold. Check server logs.' });
     }
   });
+
+  if (deepDive) {
+    app.post('/api/onboarding/deep-dive', START_RATE, async (request, reply) => {
+      if (!requireAuth(request, reply)) return;
+      // Recorded before the change, as the triage hold release: an unrecordable request starts
+      // nothing. A refusal (409) leaves the record of a request that changed nothing.
+      const actor = actorFromRequest(request, sessions);
+      try {
+        await bus.publish('system', onboardingChange('onboarding_deep_dive', true, 'Deep dive re-run requested from the console', actor.actorSessionId));
+      } catch (err) {
+        logger.error({ err }, 'onboarding: deep-dive re-run audit write failed — nothing started');
+        return reply.status(500).send({ error: 'Nothing was started: the request could not be audited. Check the server logs.' });
+      }
+      try {
+        const result = await deepDive.startOnce({ force: true });
+        if (!result.started) return reply.status(409).send(result);
+        logger.info('onboarding: deep-dive re-run started from the console');
+        return reply.status(202).send(result);
+      } catch (err) {
+        logger.error({ err }, 'POST /api/onboarding/deep-dive failed');
+        return reply.status(500).send({ error: 'Failed to start the deep dive. Check server logs.' });
+      }
+    });
+  }
 }

@@ -3573,6 +3573,8 @@ async function main(): Promise<void> {
     hasPrincipalMailbox: async () => (await principalMailboxes.list()).length > 0,
   });
   executionLayer.setOnboardingService(onboardingService);
+  // The deep-dive-run tool: the principal's explicit re-run, during onboarding or after it.
+  executionLayer.setDeepDiveService(deepDive);
   const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
 
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
@@ -4460,6 +4462,7 @@ async function main(): Promise<void> {
     setupRequiredAtBoot,
     setupChecklist,
     onboardingService,
+    deepDiveService: deepDive,
     bootStartedAt,
     processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).

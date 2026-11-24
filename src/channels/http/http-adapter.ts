@@ -208,6 +208,8 @@ export interface HttpAdapterConfig {
   processStartedAt?: string;
   /** Backs /api/onboarding/* (#2360). Mounted only with the bootstrap secret. */
   onboardingService?: import('../../onboarding/onboarding-service.js').OnboardingService;
+  /** Backs POST /api/onboarding/deep-dive (#2362), the console's re-run. */
+  deepDiveService?: Pick<import('../../onboarding/deep-dive/service.js').DeepDiveService, 'startOnce'>;
   /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
   setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
@@ -527,7 +529,7 @@ export class HttpAdapter implements Channel {
       });
     }
 
-    // Onboarding routes (#2360): status, start and the triage hold release, for the console.
+    // Onboarding routes (#2360): status, start, the triage hold release and the deep-dive re-run, for the console.
     if (webAppBootstrapSecret && this.config.onboardingService) {
       await this.app.register(onboardingRoutes, {
         webAppBootstrapSecret,
@@ -535,6 +537,7 @@ export class HttpAdapter implements Channel {
         bus,
         logger,
         onboarding: this.config.onboardingService,
+        ...(this.config.deepDiveService ? { deepDive: this.config.deepDiveService } : {}),
       });
     }
 
