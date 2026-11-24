@@ -146,6 +146,10 @@ tool_stubs:
   doc-write:
     - match: {}
       return: { action: created, path: /shared/principal/priorities.md, version: 1 }
+  # The wake's closing summary.
+  scheduler-report:
+    - match: {}
+      return: { success: true }
 expected_behaviors:
   - id: tries_google
     weight: important
@@ -189,11 +193,22 @@ expected_behaviors:
     check:
       not_called: [onboarding-progress]
       with: { op: topic_done }
+  # A task wake may answer in its reply or send on the principal's route and reply NO_REPLY,
+  # so the links are checked in both places: the reply (when there is one) and every message
+  # sent on a messaging route.
   - id: no_google_links
     weight: critical
     description: The reply names no Google Docs link; none was created.
     check:
-      reply_excludes: ["docs\\.google\\.com"]
+      any_of:
+        - reply: no_reply
+        - reply_excludes: ["docs\\.google\\.com"]
+  - id: no_google_links_sent
+    weight: critical
+    description: No message sent to the principal names a Google Docs link; none was created.
+    check:
+      not_called: [signal-send, sms-send, slack-send]
+      contains: { message: docs.google.com }
   - id: points_to_console_drafts
     weight: critical
     description: >
