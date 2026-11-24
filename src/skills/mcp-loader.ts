@@ -22,8 +22,8 @@ import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { grantsBeyondPrincipal, principalDriveGrantNote, raisePrincipalDriveGrant } from './_shared/drive-principal-access.js';
-import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY } from '../onboarding/constants.js';
+import { driveAccessBeyondPrincipal, principalDriveGrantNote, raisePrincipalDriveGrant } from './_shared/drive-principal-access.js';
+import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, ONBOARDING_TASK_TAG } from '../onboarding/constants.js';
 import type {
   McpSecretDeclaration,
   McpServerEntry,
@@ -359,8 +359,8 @@ export function buildMcpToolHandler(params: {
       if (
         session.serverId === 'google-workspace' &&
         bound?.createdBy === ONBOARDING_CREATED_BY &&
-        Array.isArray(bound.tags) && bound.tags.some((t) => t === 'onboarding' || t === DEEP_DIVE_TASK_TAG) &&
-        grantsBeyondPrincipal(toolName, ctx.input, principalIdentities)
+        Array.isArray(bound.tags) && bound.tags.some((t) => t === ONBOARDING_TASK_TAG || t === DEEP_DIVE_TASK_TAG) &&
+        driveAccessBeyondPrincipal(toolName, ctx.input, principalIdentities)
       ) {
         logger.warn({ server: session.serverId, tool: toolName }, 'Drive share beyond the principal refused on an onboarding turn');
         return { success: false, error: 'On this task, files may be shared only with the principal, at their own verified address.' };

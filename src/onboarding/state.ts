@@ -8,12 +8,12 @@ import type { MessagingRoute } from '../settings/registry.js';
 import type { Logger } from '../logger.js';
 import type { OperatorEvent } from './notify-operator.js';
 import { OPERATOR_EVENTS } from './notify-operator.js';
-import { ONBOARDING_CREATED_BY } from './constants.js';
+import { ONBOARDING_CREATED_BY, ONBOARDING_TASK_TAG } from './constants.js';
 import { MESSAGING_ROUTES } from '../settings/registry.js';
 
 export const ONBOARDING_NAMESPACE = 'onboarding';
 export const ONBOARDING_STATE_KEY = 'state';
-export const ONBOARDING_TASK_TAG = 'onboarding';
+export { ONBOARDING_TASK_TAG };
 
 // Non-terminal task statuses (terminal: done, cancelled).
 export const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];

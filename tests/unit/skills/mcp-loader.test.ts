@@ -796,6 +796,46 @@ describe('buildMcpToolHandler — Drive grants to the principal', () => {
       expect(callTool).toHaveBeenCalledOnce();
     });
 
+    it('refuses an ownership transfer to anyone else, and allows one to the principal', async () => {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+      const handler = handlerFor('google-workspace', callTool);
+      const transfer = (to: string) => ({ file_id: 'doc-1', action: 'transfer_owner', new_owner_email: to });
+      expect((await handler.execute(boundTo(['deep-dive'], 'onboarding', transfer('ea@attacker.example')))).success).toBe(false);
+      expect(callTool).not.toHaveBeenCalled();
+      expect((await handler.execute(boundTo(['deep-dive'], 'onboarding', transfer('CEO@example.test')))).success).toBe(true);
+      expect(callTool).toHaveBeenCalledOnce();
+    });
+
+    it('fails closed on an unknown action, and allows update and revoke', async () => {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+      const handler = handlerFor('google-workspace', callTool);
+      const on = (input: Record<string, unknown>) => handler.execute(boundTo(['onboarding'], 'onboarding', input));
+      expect((await on({ file_id: 'doc-1', action: 'publish', share_with: 'ea@attacker.example' })).success).toBe(false);
+      expect((await on({ file_id: 'doc-1' })).success).toBe(false);
+      expect(callTool).not.toHaveBeenCalled();
+      expect((await on({ file_id: 'doc-1', action: 'update', permission_id: 'p-1', role: 'reader' })).success).toBe(true);
+      expect((await on({ file_id: 'doc-1', action: 'revoke', permission_id: 'p-1' })).success).toBe(true);
+    });
+
+    it('refuses "anyone with the link" sharing, and allows turning it off', async () => {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+      const handler = buildMcpToolHandler({
+        session: { serverId: 'google-workspace', client: { callTool } } as unknown as BuildHandlerParams['session'],
+        toolName: 'set_drive_file_permissions',
+        resolvedFixedInputs: {},
+        timeoutMs: 30_000,
+        logger,
+        principalIdentities,
+      });
+      const on = (input: Record<string, unknown>) => handler.execute(boundTo(['deep-dive'], 'onboarding', input));
+      for (const link_sharing of ['reader', 'commenter', 'writer']) {
+        expect((await on({ file_id: 'doc-1', link_sharing })).success, link_sharing).toBe(false);
+      }
+      expect(callTool).not.toHaveBeenCalled();
+      expect((await on({ file_id: 'doc-1', link_sharing: 'off' })).success).toBe(true);
+      expect((await on({ file_id: 'doc-1', writers_can_share: false })).success).toBe(true);
+    });
+
     it('leaves other turns alone: unbound, or a task onboarding did not make', async () => {
       const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
       const handler = handlerFor('google-workspace', callTool);

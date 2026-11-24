@@ -28,6 +28,8 @@ export const PRINCIPAL_RESTART_EXIT_DELAY_SECONDS = 15;
 
 /** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
 export const ONBOARDING_CREATED_BY = 'onboarding';
+/** Tag of the onboarding task and its subtasks. */
+export const ONBOARDING_TASK_TAG = 'onboarding';
 /** Tag of the standalone deep-dive review task, made when no onboarding is open (#2362). */
 export const DEEP_DIVE_TASK_TAG = 'deep-dive';
 /** The playbook session whose topics review the deep-dive drafts. */

@@ -14,6 +14,8 @@
 import type { ChannelIdentity } from '../../contacts/types.js';
 
 export const DRIVE_ACCESS_TOOL = 'manage_drive_access';
+/** Sets "anyone with the link" access (`link_sharing`). */
+export const LINK_SHARING_TOOL = 'set_drive_file_permissions';
 export const PRINCIPAL_DRIVE_ROLE = 'writer';
 
 export interface PrincipalDriveGrant {
@@ -89,25 +91,34 @@ export function raisePrincipalDriveGrant(
 }
 
 /**
- * Whether a grant names anyone but the principal (by verified email, as a user share). Used to keep
+ * Whether a Drive access change could reach anyone but the principal (by verified email, as a user
+ * share): a grant or ownership transfer to someone else, link sharing, or an unknown action. Used to keep
  * shares on onboarding and deep-dive review turns to the principal: those turns read draft text
  * that quotes outsiders, so an injected "also share with…" must not reach the server.
  */
-export function grantsBeyondPrincipal(
+export function driveAccessBeyondPrincipal(
   toolName: string,
   input: Record<string, unknown>,
   principalIdentities: readonly ChannelIdentity[],
 ): boolean {
+  // Link sharing reaches anyone with the link: only "off" (or no change) stays with the principal.
+  if (toolName === LINK_SHARING_TOOL) return !([undefined, null, 'off', 'restricted'] as unknown[]).includes(input.link_sharing);
   if (toolName !== DRIVE_ACCESS_TOOL) return false;
   const emails = principalEmails(principalIdentities);
   const isPrincipal = (shareType: unknown, address: unknown) => isUserShare(shareType) && isPrincipalAddress(address, emails);
-  if (input.action === 'grant') return !isPrincipal(input.share_type, input.share_with);
-  if (input.action === 'grant_batch') {
-    return !Array.isArray(input.recipients) || input.recipients.some((entry: unknown) =>
-      typeof entry !== 'object' || entry === null ||
-      !isPrincipal((entry as Record<string, unknown>).share_type, (entry as Record<string, unknown>).email));
+  switch (input.action) {
+    case 'grant': return !isPrincipal(input.share_type, input.share_with);
+    case 'grant_batch':
+      return !Array.isArray(input.recipients) || input.recipients.some((entry: unknown) =>
+        typeof entry !== 'object' || entry === null ||
+        !isPrincipal((entry as Record<string, unknown>).share_type, (entry as Record<string, unknown>).email));
+    case 'transfer_owner': return !isPrincipalAddress(input.new_owner_email, emails);
+    // Change or remove an existing permission: adds nobody.
+    case 'update':
+    case 'revoke': return false;
+    // Fail closed: an action this does not know may add someone.
+    default: return true;
   }
-  return false;
 }
 
 /** The line appended to a successful result, so the model reports the access truthfully. */
