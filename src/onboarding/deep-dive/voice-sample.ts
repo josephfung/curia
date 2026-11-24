@@ -4,7 +4,7 @@ import { htmlToPlainText, type NylasMessageSummary } from '../../channels/email/
 import { compareStrings, normaliseAddress } from './summary-util.js';
 
 /** Longest voice-sample body kept, in characters, after HTML and quoted text are stripped. */
-export const VOICE_BODY_MAX_CHARS = 4000;
+export const VOICE_BODY_MAX_CHARS = 2000;
 
 /** A forward: subject starts `Fwd:`, `Fw:` or `FW:` (any case). */
 export function isForward(subject: string): boolean {

@@ -12,7 +12,7 @@ export const MAX_REQUESTS = 1500;
 /** Days of calendar read for the time-and-priorities picture. */
 export const CALENDAR_WINDOW_DAYS = 7;
 /** Sent messages sampled for the writing-voice document. */
-export const VOICE_SAMPLE_SIZE = 30;
+export const VOICE_SAMPLE_SIZE = 60;
 /** A correspondent needs this many messages in total, at least one each way, to count as two-way. */
 export const TWO_WAY_MIN_MESSAGES = 3;
 /** Most contacts backfilled from the scan. */

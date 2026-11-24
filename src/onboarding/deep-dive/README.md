@@ -151,8 +151,8 @@ Hours are rounded to two decimals.
 
 From the principal-sent messages: skip forwards and mail to no one but the principal; newest
 first, one message per distinct first recipient, then the rest newest first, up to
-`VOICE_SAMPLE_SIZE` (30). The scan fetches bodies for exactly these candidates. Bodies are
+`VOICE_SAMPLE_SIZE` (60). The scan fetches bodies for exactly these candidates. Bodies are
 HTML-stripped with the repo's `htmlToPlainText`, then quoted history is cut (at the first
 `On … wrote:`, `-----Original Message-----`, `---------- Forwarded message`, or an Outlook
 `From:` line followed by `Sent:`/`Date:`; lines starting with `>` are dropped), then capped at
-4,000 characters. An empty result is skipped.
+2,000 characters. An empty result is skipped.
