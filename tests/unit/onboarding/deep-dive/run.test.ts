@@ -258,6 +258,14 @@ describe('runDeepDive', () => {
     expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_failed');
   });
 
+  it('reads a stored summary saved with CRLF line endings', async () => {
+    const crlf = summaryDoc().body!.replace(/\n/g, '\r\n');
+    const t = setup({ openTask: true, docs: { [SUMMARY_PATH]: { path: SUMMARY_PATH, body: crlf, version: 1 } } });
+    await t.seed(drafting);
+    await runDeepDive(t.deps, drafting);
+    expect(await t.read()).toMatchObject({ status: 'delivered', backfilled: 2 });
+  });
+
   it('fails the run when the stored summary body is not fenced JSON', async () => {
     const t = setup({ docs: { [SUMMARY_PATH]: { path: SUMMARY_PATH, body: 'not json', version: 1 } } });
     await t.seed(drafting);
@@ -349,6 +357,10 @@ describe('runDeepDive', () => {
     await runDeepDive(t.deps, drafting);
     // The failure is recorded on a state that already names the task it created.
     expect(await t.read()).toMatchObject({ status: 'failed', reviewTaskId: 'review-1' });
+    // With no onboarding open, the failure is noted on that review task, and the coordinator woken there.
+    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('review-1', { progressNote: expect.stringContaining(ALL_DRAFTS[2]!) });
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'review-1' }));
+    expect(t.notifyOperator).toHaveBeenCalledWith('review-1', 'deep_dive_failed');
   });
 
   it('drafts only the drafts a resumed run has not written yet', async () => {
@@ -417,7 +429,29 @@ describe('runDeepDive', () => {
     await runDeepDive(t.deps, running);
     expect(await t.read()).toMatchObject({ status: 'failed', error: 'grant revoked' });
     expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_failed');
-    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('onb-1', { progressNote: expect.stringContaining('Deep dive failed') });
+    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('onb-1', {
+      progressNote: 'Deep dive failed: no drafts are coming from it; its Review topics can be declined',
+    });
+    // The wake is what re-checks onboarding completion, which the running deep dive held.
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'onb-1', agentId: 'coordinator' }));
+  });
+
+  it('a failure after some drafts were written names them instead of saying none are coming', async () => {
+    const first = ALL_DRAFTS[0]!;
+    const t = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc(), [first]: { path: first, body: '# d', version: 1 } },
+      draft: async () => { throw new DraftError('deep-dive draft "time-and-priorities" failed: empty response', 0); },
+    });
+    const resumed = { ...drafting, backfilled: 2, draftPaths: [first] };
+    await t.seed(resumed);
+    await runDeepDive(t.deps, resumed);
+    expect((await t.read())?.status).toBe('failed');
+    const note = (t.taskRepo.updateTask.mock.calls as unknown as [string, { progressNote: string }][])
+      .find(([id]) => id === 'onb-1')![1].progressNote;
+    expect(note).toContain(first);
+    expect(note).not.toContain('no drafts are coming');
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'onb-1' }));
   });
 
   it('a Nylas outage (the real scan reads nothing) fails the run with deep_dive_failed', async () => {

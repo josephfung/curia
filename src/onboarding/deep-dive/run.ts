@@ -28,6 +28,8 @@ import { EDITABLE_BY_CONSOLE, EDITABLE_BY_KEY } from '../../memory/console-only-
 import type { OperatorNotifier } from '../notify-operator.js';
 import type { OnboardingService } from '../onboarding-service.js';
 import { findOpenOnboardingTask, type OnboardingStateLock } from '../state.js';
+import { noteAndWakeCoordinator } from '../subscribers.js';
+import { isOpenTask } from '../subtasks.js';
 import { backfillContacts, type BackfillDeps } from './backfill.js';
 import { draftDocuments, DraftError, readDraftInputs, type DraftDeps, type DraftInputs, type DraftKind } from './draft.js';
 import { handoffStage } from './handoff.js';
@@ -333,7 +335,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
  */
 export function parseStoredSummary(body: string): HistorySummary {
   const malformed = (why: string): Error => new Error(`deep-dive: the stored history summary is malformed (${why})`);
-  const fenced = /^```json\n([\s\S]*)\n```\s*$/.exec(body);
+  const fenced = /^```json\r?\n([\s\S]*?)\r?\n```\s*$/.exec(body);
   if (!fenced) throw malformed('not a fenced JSON block');
   let parsed: unknown;
   try {
@@ -356,7 +358,22 @@ export function parseStoredSummary(body: string): HistorySummary {
   return parsed as unknown as HistorySummary;
 }
 
-/** Mark the run failed (only if it is still this run), then notice + note the open onboarding task. */
+/** The failure note: names the drafts already written, so they are still reviewed, not declined. */
+export function failureNote(draftPaths: readonly string[]): string {
+  if (draftPaths.length === 0) {
+    return 'Deep dive failed: no drafts are coming from it; its Review topics can be declined';
+  }
+  return (
+    `Deep dive failed after writing ${draftPaths.join(', ')}: review what was written; ` +
+    'Review topics for anything missing can be declined'
+  );
+}
+
+/**
+ * Mark the run failed (only if it is still this run), then note it on the task the review would
+ * go on (the open onboarding task, else this run's open review task) and wake the coordinator
+ * there: the wake is what re-checks onboarding completion, which the run was holding.
+ */
 async function recordFailure(deps: RunDeps, startedAt: string, err: unknown, now: () => Date): Promise<void> {
   const { logger } = deps;
   const message = err instanceof Error ? err.message : String(err);
@@ -371,23 +388,29 @@ async function recordFailure(deps: RunDeps, startedAt: string, err: unknown, now
     logger.warn({ startedAt }, 'deep-dive: the failed run was superseded or finished; state left as is');
     return;
   }
-  let task;
+  let task: { id: string } | null;
   try {
     task = await findOpenOnboardingTask(deps.taskRepo);
+    if (!task && marked.reviewTaskId !== null) {
+      const review = await deps.taskRepo.getTask(marked.reviewTaskId);
+      task = review && isOpenTask(review) ? review : null;
+    }
   } catch (lookupErr) {
-    logger.error({ err: lookupErr, startedAt }, 'deep-dive: could not look up the onboarding task; no failure notice sent');
+    logger.error({ err: lookupErr, startedAt }, 'deep-dive: could not look up the task to note the failure on; no failure notice sent');
     return;
   }
   if (!task) {
-    logger.error({ startedAt }, 'deep-dive: run failed with no onboarding task open; no notice sent');
+    logger.error({ startedAt }, 'deep-dive: run failed with no onboarding or review task open; no notice sent');
     return;
   }
   try {
-    await deps.taskRepo.updateTask(task.id, {
-      progressNote: 'Deep dive failed: no drafts are coming from it; its Review topics can be declined',
-    });
+    await noteAndWakeCoordinator(
+      { taskRepo: deps.taskRepo, scheduler: deps.scheduler, logger },
+      task,
+      failureNote(marked.draftPaths),
+    );
   } catch (noteErr) {
-    logger.error({ err: noteErr, taskId: task.id }, 'deep-dive: could not note the failure on the onboarding task');
+    logger.error({ err: noteErr, taskId: task.id }, 'deep-dive: could not note the failure or wake the coordinator');
   }
   if (deps.notifyOperator) {
     // The notifier never throws: it records its own note and logs a failed send.
