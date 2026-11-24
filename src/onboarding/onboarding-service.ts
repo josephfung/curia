@@ -400,6 +400,8 @@ export class OnboardingService {
 
     // Only after the commit: a rolled-back rotation must never reach the cache.
     if (rotatedTo) noteWebThreadRotated(pool, rotatedTo);
+    // Before the restart is armed: the run must be recorded before the exit can fire, or no boot resumes it.
+    if (result.ok) await this.startDeepDive(result.taskId);
     if (result.ok && result.restartScheduled) {
       // A principal start leaves the calling turn time to say Curia will be back.
       const delayMs = opts.actor === 'principal' ? PRINCIPAL_RESTART_EXIT_DELAY_SECONDS * 1000 : RESTART_EXIT_DELAY_MS;
@@ -411,7 +413,6 @@ export class OnboardingService {
         logger.error({ err }, 'onboarding: scheduleProcessExit threw — the restart will not occur');
       }
     }
-    if (result.ok) await this.startDeepDive(result.taskId);
     return result;
   }
 

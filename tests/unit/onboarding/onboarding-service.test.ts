@@ -245,6 +245,13 @@ describe('OnboardingService.start', () => {
     expect(h.startOnce).toHaveBeenCalledTimes(1);
   });
 
+  it('records the deep dive before arming the restart, so the exit cannot pre-empt it', async () => {
+    const h = makeHarness({ hasMailbox: true });
+    const result = await h.service.start({ actor: 'operator' });
+    expect(result.ok && result.restartScheduled).toBe(true);
+    expect(h.startOnce.mock.invocationCallOrder[0]!).toBeLessThan(h.scheduleProcessExit.mock.invocationCallOrder[0]!);
+  });
+
   it('start does not when none', async () => {
     const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, hasMailbox: false });
     const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });

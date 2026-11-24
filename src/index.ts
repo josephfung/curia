@@ -3953,10 +3953,6 @@ async function main(): Promise<void> {
     deepDive,
   });
   onboardingWatcher.start();
-  // A scanning/drafting run at boot was orphaned by the restart (Start may schedule one): resume it.
-  void deepDive.resumeAtBoot().catch((err: unknown) => {
-    logger.error({ err }, 'deep-dive: boot resume failed; the watcher retries once the run looks stalled');
-  });
 
   // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
   // General meetings infrastructure; runs only when a calendar can be read.
@@ -4756,6 +4752,12 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');
     await shutdown(1);
   }
+
+  // A scanning/drafting run at boot was orphaned by the restart (Start may schedule one): resume it.
+  // After the email adapters start, so a run that fails at once can still email its failure notice.
+  void deepDive.resumeAtBoot().catch((err: unknown) => {
+    logger.error({ err }, 'deep-dive: boot resume failed; the watcher retries once the run looks stalled');
+  });
 
   // Historical Signal 1:1 and SMS senders. Migration 090 only stamps seven
   // days inside the boot transaction; older null rows would mark those
