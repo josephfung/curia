@@ -187,6 +187,14 @@ describe('DeepDiveService.resumeAtBoot', () => {
     expect(t.run).toHaveBeenCalledTimes(1);
   });
 
+  it('does not fire again a run this process already started (a re-run before the boot resume)', async () => {
+    const t = setup();
+    await t.seed({ status: 'delivered' });
+    expect(await t.svc.startOnce({ force: true })).toEqual({ started: true });
+    expect(await t.svc.resumeAtBoot()).toBe(false);
+    expect(t.run).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing for a finished or absent run', async () => {
     const t = setup();
     expect(await t.svc.resumeAtBoot()).toBe(false);

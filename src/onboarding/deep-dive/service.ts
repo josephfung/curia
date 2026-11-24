@@ -23,6 +23,8 @@ export type StartResult =
 export class DeepDiveService {
   private readonly now: () => Date;
   private readonly runPipeline: (state: DeepDiveState) => Promise<void>;
+  /** startedAt of every run this process has fired. */
+  private readonly firedRuns = new Set<string>();
 
   constructor(private readonly deps: DeepDiveDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -69,9 +71,13 @@ export class DeepDiveService {
     });
   }
 
-  /** At boot any scanning/drafting run is orphaned (its process is gone): resume it now. */
+  /**
+   * At boot any scanning/drafting run is orphaned (its process is gone): resume it now. The
+   * scheduler and HTTP are live before this runs, so a run this process already started is live,
+   * not orphaned, and is left alone.
+   */
   resumeAtBoot(): Promise<boolean> {
-    return this.resume(this.now(), () => true);
+    return this.resume(this.now(), (s) => !this.firedRuns.has(s.startedAt));
   }
 
   private async resume(now: Date, shouldResume: (s: DeepDiveState) => boolean): Promise<boolean> {
@@ -94,6 +100,7 @@ export class DeepDiveService {
    * note); this catch is the backstop for anything that escapes it, a synchronous throw included.
    */
   private fire(state: DeepDiveState): void {
+    this.firedRuns.add(state.startedAt);
     void Promise.resolve()
       .then(() => this.runPipeline(state))
       .catch((err: unknown) => {
