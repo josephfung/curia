@@ -22,6 +22,11 @@ interface PartialWritingVoiceInput {
   sign_off?: string;
 }
 
+/** Longest voice guide this tool accepts. The guide is injected into every drafting prompt. */
+export const MAX_GUIDE_CHARS = 8000;
+/** Longest change note this tool accepts. */
+export const MAX_NOTE_CHARS = 200;
+
 export class ExecutiveProfileUpdateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.executiveProfileService) {
@@ -31,6 +36,23 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
     const { writing_voice: rawVoice } = ctx.input as { writing_voice?: Record<string, unknown> };
     if (!rawVoice || typeof rawVoice !== 'object' || Array.isArray(rawVoice)) {
       return { success: false, error: 'Input must include a "writing_voice" object with the fields to update.' };
+    }
+
+    // guide and note are optional top-level strings. A blank note counts as absent.
+    const { guide: rawGuide, note: rawNote } = ctx.input as { guide?: unknown; note?: unknown };
+    if (rawGuide !== undefined && typeof rawGuide !== 'string') {
+      return { success: false, error: '"guide" must be a string.' };
+    }
+    if (rawNote !== undefined && typeof rawNote !== 'string') {
+      return { success: false, error: '"note" must be a string.' };
+    }
+    const guide = rawGuide?.trim();
+    if (guide !== undefined && guide.length > MAX_GUIDE_CHARS) {
+      return { success: false, error: `"guide" is ${guide.length} characters; the maximum is ${MAX_GUIDE_CHARS}.` };
+    }
+    const note = rawNote?.trim() || undefined;
+    if (note !== undefined && note.length > MAX_NOTE_CHARS) {
+      return { success: false, error: `"note" is ${note.length} characters; the maximum is ${MAX_NOTE_CHARS}.` };
     }
 
     // Normalize camelCase keys to snake_case — the tool schema defines writing_voice
@@ -58,10 +80,9 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
             : currentVoice.vocabulary.avoid,
         },
         signOff: typeof writing_voice.sign_off === 'string' ? writing_voice.sign_off : currentVoice.signOff,
-        // The learned guide isn't part of this skill's input surface — it's maintained
-        // by the weekly voice-learn LLM pass. Always carry the current value forward so
-        // this human-facing edit doesn't clobber it.
-        guide: currentVoice.guide,
+        // The guide is normally maintained by the weekly voice-learn pass, so keep the
+        // current one unless the caller supplies a replacement (deep-dive import).
+        guide: guide ?? currentVoice.guide,
       };
 
       // Build a human-readable changes summary before updating.
@@ -74,7 +95,7 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
       await ctx.executiveProfileService.update(
         { writingVoice: merged },
         'tool',
-        `${changes} (by ${actor})`,
+        `${note ? `${note}: ` : ''}${changes} (by ${actor})`,
       );
 
       const updated = ctx.executiveProfileService.get();
@@ -118,6 +139,9 @@ function buildChangesSummary(prev: WritingVoice, next: WritingVoice): string {
   }
   if (JSON.stringify(prev.vocabulary) !== JSON.stringify(next.vocabulary)) {
     parts.push('vocabulary updated');
+  }
+  if (prev.guide !== next.guide) {
+    parts.push('guide updated');
   }
   if (prev.signOff !== next.signOff) {
     parts.push(`sign_off: "${prev.signOff}" → "${next.signOff}"`);

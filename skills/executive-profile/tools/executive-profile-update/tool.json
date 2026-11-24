@@ -1,11 +1,13 @@
 {
   "name": "executive-profile-update",
-  "description": "Update the executive's writing voice profile. Accepts partial updates — only provide the fields you want to change. Requires principal authorization. Use when the principal asks to adjust their voice settings, after analyzing their writing patterns, or when they give feedback on drafted content.",
+  "description": "Update the writing voice profile; send only changed fields. Requires principal authorization. Use when the principal adjusts voice settings or critiques a draft.",
   "version": "1.1.1",
   "sensitivity": "normal",
   "capabilities": ["executiveProfileService"],
   "inputs": {
-    "writing_voice": "object"
+    "writing_voice": "object",
+    "guide": "string? (replaces guide, max 8000)",
+    "note": "string? (history note, max 200)"
   },
   "outputs": { "profile": "object", "summary": "string", "changes": "string" },
   "permissions": [],
