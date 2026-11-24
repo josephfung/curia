@@ -25,6 +25,8 @@ import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durabl
 import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
 import type { WorkingDocRow } from '../../../../src/db/working-docs-repo.js';
 import { EDITABLE_BY_KEY, editableBy } from '../../../../src/memory/console-only-docs.js';
+import { PRIORITIES_PATH, priorityFrontmatterDefaults } from '../../../../src/memory/priorities-doc.js';
+import { toLocalIso } from '../../../../src/time/timestamp.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -247,10 +249,18 @@ export class DocWriteHandler implements ToolHandler {
               error: `${normalized} was archived by the principal. Do not recreate it; the principal can restore it in the console.`,
             };
           }
+          // The priorities document starts with its standard frontmatter (#2362); keys the
+          // caller gives win.
+          const frontmatter = normalized === PRIORITIES_PATH
+            ? {
+                ...priorityFrontmatterDefaults((toLocalIso(Math.floor(Date.now() / 1000), timezone) ?? '').slice(0, 10)),
+                ...input.frontmatter,
+              }
+            : input.frontmatter;
           const created = await repo.create({
             path: normalized,
             type: input.type.trim(),
-            frontmatter: input.frontmatter,
+            frontmatter,
             body: input.body ?? '',
             taskId: associatedTaskId,
             conversationId: input.conversation_id ?? ctx.conversationId ?? undefined,

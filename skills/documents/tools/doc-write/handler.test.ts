@@ -411,6 +411,69 @@ describe('DocWriteHandler', () => {
     }
   });
 
+  describe('priorities document (#2362)', () => {
+    const PRIORITIES = '/shared/principal/priorities.md';
+    const PAST = '/meetings/principal/priorities-past.md';
+
+    function prioritiesCtx(input: Record<string, unknown>, repo: WorkingDocsRepo): ToolContext {
+      const registry = new AgentRegistry();
+      registry.register('coordinator', { role: 'coordinator', description: 'coord', pinnedDocPaths: [PRIORITIES] });
+      const ctx = makeCtx(input, repo) as unknown as Record<string, unknown>;
+      ctx.agentRegistry = registry;
+      return ctx as unknown as ToolContext;
+    }
+
+    it('create fills priorities frontmatter defaults', async () => {
+      const repo = makeRepo();
+      const result = await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'create', type: 'note', body: '## Ship',
+      }, repo));
+      expect(result.success).toBe(true);
+      const call = (repo.create as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { frontmatter: Record<string, unknown> };
+      expect(call.frontmatter).toMatchObject({
+        title: 'Priorities',
+        past: PAST,
+        as_of: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      });
+      expect(typeof call.frontmatter.format).toBe('string');
+    });
+
+    it('caller frontmatter wins', async () => {
+      const repo = makeRepo();
+      await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'create', type: 'note', body: 'x',
+        frontmatter: { title: 'Mine', as_of: '2020-01-01', extra: 1 },
+      }, repo));
+      const call = (repo.create as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { frontmatter: Record<string, unknown> };
+      expect(call.frontmatter).toMatchObject({ title: 'Mine', as_of: '2020-01-01', extra: 1, past: PAST });
+    });
+
+    it('does not add defaults to other documents', async () => {
+      const repo = makeRepo();
+      await new DocWriteHandler().execute(makeCtx({
+        path: '/projects/x/new.md', mode: 'create', type: 'note', body: 'x',
+      }, repo));
+      const call = (repo.create as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { frontmatter?: Record<string, unknown> };
+      expect(call.frontmatter).toBeUndefined();
+    });
+
+    it('coordinator may write priorities.md', async () => {
+      const result = await new DocWriteHandler().execute(prioritiesCtx({
+        path: PRIORITIES, mode: 'create', type: 'note', body: 'x',
+      }, makeRepo()));
+      expect(result.success).toBe(true);
+    });
+
+    it('coordinator may write the past document (outside /shared/)', async () => {
+      const repo = makeRepo();
+      const result = await new DocWriteHandler().execute(prioritiesCtx({
+        path: PAST, mode: 'create', type: 'note', body: 'x',
+      }, repo));
+      expect(result.success).toBe(true);
+      expect(repo.create).toHaveBeenCalled();
+    });
+  });
+
   describe('section-delete (#2339)', () => {
     const PATH = '/projects/x/brief.md';
     const body = '## Board mail\n\n- When: from the board\n\n## Newsletters\n\n- When: Substack\n';
