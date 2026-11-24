@@ -103,7 +103,7 @@ describe('PR-check Docker Hub pulls (#2095)', () => {
   const ci = load<CheckWorkflow>('ci.yml');
 
   it.each([
-    ['ci.yml', 'ci', 'postgres'],
+    ['ci.yml', 'test', 'postgres'],
     ['dast.yml', 'zap-baseline', 'postgres'],
     ['behavior-gate.yml', 'gate', 'postgres'],
   ])('%s authenticates its %s job\'s %s service', (file, job, service) => {

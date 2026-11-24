@@ -1,8 +1,12 @@
 version: 2
 
 updates:
-  # npm dependencies — production deps get individual PRs,
-  # dev deps are grouped into a single PR to reduce noise
+  # npm dependencies — minor and patch bumps are grouped into one production PR and one
+  # dev PR a week; majors still get individual PRs. The main ruleset requires a PR to be
+  # up to date, so the Dependabot merge driver (curia-deploy scripts/dependabot) lands PRs
+  # one at a time, each through a full CI run: five single-package PRs cost five CI
+  # cycles, one group costs one. The trade: one bad bump holds its group until it is
+  # excluded with `@dependabot ignore <name>` on the group PR.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -19,6 +23,17 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     groups:
+      production-dependencies:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+        # Held by the merge driver's policy (curia-deploy scripts/dependabot/policy.yaml
+        # hold_dependencies): every patchright bump gets a human look at its release. In
+        # the group it would hold every other production bump with it, so it keeps its
+        # own PR.
+        exclude-patterns:
+          - "patchright"
       dev-dependencies:
         dependency-type: "development"
         update-types:
