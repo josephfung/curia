@@ -40,7 +40,7 @@ Alternatives considered for priorities:
 
 - **`/shared/principal/priorities.md`: current priorities only, pinned by the coordinator.**
   Its `pinned_context` entry carries the behaviour in its description: weigh work and suggestions
-  against the priorities, propose an update when the principal states or changes a goal, move superseded
+  against the priorities, ask before updating when the principal states or changes a goal, move superseded
   ones to the past document, and offer to start the document when goals come up and it does not
   exist. A newly created document starts with standard frontmatter (`src/memory/priorities-doc.ts`):
   `as_of` (updated on every change), `past:` (where superseded ones go) and a one-line `format`.
