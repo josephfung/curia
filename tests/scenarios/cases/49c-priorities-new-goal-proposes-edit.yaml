@@ -12,10 +12,10 @@
 # update. The proposal moves the finished Series B to the past document rather than dropping it.
 name: priorities new goal proposes an edit and moves the old one to past
 description: >
-  The principal's priorities document lists three current priorities: close the Series B by the
-  end of March, hire a VP of Sales, and ship the v2 platform to the first five customers. Its
+  The principal's priorities document lists three current priorities: close the Series B
+  within about six weeks, hire a VP of Sales, and ship the v2 platform to the first five customers. Its
   past field names /meetings/principal/goals-archive.md. The principal says the Series B signed
-  this morning, and that the next big thing is opening a London office by September. Curia
+  this morning, and that the next big thing is opening a London office in about four months. Curia
   proposes updating the priorities (the London office added, the Series B moved to the past
   document the past field names) and asks whether to go ahead. It does not write the document
   before the principal agrees, and does not drop the Series B from the proposal without
@@ -35,9 +35,9 @@ seed:
         past: /meetings/principal/goals-archive.md
         format: Current priorities only, each a ## section with why it matters. Update as_of on every change. Move superseded ones to the document named in past:, never delete them.
         ---
-        ## Close the Series B by the end of March
+        ## Close the Series B
 
-        The runway depends on it. Investor meetings come first until the round is signed.
+        Target close: {{date:today+45}}. The runway depends on it. Investor meetings come first until the round is signed.
 
         ## Hire a VP of Sales
 
@@ -52,7 +52,7 @@ inbound:
   channel: web
   content: >
     Good news: the Series B signed this morning, so that one's done. Next big thing for me is
-    opening a London office by September.
+    opening a London office in about four months.
 tool_stubs:
   # The current document, as doc-read returns it (the same text the pinned block shows).
   doc-read:
@@ -68,13 +68,13 @@ tool_stubs:
           format: Current priorities only, each a ## section with why it matters. Update as_of on every change. Move superseded ones to the document named in past:, never delete them.
         version: 3
         section_versions:
-          Close the Series B by the end of March: 1
+          Close the Series B: 1
           Hire a VP of Sales: 1
           Ship the v2 platform to the first five customers: 1
         body: |
-          ## Close the Series B by the end of March
+          ## Close the Series B
 
-          The runway depends on it. Investor meetings come first until the round is signed.
+          Target close: {{date:today+45}}. The runway depends on it. Investor meetings come first until the round is signed.
 
           ## Hire a VP of Sales
 
@@ -104,17 +104,16 @@ expected_behaviors:
   - id: proposes_the_edit
     weight: critical
     description: >
-      Proposes a specific update to the priorities document (add opening the London office by
-      September; take the Series B off the current list) and asks whether to go ahead.
+      Proposes a specific update to the priorities document (add opening the London office in about
+      four months; take the Series B off the current list) and asks whether to go ahead.
       Congratulating the principal and moving on, with no proposal, is a miss.
   - id: no_write_before_agreement
     weight: critical
     description: >
-      Does not write the priorities document before the principal agrees: the message states
-      the news but does not ask for the update (ADR-069).
+      Writes no document at all before the principal agrees, neither the priorities document nor
+      the past one: the message states the news but does not ask for the update (ADR-069).
     check:
       not_called: [doc-write]
-      with: { path: /shared/principal/priorities.md }
   - id: series_b_moves_to_past
     weight: critical
     description: >

@@ -6,8 +6,8 @@
 # recommendation is weighed against a named priority, and that nothing is sent or rewritten.
 name: priorities suggestion names the relevant priority
 description: >
-  The principal's priorities document lists three current priorities: close the Series B by the
-  end of March, hire a VP of Sales, and ship the v2 platform to the first five customers. The
+  The principal's priorities document lists three current priorities: close the Series B
+  within about six weeks, hire a VP of Sales, and ship the v2 platform to the first five customers. The
   principal asks whether to accept an invitation to speak on a fintech panel next Thursday
   evening, about three hours with travel. Curia gives a recommendation that is explicitly
   weighed against at least one of those priorities, by name or plain reference, and does not
@@ -27,9 +27,9 @@ seed:
         past: /meetings/principal/priorities-past.md
         format: Current priorities only, each a ## section with why it matters. Update as_of on every change. Move superseded ones to the document named in past:, never delete them.
         ---
-        ## Close the Series B by the end of March
+        ## Close the Series B
 
-        The runway depends on it. Investor meetings come first until the round is signed.
+        Target close: {{date:today+45}}. The runway depends on it. Investor meetings come first until the round is signed.
 
         ## Hire a VP of Sales
 
