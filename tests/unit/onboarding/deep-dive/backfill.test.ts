@@ -129,6 +129,14 @@ describe('backfillContacts', () => {
     expect(emails).not.toContain(`p${String(BACKFILL_CAP + 4).padStart(3, '0')}@corp.io`);
   });
 
+  it('reaches new people past existing contacts on a re-run', async () => {
+    const busy = Array.from({ length: BACKFILL_CAP }, (_, i) => person(`old${i}@corp.io`, { received: 500, sent: 1 }));
+    const svc = setup({ existing: busy.map((c) => c.email) });
+    const result = await backfillContacts({ contactService: svc, logger }, summary({ correspondents: [...busy, person('new@corp.io')] }));
+    expect(result).toEqual({ created: 1, existing: BACKFILL_CAP, skipped: 0 });
+    expect(created(svc).map((c) => c.primaryEmail)).toEqual(['new@corp.io']);
+  });
+
   it("never backfills the principal's addresses", async () => {
     const svc = setup();
     const result = await backfillContacts(

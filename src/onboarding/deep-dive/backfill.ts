@@ -51,6 +51,7 @@ function candidatesOf(summary: HistorySummary): Candidate[] {
   const meetings = new Map<string, number>();
   for (const m of summary.recurringMeetings) {
     for (const a of new Set(m.attendees.map(normaliseAddress))) {
+      // Only 'automated' is dropped: a role address (team@, info@) in a meeting is usually a real person's alias.
       if (usable(a) && classifyEmailSender(a) !== 'automated') meetings.set(a, (meetings.get(a) ?? 0) + 1);
     }
   }
@@ -67,13 +68,18 @@ export async function backfillContacts(
 ): Promise<{ created: number; existing: number; skipped: number }> {
   const { contactService, logger } = deps;
   const all = candidatesOf(summary);
-  const candidates = all.slice(0, BACKFILL_CAP);
   let created = 0;
   let existing = 0;
-  let skipped = all.length - candidates.length;
-  if (skipped > 0) logger.info({ cap: BACKFILL_CAP, skipped }, 'deep-dive backfill: candidate cap reached');
+  let skipped = 0;
 
-  for (const { email, name, source } of candidates) {
+  // The cap limits contacts created, not candidates looked at: on a re-run the busiest people are
+  // already contacts, and must not use up the cap before anyone new is reached.
+  for (const [index, { email, name, source }] of all.entries()) {
+    if (created >= BACKFILL_CAP) {
+      skipped += all.length - index;
+      logger.info({ cap: BACKFILL_CAP, unreached: all.length - index }, 'deep-dive backfill: cap reached');
+      break;
+    }
     try {
       if (await contactService.resolveByChannelIdentity('email', email)) {
         existing++;
