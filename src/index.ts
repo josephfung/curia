@@ -267,6 +267,7 @@ import { readCurrentInvitationTiming } from './channels/http/pairing-invitations
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { createOnboardingStateLock } from './onboarding/state.js';
 import { DeepDiveService } from './onboarding/deep-dive/service.js';
+import { readWorkingHoursFact } from './contacts/working-hours-fact.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3520,17 +3521,33 @@ async function main(): Promise<void> {
   });
   // The deep dive (#2362): one slow read of the principal's mail and calendar history, started on
   // Start or a mailbox connect during onboarding, resumed by the watcher and at boot.
-  const deepDive = new DeepDiveService({
+  const deepDive: DeepDiveService = new DeepDiveService({
     configStore: triageConfig,
     stateLock: onboardingStateLock,
     mailboxes: principalMailboxes,
     workingDocsRepo,
     taskRepo,
+    contactService,
+    // onboardingService is built below with this service; the hand-off only calls it at run time.
+    onboardingService: { openSession: (parent, sessionId) => onboardingService.openSession(parent, sessionId) },
+    scheduler: schedulerService,
+    // Drafting calls the powerful tier through the same router and telemetry InfraLlmService uses.
+    providerRouter: infraLlmRouter,
+    modelRouter,
+    bus,
+    estimateCost: estimateCostUsd,
+    modelRegistry,
+    ...(executiveProfileService ? { executiveProfile: executiveProfileService } : {}),
+    officeIdentity: officeIdentityService,
+    readWorkingHours: async () => {
+      const principal = await contactService.findContactBySystemRole('principal');
+      return principal?.kgNodeId ? readWorkingHoursFact(pool, principal.kgNodeId) : null;
+    },
     timezone: principalHomeTz,
     logger,
     notifyOperator: operatorNotifier,
   });
-  const onboardingService = new OnboardingService({
+  const onboardingService: OnboardingService = new OnboardingService({
     pool,
     taskRepo,
     registry: registryService,

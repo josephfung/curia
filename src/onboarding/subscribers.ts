@@ -150,7 +150,7 @@ export class OnboardingSubscribers {
  * finished (best effort: a restart drops the retry, and the note waits for the booked run).
  */
 export async function noteAndWakeCoordinator(
-  o: Pick<OnboardingSubscribersOptions, 'taskRepo' | 'scheduler' | 'logger'>,
+  o: { taskRepo: Pick<TaskRepo, 'updateTask'> } & Pick<OnboardingSubscribersOptions, 'scheduler' | 'logger'>,
   task: Pick<TaskRow, 'id'>,
   note: string,
 ): Promise<void> {

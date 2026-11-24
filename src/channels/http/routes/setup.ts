@@ -46,6 +46,7 @@ import { InvalidSettingError } from '../../../settings/store.js';
 
 import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
 import { seedPlaybook } from '../../../onboarding/playbook.js';
+import { readWorkingHoursFact } from '../../../contacts/working-hours-fact.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
@@ -240,20 +241,7 @@ export async function setupRoutes(
         .find((i) => i.channel === 'email' && i.verified && i.status === 'active')
         ?.channelIdentifier ?? null;
 
-      // Working-hours fact: a 'fact' node linked to the principal's KG node whose
-      // properties.attribute === 'working_hours'. Mirrors the assembler's getFacts query.
-      let workingHours: string | null = null;
-      if (principal.kgNodeId) {
-        const facts = await pool.query<{ value: string | null }>(
-          `SELECT n.properties->>'value' AS value
-             FROM kg_edges e JOIN kg_nodes n ON n.id = e.target_node_id
-            WHERE e.source_node_id = $1 AND e.type = 'relates_to'
-              AND n.type = 'fact' AND lower(n.properties->>'attribute') = 'working_hours'
-            ORDER BY n.last_confirmed_at DESC LIMIT 1`,
-          [principal.kgNodeId],
-        );
-        workingHours = facts.rows[0]?.value ?? null;
-      }
+      const workingHours = principal.kgNodeId ? await readWorkingHoursFact(pool, principal.kgNodeId) : null;
 
       return reply.send({
         exists: true,

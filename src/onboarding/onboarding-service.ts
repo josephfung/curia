@@ -58,6 +58,7 @@ import {
 import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import type { DeepDiveService } from './deep-dive/service.js';
+import { isRunning as isDeepDiveRunning, readDeepDiveState } from './deep-dive/state.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -342,6 +343,15 @@ export class OnboardingService {
   /** The onboarding run state, or null before any start. */
   readState(): Promise<OnboardingState | null> {
     return readOnboardingState(this.deps.configStore, this.deps.logger);
+  }
+
+  /**
+   * Whether the deep dive (#2362) is scanning or drafting. Onboarding does not complete while it
+   * is, so its drafts reach the Review session; a delivered or failed run holds nothing. Read from
+   * the same config store the deep-dive service writes its run state to.
+   */
+  async deepDiveRunning(): Promise<boolean> {
+    return isDeepDiveRunning(await readDeepDiveState(this.deps.configStore, this.deps.logger));
   }
 
   /**

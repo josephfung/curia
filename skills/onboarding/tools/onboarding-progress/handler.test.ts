@@ -129,7 +129,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       ...extra,
     } as unknown as ToolContext);
   const sub = (topicId: string) => tasks.find((t) => t.tags.includes(`onboarding:topic:${topicId}`))!;
-  return { run, tasks, taskRepo, notes, sub };
+  return { run, tasks, taskRepo, notes, sub, store };
 }
 
 describe('onboarding-progress', () => {
@@ -214,6 +214,59 @@ describe('onboarding-progress', () => {
     await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
     const status = await w.run({ op: 'status' });
     expect(status).toMatchObject({ success: true, data: { onboardingComplete: false } });
+  });
+
+  describe('while the deep dive runs (#2362)', () => {
+    const deepDive = (status: string) => JSON.stringify({
+      status,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      mailboxIds: ['personal'],
+      summaryPath: null,
+      draftPaths: [],
+      reviewTaskId: null,
+      backfilled: null,
+      spendUsd: 0,
+      requests: 0,
+      rateLimited: 0,
+      error: status === 'failed' ? 'grant revoked' : null,
+    });
+    const closeEveryTopic = async (w: ReturnType<typeof makeWorld>) => {
+      await w.run({ op: 'open_session', session_id: 'first-conversation' });
+      await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
+      for (const topic of ['hello', 'inbox-expectations']) {
+        await w.run({ op: 'topic_done', topic_id: topic, outcome: 'done', note: 'ok' });
+      }
+      return w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
+    };
+
+    it.each(['scanning', 'drafting'])('onboarding does not complete while the deep dive is running (%s)', async (status) => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive(status));
+      const last = await closeEveryTopic(w);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+      const status2 = await w.run({ op: 'status' });
+      expect(status2).toMatchObject({ success: true, data: { onboardingComplete: false } });
+    });
+
+    it('completes once it has failed', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('drafting'));
+      await closeEveryTopic(w);
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+      w.store.set('onboarding/deep_dive', deepDive('failed'));
+      const status = await w.run({ op: 'status' });
+      expect(status).toMatchObject({ success: true, data: { onboardingComplete: true } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
+    });
+
+    it('completes once its drafts are delivered', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('delivered'));
+      const last = await closeEveryTopic(w);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
+    });
   });
 
   it('does not complete the parent while the ongoing-rhythm session has not been opened', async () => {

@@ -131,6 +131,13 @@ describe('draftDocuments', () => {
     expect(Object.keys(drafts).sort()).toEqual(['time-and-priorities', 'working-rules', 'writing-voice']);
   });
 
+  it('drafts only the kinds asked for (a resumed run)', async () => {
+    const { deps, chat } = setup();
+    const { drafts } = await draftDocuments(deps, inputs(), ['writing-voice']);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(Object.keys(drafts)).toEqual(['writing-voice']);
+  });
+
   it('sums spend from usage via estimateCost', async () => {
     const { deps, estimateCost } = setup();
     const { spendUsd } = await draftDocuments(deps, inputs());
@@ -323,5 +330,15 @@ describe('readDraftInputs', () => {
       readWorkingHours: async () => null,
     }, summary());
     expect(result).toMatchObject({ behavioralPreferences: null, workingHours: null, researchBrief: null, inboxRules: null, calendarRules: null });
+  });
+
+  it('passes no voice when the executive profile is unavailable', async () => {
+    const workingDocsRepo = { read: vi.fn(async () => null) } as unknown as WorkingDocsRepo;
+    const result = await readDraftInputs({
+      workingDocsRepo,
+      officeIdentity: { get: () => ({ behavioralPreferences: [] }) as never },
+      readWorkingHours: async () => null,
+    }, summary());
+    expect(result.voice).toBeNull();
   });
 });

@@ -36,7 +36,8 @@ const DRAFT_AGENT_ID = 'system:onboarding-deep-dive';
 
 export interface ReadDraftInputsDeps {
   workingDocsRepo: Pick<WorkingDocsRepo, 'read'>;
-  executiveProfile: Pick<ExecutiveProfileService, 'get'>;
+  /** The voice profile's source. Absent when the service failed to start: no voice is passed. */
+  executiveProfile?: Pick<ExecutiveProfileService, 'get'>;
   /** Behavioral preferences live on the office identity, not the executive profile. */
   officeIdentity: Pick<OfficeIdentityService, 'get'>;
   /** The principal's working-hours KG fact, as stored; null when none is recorded. */
@@ -59,7 +60,7 @@ export async function readDraftInputs(deps: ReadDraftInputsDeps, summary: Histor
     researchBrief,
     inboxRules,
     calendarRules,
-    voice: deps.executiveProfile.get().writingVoice,
+    voice: deps.executiveProfile?.get().writingVoice ?? null,
   };
 }
 
@@ -146,16 +147,18 @@ async function draftOne(deps: DraftDeps, kind: DraftKind, inputs: DraftInputs): 
 }
 
 /**
- * One powerful-tier call per draft, in order. Throws a DraftError on the first failure, with
- * `spendUsd` covering every call made so far (the failed one included when it was billed).
+ * One powerful-tier call per draft in `kinds` (all three by default), in order. Throws a
+ * DraftError on the first failure, with `spendUsd` covering every call made so far (the failed
+ * one included when it was billed). `drafts` holds exactly the kinds asked for.
  */
 export async function draftDocuments(
   deps: DraftDeps,
   inputs: DraftInputs,
-): Promise<{ drafts: Record<DraftKind, string>; spendUsd: number }> {
-  const drafts = {} as Record<DraftKind, string>;
+  kinds: readonly DraftKind[] = DRAFT_KINDS,
+): Promise<{ drafts: Partial<Record<DraftKind, string>>; spendUsd: number }> {
+  const drafts: Partial<Record<DraftKind, string>> = {};
   let spendUsd = 0;
-  for (const kind of DRAFT_KINDS) {
+  for (const kind of kinds) {
     let result: { text: string; costUsd: number };
     try {
       result = await draftOne(deps, kind, inputs);
