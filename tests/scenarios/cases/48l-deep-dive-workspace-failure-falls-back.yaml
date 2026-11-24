@@ -154,7 +154,7 @@ expected_behaviors:
       called: skill-activate
       with: { skill: google-workspace }
   - id: tries_a_document
-    weight: important
+    weight: critical
     description: Tries to create a Google Doc (or Drive file) from a draft, meeting the failure.
     check:
       any_of:

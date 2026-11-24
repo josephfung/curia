@@ -184,6 +184,19 @@ expected_behaviors:
       with: { agent: ceo-inbox }
       contains: { task: board@example.com }
       min: 1
+  # `contains` takes one needle per argument, so each rule gets its own check on a token
+  # distinctive to it, not on exact wording.
+  - id: newsletter_rule_to_inbox_specialist
+    weight: critical
+    description: Delegates the newsletter rule to ceo-inbox as well as the board-mail rule.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: newsletter }
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: promotion }
   - id: rules_to_calendar_specialist
     weight: critical
     description: Delegates the confirmed Friday-afternoon rule to the calendar specialist.
@@ -192,6 +205,40 @@ expected_behaviors:
       with: { agent: calendar }
       contains: { task: Friday }
       min: 1
+  - id: calendar_rule_is_a_restriction
+    weight: critical
+    description: >
+      The calendar delegation carries a standing restriction (keep the time free of meetings), not
+      a booking such as "schedule a meeting Friday at 1pm".
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "free" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "no meetings" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "block" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "avoid" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "keep clear" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "protect" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "decline" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "don't book" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "do not book" }
   - id: priorities_written
     weight: critical
     description: Writes the priorities to /shared/principal/priorities.md with doc-write.
