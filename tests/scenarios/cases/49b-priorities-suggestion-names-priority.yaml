@@ -8,7 +8,7 @@ name: priorities suggestion names the relevant priority
 description: >
   The principal's priorities document lists three current priorities: close the Series B
   within about six weeks, hire a VP of Sales, and ship the v2 platform to the first five customers. The
-  principal asks whether to accept an invitation to speak on a fintech panel next Thursday
+  principal asks whether to accept an invitation to speak on a fintech panel in about a week
   evening, about three hours with travel. Curia gives a recommendation that is explicitly
   weighed against at least one of those priorities, by name or plain reference, and does not
   accept or decline on the principal's behalf.
@@ -43,7 +43,7 @@ inbound:
   from: principal
   channel: web
   content: >
-    I've been asked to speak on a fintech panel next Thursday evening. It's about three hours
+    I've been asked to speak on a fintech panel on the evening of {{date:today+8}}. It's about three hours
     with travel. Should I do it? Give me your recommendation.
 tool_stubs:
   memory-store:
