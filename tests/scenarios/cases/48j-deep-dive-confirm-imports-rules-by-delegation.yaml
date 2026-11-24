@@ -239,18 +239,11 @@ expected_behaviors:
       min: 1
   - id: priorities_written
     weight: critical
-    description: Writes the confirmed priorities (the launch among them) to /shared/principal/priorities.md with doc-write.
-    # The text goes in `body` on create or replace and in `content` on append, so either counts.
+    description: Writes the priorities to /shared/principal/priorities.md with doc-write.
     check:
-      any_of:
-        - called: doc-write
-          with: { path: /shared/principal/priorities.md }
-          contains: { body: Toronto }
-          success: true
-        - called: doc-write
-          with: { path: /shared/principal/priorities.md }
-          contains: { content: Toronto }
-          success: true
+      called: doc-write
+      with: { path: /shared/principal/priorities.md }
+      success: true
   - id: voice_written
     weight: critical
     description: Writes the voice with executive-profile-update, carrying the guide and the confirmation note.
@@ -327,6 +320,14 @@ expected_behaviors:
     description: >
       The calendar delegation asks for a standing rule keeping Friday afternoons free of meetings
       from 1pm (the principal's correction), not a one-off booking or the draft's noon start.
+  - id: priorities_are_the_confirmed_three
+    weight: critical
+    # Judged, not keyword-matched: the check above proves where the write went, this one what it says.
+    description: >
+      The priorities written to /shared/principal/priorities.md are the three the principal
+      confirmed: the Toronto office launch, hiring a head of operations, and keeping the three
+      largest accounts happy. A write holding only a status line, or dropping any of the three,
+      fails.
   - id: receipt_names_where
     weight: nice-to-have
     description: >
