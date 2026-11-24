@@ -239,11 +239,18 @@ expected_behaviors:
       min: 1
   - id: priorities_written
     weight: critical
-    description: Writes the priorities to /shared/principal/priorities.md with doc-write.
+    description: Writes the confirmed priorities (the launch among them) to /shared/principal/priorities.md with doc-write.
+    # The text goes in `body` on create or replace and in `content` on append, so either counts.
     check:
-      called: doc-write
-      with: { path: /shared/principal/priorities.md }
-      success: true
+      any_of:
+        - called: doc-write
+          with: { path: /shared/principal/priorities.md }
+          contains: { body: Toronto }
+          success: true
+        - called: doc-write
+          with: { path: /shared/principal/priorities.md }
+          contains: { content: Toronto }
+          success: true
   - id: voice_written
     weight: critical
     description: Writes the voice with executive-profile-update, carrying the guide and the confirmation note.
