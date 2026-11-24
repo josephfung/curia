@@ -440,6 +440,27 @@ describe('runDeepDive', () => {
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
   });
 
+  it('judges an older playbook\'s Review topics (walk-drafts) the same way, ignoring next-step', async () => {
+    const closed = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      tasks: [reviewTopic('walk-drafts', 'done'), reviewTopic('next-step', 'done')],
+    });
+    await closed.seed(drafting);
+    await runDeepDive(closed.deps, drafting);
+    expect(await closed.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
+
+    const open = setup({
+      openTask: true,
+      docs: { [SUMMARY_PATH]: summaryDoc() },
+      tasks: [reviewTopic('walk-drafts', 'open'), reviewTopic('next-step', 'done')],
+    });
+    await open.seed(drafting);
+    await runDeepDive(open.deps, drafting);
+    expect(open.taskRepo.createTask).not.toHaveBeenCalled();
+    expect(await open.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'onb-1' });
+  });
+
   it('still uses the onboarding task while one of its Review topics is open', async () => {
     const t = setup({
       openTask: true,

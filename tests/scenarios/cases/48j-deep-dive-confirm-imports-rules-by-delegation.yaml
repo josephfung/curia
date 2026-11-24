@@ -72,7 +72,7 @@ tool_stubs:
             opened: true
             open:
               - { topicId: review-rules, title: Working rules, needsMailbox: false,
-                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: 2026-08-24–2026-11-22." }
+                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: {{date:today-92}}–{{date:today-2}}." }
               - { topicId: review-priorities, title: Time and priorities, needsMailbox: false,
                   body: "I need to learn what Avery is trying to move, so I weigh work against it. For the document: confirm / correct / set aside." }
               - { topicId: review-voice, title: Writing voice, needsMailbox: false,
@@ -178,17 +178,19 @@ tool_stubs:
 expected_behaviors:
   - id: rules_to_inbox_specialist
     weight: critical
-    description: Delegates the confirmed inbox rules to ceo-inbox.
+    description: Delegates the confirmed inbox rules to ceo-inbox (the board-mail rule names its sender).
     check:
       called: delegate
       with: { agent: ceo-inbox }
+      contains: { task: board@example.com }
       min: 1
   - id: rules_to_calendar_specialist
     weight: critical
-    description: Delegates the confirmed calendar rule to the calendar specialist.
+    description: Delegates the confirmed Friday-afternoon rule to the calendar specialist.
     check:
       called: delegate
       with: { agent: calendar }
+      contains: { task: Friday }
       min: 1
   - id: priorities_written
     weight: critical
@@ -202,7 +204,7 @@ expected_behaviors:
     description: Writes the voice with executive-profile-update, carrying the guide and the confirmation note.
     check:
       called: executive-profile-update
-      contains: { note: deep dive }
+      contains: { guide: concise, note: deep dive }
       success: true
   - id: calendar_rule_has_correction
     weight: important

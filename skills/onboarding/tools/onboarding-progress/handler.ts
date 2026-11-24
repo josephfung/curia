@@ -22,6 +22,7 @@ import {
   DEEP_DIVE_TASK_TAG,
   ONBOARDING_CREATED_BY,
   REVIEW_DOCUMENT_TOPICS,
+  REVIEW_NEXT_STEP_TOPIC,
   REVIEW_SESSION,
 } from '../../../../src/onboarding/constants.js';
 import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
@@ -47,8 +48,6 @@ const TOOL_OPERATOR_EVENTS = ['web_search_failed', 'deep_dive_delivery_failed'] 
 const OUTCOMES = ['done', 'declined'] as const;
 const NOTE_MAX = 2000;
 const HOMEWORK_TAG = 'onboarding:homework';
-/** The Review session's scheduling topic: it never holds a standalone review task open. */
-const NEXT_STEP_TOPIC = 'next-step';
 /** How far up a task's parents the root lookup walks before giving up. */
 const ROOT_DEPTH_MAX = 20;
 
@@ -177,7 +176,7 @@ async function completeIfDone({ svc, repo, parent, ctx }: Deps): Promise<boolean
     const review = topics.filter((t) => t.sessionId === REVIEW_SESSION);
     let deciding = review.filter((t) => isReviewDocumentTopic(t.topicId));
     if (deciding.length === 0) {
-      deciding = review.filter((t) => t.topicId !== NEXT_STEP_TOPIC);
+      deciding = review.filter((t) => t.topicId !== REVIEW_NEXT_STEP_TOPIC);
       ctx.log.warn(
         { taskId: parent.id },
         'onboarding: the deep-dive review task has no document topics (an older playbook); completing on its other Review topics',

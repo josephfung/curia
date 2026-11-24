@@ -36,6 +36,8 @@ export const DEEP_DIVE_TASK_TAG = 'deep-dive';
 export const REVIEW_SESSION = 'review';
 /** The Review topics that each review one deep-dive draft; a standalone review task completes on these. */
 export const REVIEW_DOCUMENT_TOPICS = ['review-rules', 'review-priorities', 'review-voice'] as const;
+/** The Review session's scheduling topic: it never decides whether the drafts are reviewed. */
+export const REVIEW_NEXT_STEP_TOPIC = 'next-step';
 
 /**
  * A note added while the task's wake runs with a booked time already parked waits for that run to

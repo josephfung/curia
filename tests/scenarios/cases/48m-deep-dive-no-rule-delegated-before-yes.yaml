@@ -45,7 +45,7 @@ tool_stubs:
             opened: true
             open:
               - { topicId: review-rules, title: Working rules, needsMailbox: false,
-                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: 2026-08-24–2026-11-22." }
+                  body: "I need Avery to check the rules I drafted before I follow any of them. For the document: confirm / correct / set aside. Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md, /meetings/onboarding/deep-dive/time-and-priorities.md, /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage: {{date:today-92}}–{{date:today-2}}." }
               - { topicId: review-priorities, title: Time and priorities, needsMailbox: false,
                   body: "I need to learn what Avery is trying to move, so I weigh work against it. For the document: confirm / correct / set aside." }
               - { topicId: review-voice, title: Writing voice, needsMailbox: false,

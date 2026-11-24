@@ -14,7 +14,13 @@ import { DateTime } from 'luxon';
 import { makeSystemOriginator } from '../../contacts/principal.js';
 import { replaceActiveSkillsBlock } from '../../db/active-skills-progress.js';
 import type { TaskRow } from '../../db/queries/tasks.js';
-import { DEEP_DIVE_TASK_TAG, ONBOARDING_CREATED_BY, REVIEW_DOCUMENT_TOPICS, REVIEW_SESSION } from '../constants.js';
+import {
+  DEEP_DIVE_TASK_TAG,
+  ONBOARDING_CREATED_BY,
+  REVIEW_DOCUMENT_TOPICS,
+  REVIEW_NEXT_STEP_TOPIC,
+  REVIEW_SESSION,
+} from '../constants.js';
 import { raiseOperatorNoticeOnce } from '../notify-operator-once.js';
 import { findOpenOnboardingTask, OPEN_STATUSES } from '../state.js';
 import { isOpenTask, listChildren, topicSubtasks } from '../subtasks.js';
@@ -143,12 +149,18 @@ async function reviewTask(deps: RunDeps, state: DeepDiveState, advance: Advance)
   return created;
 }
 
-/** Whether the onboarding task's Review document topics are still to come: none opened, or one open. */
+/**
+ * Whether the onboarding task's Review document topics are still to come: none opened, or one open.
+ * A playbook seeded before the document topics existed (walk-drafts) is judged on its other Review
+ * topics, as the onboarding-progress tool completes a standalone review task on them.
+ */
 async function reviewStillAhead(deps: RunDeps, onboardingTaskId: string): Promise<boolean> {
-  const topics = topicSubtasks(await listChildren(deps.taskRepo, onboardingTaskId), deps.logger).filter((t) =>
-    (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(t.topicId),
+  const review = topicSubtasks(await listChildren(deps.taskRepo, onboardingTaskId), deps.logger).filter(
+    (t) => t.sessionId === REVIEW_SESSION,
   );
-  return topics.length === 0 || topics.some((t) => isOpenTask(t.task));
+  let deciding = review.filter((t) => (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(t.topicId));
+  if (deciding.length === 0) deciding = review.filter((t) => t.topicId !== REVIEW_NEXT_STEP_TOPIC);
+  return deciding.length === 0 || deciding.some((t) => isOpenTask(t.task));
 }
 
 /**

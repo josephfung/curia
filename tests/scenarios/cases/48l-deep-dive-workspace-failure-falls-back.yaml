@@ -33,7 +33,7 @@ inbound:
           Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md,
           /meetings/onboarding/deep-dive/time-and-priorities.md,
           /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage:
-          2026-08-24–2026-11-22. Copy each to a Google Doc and book the review (onboarding skill,
+          {{date:today-92}}–{{date:today-2}}. Copy each to a Google Doc and book the review (onboarding skill,
           "Deep-dive review").
 tool_stubs:
   onboarding-progress:
@@ -153,6 +153,13 @@ expected_behaviors:
     check:
       called: skill-activate
       with: { skill: google-workspace }
+  - id: tries_a_document
+    weight: important
+    description: Tries to create a Google Doc (or Drive file) from a draft, meeting the failure.
+    check:
+      any_of:
+        - called: create_doc
+        - called: create_drive_file
   - id: raises_delivery_notice
     weight: critical
     description: Raises the deep_dive_delivery_failed operator notice with onboarding-progress.
