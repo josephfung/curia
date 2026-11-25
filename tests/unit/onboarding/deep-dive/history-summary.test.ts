@@ -272,7 +272,8 @@ describe('summarise', () => {
     const occ = (series: string, n: number, minutes: number): NylasCalendarEvent => ({
       id: `${series}-${n}`, title: series, description: '', location: '',
       startTime: base + n * 7 * 86_400, endTime: base + n * 7 * 86_400 + minutes * 60, startDate: null, endDate: null,
-      participants: [], conferencing: null, status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
+      participants: [{ email: 'ceo@acme.example.com', name: 'Avery', status: 'yes' }], conferencing: null,
+      status: 'confirmed', calendarId: 'primary', busy: true, metadata: null,
       masterEventId: series,
     });
     // Short median, long total (15 + 15 + 180 = 210) beats three 45-minute meetings (135).
