@@ -26,6 +26,7 @@ import {
   VOICE_DELEGATION_GUIDANCE,
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
+  formatPrioritiesPromptBlock,
 } from '../../../../src/channels/voice/voice-runtime.js';
 import type { VoiceToolBridge } from '../../../../src/channels/voice/voice-runtime.js';
 import { partnerCaller, principalCaller } from '../../../../src/channels/voice/test-fixtures.js';
@@ -334,6 +335,7 @@ function makeRuntime(overrides: {
   logger?: Logger;
   bargeInOnSpeechStart?: boolean;
   bargeInSpeechStartMinDbfs?: number;
+  readPriorities?: () => Promise<string | null>;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -368,6 +370,7 @@ function makeRuntime(overrides: {
     maxUtteranceBytes: overrides.maxUtteranceBytes,
     bargeInOnSpeechStart: overrides.bargeInOnSpeechStart,
     bargeInSpeechStartMinDbfs: overrides.bargeInSpeechStartMinDbfs,
+    readPriorities: overrides.readPriorities,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -4492,5 +4495,119 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     plain.stt.emit({ text: 'thanks that is all', isFinal: false, confidence: 0.9 });
     expect(plain.transport.clearQueuedAudioCount).toBe(0);
     await plain.runtime.endSession('tail', 'test');
+  });
+});
+
+describe('VoiceRuntime principal priorities (#2363)', () => {
+  const PRIORITIES_DOC = '---\ntitle: Priorities\nas_of: 2026-11-20\n---\n\n## Close the Series A\nRunway.\n';
+
+  function systemText(messages: Message[]): string {
+    const system = messages[0]!;
+    return typeof system.content === 'string' ? system.content : '';
+  }
+
+  function warnLogger() {
+    const warn = vi.fn();
+    const log = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child: () => log,
+    } as unknown as Logger;
+    return { log, warn };
+  }
+
+  /** Greeting plus two caller turns; returns each LLM call's system prompt. */
+  async function runCall(opts: {
+    sessionId: string;
+    readPriorities?: () => Promise<string | null>;
+    caller?: ReturnType<typeof principalCaller>;
+    logger?: Logger;
+    historyReadTimeoutMs?: number;
+  }): Promise<string[]> {
+    const llm = new FakeStreamProvider([replyScript('Hi.'), replyScript('Sure.'), replyScript('Done.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      readPriorities: opts.readPriorities,
+      logger: opts.logger,
+      historyReadTimeoutMs: opts.historyReadTimeoutMs,
+    });
+    await runtime.startSession({
+      sessionId: opts.sessionId,
+      conversationId: `voice:${opts.sessionId}`,
+      roomName: `voice-${opts.sessionId}`,
+      agentToken: 'tok',
+      caller: opts.caller ?? principalCaller(),
+    });
+    await runtime.awaitIdle(opts.sessionId);
+    stt.emit({ text: 'what should I focus on', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle(opts.sessionId);
+    stt.emit({ text: 'thanks', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle(opts.sessionId);
+    expect(llm.seenMessages).toHaveLength(3);
+    return llm.seenMessages.map(systemText);
+  }
+
+  it('reads the priorities once per session and puts them in every turn\'s prompt', async () => {
+    const readPriorities = vi.fn(async () => PRIORITIES_DOC);
+    const prompts = await runCall({ sessionId: 'prio-once', readPriorities });
+
+    expect(readPriorities).toHaveBeenCalledTimes(1);
+    const block = formatPrioritiesPromptBlock(PRIORITIES_DOC)!;
+    for (const prompt of prompts) {
+      expect(prompt).toContain(block);
+      expect(prompt).toContain('## Close the Series A');
+    }
+  });
+
+  it('leaves the prompt unchanged when there is no priorities document', async () => {
+    const without = await runCall({ sessionId: 'prio-none-baseline' });
+    const missing = await runCall({ sessionId: 'prio-none', readPriorities: async () => null });
+    const blank = await runCall({ sessionId: 'prio-blank', readPriorities: async () => '  \n' });
+    expect(missing).toEqual(without);
+    expect(blank).toEqual(without);
+  });
+
+  it('logs a warning and carries on without priorities when the read fails', async () => {
+    const { log, warn } = warnLogger();
+    const without = await runCall({ sessionId: 'prio-fail-baseline' });
+    const prompts = await runCall({
+      sessionId: 'prio-fail',
+      readPriorities: async () => { throw new Error('db down'); },
+      logger: log,
+    });
+    expect(prompts).toEqual(without);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-fail' }),
+      'priorities read failed; call proceeds without priorities',
+    );
+  });
+
+  it('carries on without priorities when the read misses the voice deadline', async () => {
+    const { log, warn } = warnLogger();
+    const reads = new Gate();
+    const prompts = await runCall({
+      sessionId: 'prio-slow',
+      readPriorities: async () => { await reads.pass(); return PRIORITIES_DOC; },
+      logger: log,
+      historyReadTimeoutMs: 20,
+    });
+    reads.open();
+    for (const prompt of prompts) expect(prompt).not.toContain('## Principal priorities');
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-slow', timeoutMs: 20 }),
+      'priorities read exceeded the voice deadline; call proceeds without priorities',
+    );
+  });
+
+  it('never reads or injects the priorities for a non-principal caller', async () => {
+    const readPriorities = vi.fn(async () => PRIORITIES_DOC);
+    const prompts = await runCall({ sessionId: 'prio-partner', readPriorities, caller: partnerCaller() });
+    expect(readPriorities).not.toHaveBeenCalled();
+    for (const prompt of prompts) expect(prompt).not.toContain('Close the Series A');
+  });
+
+  it('fences the document so its own headings and fences cannot break out', () => {
+    const block = formatPrioritiesPromptBlock('## A\n```\ncode\n```\n')!;
+    expect(block).toContain('````\n## A\n```\ncode\n```\n````');
   });
 });

@@ -49,6 +49,7 @@ import { createPrincipalBacklogSource } from './dispatch/principal-backlog.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests } from './agents/loader.js';
 import { createPinnedContextReader } from './agents/pinned-context.js';
+import { PRIORITIES_PATH } from './memory/priorities-doc.js';
 import type { AgentYamlConfig, AgentDiscovery } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
 import { smallCapModelSlots, smallCapThinkingViolations, voiceModelSlot } from './agents/llm/small-cap-models.js';
@@ -2604,6 +2605,12 @@ async function main(): Promise<void> {
         // Cross-channel outbound-context bridge — voice bypasses the dispatcher,
         // so VoiceRuntime reads getActive() itself (#1594).
         outboundContextService,
+        // Read once per principal call (#2363): voice builds its own prompt, so
+        // the coordinator's pinned priorities never reach it otherwise.
+        readPriorities: async () => {
+          const doc = await workingDocsRepo.read(PRIORITIES_PATH);
+          return doc ? workingDocsRepo.toOkf(doc) : null;
+        },
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
             {
