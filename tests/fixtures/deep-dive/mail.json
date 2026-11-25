@@ -1,0 +1,411 @@
+[
+  {
+    "id": "m01",
+    "threadId": "t-alice",
+    "subject": "Re: t-alice",
+    "from": [
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1793628000,
+    "unread": false,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m02",
+    "threadId": "t-alice",
+    "subject": "Re: t-alice",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1793629800,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m03",
+    "threadId": "t-alice",
+    "subject": "Re: t-alice",
+    "from": [
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1793700000,
+    "unread": false,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m04",
+    "threadId": "t-alice",
+    "subject": "Re: t-alice",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith"
+      }
+    ],
+    "cc": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "snippet": "",
+    "date": 1793705400,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m05",
+    "threadId": "t-bob",
+    "subject": "Re: t-bob",
+    "from": [
+      {
+        "email": "bob.jones@vendor.example.net",
+        "name": "Bob Jones"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1790845200,
+    "unread": true,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m06",
+    "threadId": "t-saas1",
+    "subject": "Re: t-saas1",
+    "from": [
+      {
+        "email": "noreply@saas.example.net",
+        "name": "SaaS"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1790931600,
+    "unread": true,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m07",
+    "threadId": "t-saas2",
+    "subject": "Re: t-saas2",
+    "from": [
+      {
+        "email": "noreply@saas.example.net",
+        "name": "SaaS"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1791190800,
+    "unread": true,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m08",
+    "threadId": "t-carol",
+    "subject": "Re: t-carol",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "carol.white@partner.example.com",
+        "name": "Carol White"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1793894400,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m09",
+    "threadId": "t-contract",
+    "subject": "Fwd: Contract draft",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "dave.lee@lawfirm.example.org",
+        "name": "Dave Lee"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1793966400,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m10",
+    "threadId": "t-self",
+    "subject": "note to self",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1794038400,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m11",
+    "threadId": "t-alias",
+    "subject": "Re: t-alias",
+    "from": [
+      {
+        "email": "principal@example.com",
+        "name": "Avery"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1794124800,
+    "unread": false,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m12",
+    "threadId": "t-erin",
+    "subject": "Re: t-erin",
+    "from": [
+      {
+        "email": "principal@example.com",
+        "name": "Avery"
+      }
+    ],
+    "to": [
+      {
+        "email": "erin.park@client.example.org",
+        "name": "Erin Park"
+      }
+    ],
+    "cc": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "snippet": "",
+    "date": 1794211200,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m13",
+    "threadId": "t-frank",
+    "subject": "Re: t-frank",
+    "from": [
+      {
+        "email": "frank.moss@client.example.org",
+        "name": "Frank Moss"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1794301200,
+    "unread": false,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m14",
+    "threadId": "t-frank",
+    "subject": "Re: t-frank",
+    "from": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "to": [
+      {
+        "email": "frank.moss@client.example.org",
+        "name": "Frank Moss"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1794308400,
+    "unread": false,
+    "folders": [
+      "SENT"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m15",
+    "threadId": "t-info",
+    "subject": "Re: t-info",
+    "from": [
+      {
+        "email": "info@vendor.example.net"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1795165200,
+    "unread": false,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  },
+  {
+    "id": "m16",
+    "threadId": "t-bob2",
+    "subject": "Re: t-bob2",
+    "from": [
+      {
+        "email": "bob.jones@vendor.example.net",
+        "name": "Bob Jones"
+      }
+    ],
+    "to": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO"
+      }
+    ],
+    "cc": [],
+    "snippet": "",
+    "date": 1795168800,
+    "unread": true,
+    "folders": [
+      "INBOX"
+    ],
+    "attachments": []
+  }
+]

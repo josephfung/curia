@@ -1,0 +1,447 @@
+[
+  {
+    "id": "ev-ls-01",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1788188400,
+    "endTime": 1788192000,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1788188400
+  },
+  {
+    "id": "ev-ls-02",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1788793200,
+    "endTime": 1788796800,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1788793200
+  },
+  {
+    "id": "ev-ls-03",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1789398000,
+    "endTime": 1789401600,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1789398000
+  },
+  {
+    "id": "ev-ls-04",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1790002800,
+    "endTime": 1790006400,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1790002800
+  },
+  {
+    "id": "ev-ls-05",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1790611200,
+    "endTime": 1790614800,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1790607600
+  },
+  {
+    "id": "ev-ls-06",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1791212400,
+    "endTime": 1791216000,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1791212400
+  },
+  {
+    "id": "ev-ls-07",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1791817200,
+    "endTime": 1791820800,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1791817200
+  },
+  {
+    "id": "ev-ls-08",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1792422000,
+    "endTime": 1792425600,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1792422000
+  },
+  {
+    "id": "ev-ls-09",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1793026800,
+    "endTime": 1793030400,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1793026800
+  },
+  {
+    "id": "ev-ls-10",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1793631600,
+    "endTime": 1793635200,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1793631600
+  },
+  {
+    "id": "ev-ls-11",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1794236400,
+    "endTime": 1794240000,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1794236400
+  },
+  {
+    "id": "ev-ls-12",
+    "title": "Leadership sync",
+    "description": "",
+    "location": "",
+    "startTime": 1794841200,
+    "endTime": 1794844800,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "alice.smith@partner.example.com",
+        "name": "Alice Smith",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null,
+    "masterEventId": "ser-1",
+    "originalStartTime": 1794841200
+  },
+  {
+    "id": "ev-carol",
+    "title": "Partner review",
+    "description": "",
+    "location": "",
+    "startTime": 1793883600,
+    "endTime": 1793887200,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "carol.white@partner.example.com",
+        "name": "Carol White",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null
+  },
+  {
+    "id": "ev-bob",
+    "title": "Vendor pricing",
+    "description": "",
+    "location": "",
+    "startTime": 1793973600,
+    "endTime": 1793980800,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "yes"
+      },
+      {
+        "email": "bob.jones@vendor.example.net",
+        "name": "Bob Jones",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null
+  },
+  {
+    "id": "ev-declined",
+    "title": "Client pitch",
+    "description": "",
+    "location": "",
+    "startTime": 1794330000,
+    "endTime": 1794333600,
+    "startDate": null,
+    "endDate": null,
+    "participants": [
+      {
+        "email": "ceo@acme.example.com",
+        "name": "Avery CEO",
+        "status": "no"
+      },
+      {
+        "email": "frank.moss@client.example.org",
+        "name": "Frank Moss",
+        "status": "yes"
+      }
+    ],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null
+  },
+  {
+    "id": "ev-allday",
+    "title": "Offsite",
+    "description": "",
+    "location": "",
+    "startTime": null,
+    "endTime": null,
+    "startDate": "2026-11-11",
+    "endDate": "2026-11-12",
+    "participants": [],
+    "conferencing": null,
+    "status": "confirmed",
+    "calendarId": "primary",
+    "busy": true,
+    "metadata": null
+  }
+]

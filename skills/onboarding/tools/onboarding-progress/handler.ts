@@ -95,16 +95,24 @@ function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, nam
 }
 
 /**
- * Complete the onboarding task if it is done: the ongoing-rhythm session opened and every
- * onboarding topic subtask closed. Other children (homework, tasks the model parented here) do not
- * hold it open; an open homework task is cancelled. Idempotent: a parent already closed is left.
- * Returns whether onboarding is complete.
+ * Complete the onboarding task if it is done: the ongoing-rhythm session opened, every
+ * onboarding topic subtask closed, and no deep dive (#2362) still scanning or drafting, whose
+ * drafts would otherwise arrive after onboarding ended. Other children (homework, tasks the model
+ * parented here) do not hold it open; an open homework task is cancelled. Idempotent: a parent
+ * already closed is left. Returns whether onboarding is complete.
  */
-async function completeIfDone({ repo, parent, ctx }: Deps): Promise<boolean> {
+async function completeIfDone({ svc, repo, parent, ctx }: Deps): Promise<boolean> {
+  // Read the run state before the children: the hand-off opens the Review topics before it marks
+  // the run delivered, so a run seen as not running has its topics in the snapshot below.
+  const deepDiveRunning = await svc.deepDiveRunning();
   const children = await listChildren(repo, parent.id);
   const topics = topicSubtasks(children, ctx.log);
   if (!topics.some((t) => t.sessionId === ONGOING_RHYTHM_SESSION)) return false;
   if (topics.some((t) => isOpenTask(t.task))) return false;
+  if (deepDiveRunning) {
+    ctx.log.info({ taskId: parent.id }, 'onboarding: every topic is closed, but the deep dive is still running');
+    return false;
+  }
   for (const child of children) {
     if (child.createdBy !== ONBOARDING_CREATED_BY || !child.tags.includes(HOMEWORK_TAG) || !isOpenTask(child)) continue;
     await repo.updateTask(child.id, { status: 'cancelled', progressNote: 'Onboarding complete: homework closed.' }, ctx.agentId);

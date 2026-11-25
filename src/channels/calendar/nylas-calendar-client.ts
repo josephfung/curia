@@ -345,7 +345,13 @@ export class NylasCalendarClient {
     calendarId: string,
     timeMin: string,
     timeMax: string,
-    opts?: { limit?: number; expandRecurring?: boolean; onIncomplete?: () => void },
+    opts?: {
+      limit?: number;
+      expandRecurring?: boolean;
+      onIncomplete?: () => void;
+      /** Awaited before each page request (0-based), so a paced caller can count and space them. */
+      beforePage?: (page: number) => void | Promise<void>;
+    },
   ): Promise<NylasCalendarEvent[]> {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
     const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
@@ -389,6 +395,7 @@ export class NylasCalendarClient {
           // Omitted on the first request — Nylas treats an empty page_token as invalid.
           ...(pageToken ? { pageToken } : {}),
         };
+        await opts?.beforePage?.(pages);
         const response = await this.nylas.events.list({
           identifier: this.grantId,
           queryParams,
