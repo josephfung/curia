@@ -14,7 +14,7 @@ import type { AgentError } from '../../../src/errors/types.js';
 import { delegationKey } from '../../../src/agents/delegation-guard.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
-import { TURN_GUIDANCE_HEADER, type TurnGuidanceKey } from '../../../src/agents/prompts/turn-guidance.js';
+import { TURN_GUIDANCE_FOOTER, TURN_GUIDANCE_HEADER, type TurnGuidanceKey } from '../../../src/agents/prompts/turn-guidance.js';
 import type { VerificationRuntime } from '../../../src/verification/index.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
@@ -3616,8 +3616,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const block = r.user.indexOf(BLOCK);
       expect(header).toBe(0);
       expect(block).toBeGreaterThan(header);
-      expect(r.user.endsWith('\n\nWhat is on my calendar today?')).toBe(true);
-      expect(r.user.indexOf('What is on my calendar today?')).toBeGreaterThan(block);
+      // The re-rendered guidance keeps its closing marker, after the block (#2741).
+      expect(r.user.endsWith(`${TURN_GUIDANCE_FOOTER}\n\nWhat is on my calendar today?`)).toBe(true);
+      expect(r.user.indexOf(TURN_GUIDANCE_FOOTER)).toBeGreaterThan(block);
     });
 
     it('leaves the block out when the onboarding skill cannot be activated', async () => {

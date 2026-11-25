@@ -9,7 +9,7 @@ import { PRIOR_TURN_UNREADABLE_LINE, renderPriorTurnActions, type PriorTurnActio
 import { describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import type { LLMProvider, Message } from '../../../src/agents/llm/provider.js';
-import { renderTurnGuidance, TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
+import { renderTurnGuidance, TURN_GUIDANCE_FOOTER, TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
 import { renderBacklogLine } from '../../../src/agents/prompts/backlog-line.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask } from '../../../src/bus/events.js';
@@ -106,6 +106,17 @@ describe('AgentRuntime turn guidance (#1959)', () => {
     const user = messages[messages.length - 1]!;
     expect(user.role).toBe('user');
     expect(user.content).toBe(`${renderTurnGuidance(['principal-reply-shaped'])}\n\nGo ahead`);
+  });
+
+  it('puts the closing marker between the guidance and the sender\'s text (#2741)', async () => {
+    const content = 'Some context for you: the board meets Thursday.';
+    const { messages } = await runTurn({ content, turnGuidance: ['principal-reply-shaped'] });
+    const text = messages[messages.length - 1]!.content as string;
+    const guidanceEnd = text.indexOf('request needs no clarification.');
+    const footer = text.indexOf(TURN_GUIDANCE_FOOTER);
+    expect(guidanceEnd).toBeGreaterThan(-1);
+    expect(footer).toBeGreaterThan(guidanceEnd);
+    expect(text.endsWith(`${TURN_GUIDANCE_FOOTER}\n\n${content}`)).toBe(true);
   });
 
   it('keeps it out of every system message', async () => {

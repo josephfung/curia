@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { frameInjectedInput } from '../../../src/agents/injected-input.js';
-import { renderTurnGuidance } from '../../../src/agents/prompts/turn-guidance.js';
+import { renderTurnGuidance, TURN_GUIDANCE_FOOTER } from '../../../src/agents/prompts/turn-guidance.js';
 import { toLocalIso } from '../../../src/time/timestamp.js';
 
 const RECEIVED = '2026-10-25T12:46:00.000Z';
@@ -52,6 +52,8 @@ describe('frameInjectedInput', () => {
     const text = (message.content as Array<{ text: string }>)[0]!.text;
     expect(text).toContain(guidance!);
     expect(text).not.toContain('not-a-real-key');
+    // The closing marker sits between the guidance and the sender's text (#2741).
+    expect(text.endsWith(`${TURN_GUIDANCE_FOOTER}\n\nhello`)).toBe(true);
   });
 
   it('uses the handed-over header and confirmation guidance when handedOverFrom is set', () => {

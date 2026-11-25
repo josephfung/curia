@@ -5,6 +5,7 @@ import {
   parseTurnGuidanceKeys,
   renderTurnGuidance,
   verificationCodeReceivedLines,
+  TURN_GUIDANCE_FOOTER,
   TURN_GUIDANCE_HEADER,
   TURN_GUIDANCE_ORDER,
   TURN_GUIDANCE_TEXTS,
@@ -56,6 +57,11 @@ describe('renderTurnGuidance', () => {
     expect(renderTurnGuidance(['principal-reply-shaped'])!.startsWith(TURN_GUIDANCE_HEADER)).toBe(true);
   });
 
+  it('ends the block with a fixed closing marker (#2741)', () => {
+    expect(renderTurnGuidance(['principal-reply-shaped'])!.endsWith(`request needs no clarification.\n\n${TURN_GUIDANCE_FOOTER}`)).toBe(true);
+    expect(renderTurnGuidance([], null, 'Reminder.')!.endsWith(`Reminder.\n\n${TURN_GUIDANCE_FOOTER}`)).toBe(true);
+  });
+
   it('renders in a fixed order, each key once, whatever order it is given', () => {
     const a = renderTurnGuidance(['email-etiquette', 'outbound-context', 'email-etiquette']);
     const b = renderTurnGuidance(['outbound-context', 'email-etiquette']);
@@ -68,15 +74,15 @@ describe('renderTurnGuidance', () => {
     expect(out).toContain('apply the normal routing decision.\n- An entry whose `context` has `bind_reply: true`');
   });
 
-  it('closes the block with the backlog line', () => {
+  it('puts the backlog line last, before the closing marker', () => {
     const line = renderBacklogLine({ decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 })!;
     const out = renderTurnGuidance(['principal-reply-shaped'], line)!;
-    expect(out.endsWith(`request needs no clarification.\n\n${line}`)).toBe(true);
+    expect(out.endsWith(`request needs no clarification.\n\n${line}\n\n${TURN_GUIDANCE_FOOTER}`)).toBe(true);
   });
 
   it('renders the backlog line alone under the header when no key applies', () => {
     const line = renderBacklogLine({ decayWarnings: 1, pendingApprovals: 0, principalTasks: 0 })!;
-    expect(renderTurnGuidance([], line)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${line}`);
+    expect(renderTurnGuidance([], line)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${line}\n\n${TURN_GUIDANCE_FOOTER}`);
   });
 
   it('keeps the worst real turn bounded', () => {
@@ -223,6 +229,7 @@ describe('parseTurnGuidanceKeys', () => {
 describe('prompt-exfiltration markers cover the moved guidance', () => {
   const sources: Array<[string, string]> = [
     ...TURN_GUIDANCE_TEXTS.map((text, i): [string, string] => [`turn guidance ${TURN_GUIDANCE_ORDER[i]}`, text]),
+    ['turn guidance header and closing marker (#2741)', [TURN_GUIDANCE_HEADER, TURN_GUIDANCE_FOOTER].join('\n')],
     ['delegate clarification next_step', CLARIFICATION_NEXT_STEP_LINES.join('\n')],
     ['delegate paused next_step', PAUSED_NEXT_STEP_LINES.join('\n')],
     ['delegate draft-email next_step', DRAFT_EMAIL_NEXT_STEP_LINES.join('\n')],
@@ -282,10 +289,10 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
 describe('the length reminder closes the turn guidance (#2143)', () => {
   it('renders alone, after the backlog line, and never as an empty block', () => {
     const reminder = 'This reply goes out on Signal: 1–2 sentences. The answer or outcome only.';
-    expect(renderTurnGuidance([], null, reminder)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${reminder}`);
+    expect(renderTurnGuidance([], null, reminder)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${reminder}\n\n${TURN_GUIDANCE_FOOTER}`);
     const out = renderTurnGuidance(['principal-reply-shaped'], 'Backlog line.', reminder)!;
     expect(out.indexOf('Backlog line.')).toBeLessThan(out.indexOf(reminder));
-    expect(out.endsWith(reminder)).toBe(true);
+    expect(out.endsWith(`${reminder}\n\n${TURN_GUIDANCE_FOOTER}`)).toBe(true);
     expect(renderTurnGuidance([], null, null)).toBeNull();
     expect(renderTurnGuidance([], '', '')).toBeNull();
   });
