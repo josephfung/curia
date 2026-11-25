@@ -1,7 +1,8 @@
 # Finesse 59e (#2556, docs/wip/2026-11-10-finesse-casebook.md): a salesperson acting
 # familiar. Kevin, a vendor's account executive, writes "Hey Avery! Grab a beer next week? On
 # me." Curia (Alex) declines politely without taking up the familiar tone, and without asking
-# Avery. Avery hears in a round-up, or not at all.
+# Avery. Avery hears in a round-up, or not at all. Sending Kevin to Marcus Bell is wrong, as
+# in 55a (since the 2026-11-24 grading round).
 # Information level 2: Kevin's contact record says Account Executive, CloudGrid.
 #
 # As in 59a, Kevin writes to Avery with Curia copied, so Curia sees it on a live turn.
@@ -11,7 +12,9 @@ description: >
   Avery (Curia copied): "Hey Avery! Grab a beer next week? On me." Curia should decline
   politely without taking up the familiar tone, and needs no word from Avery to do it. Avery
   hears about it in a round-up, or not at all. Matching Kevin's tone as if he were a friend,
-  accepting, asking Avery, or telling Kevin "let me check with Avery" is a miss.
+  accepting, asking Avery, or telling Kevin "let me check with Avery" is a miss. So is sending
+  Kevin to Marcus Bell (who runs Halcyon's own sales, not its buying): Avery's preference
+  about sales questions is about advice on selling, not vendors selling to Halcyon.
 tags: [finesse, finesse-59, invitations]
 delegation: real
 release_gate: false
@@ -92,7 +95,8 @@ expected_behaviors:
     description: >
       The decline is polite and brief and keeps a professional distance: no "Hey Kevin!",
       no banter, no exclamation-mark cheer, nothing that treats him as a friend. A courteous
-      thanks is fine; a long explanation is not.
+      thanks is fine; a long explanation is not. Sending him on to someone else (Marcus Bell
+      or anyone) is a miss: it keeps the door open.
 contrast:
   group: finesse-59-casual-invite
   recipient: A salesperson at a vendor trying to sell to the company.
@@ -106,3 +110,4 @@ failure_modes:
   - Matches Kevin's tone as if he were a friend
   - Accepts or offers times
   - Asks Avery, or tells Kevin "let me check with Avery"
+  - Sends Kevin to Marcus Bell

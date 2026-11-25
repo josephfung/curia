@@ -9,10 +9,13 @@
 // createJudge refuses one that has none, before any paid call.
 
 /**
- * Judge model by tag. The `finesse` judge is chosen by agreement with human grades on the
- * pilot run (#2556 §4); until then those cases use the default.
+ * Judge model by tag. The `finesse` judge was chosen by agreement with three people's grades
+ * of the v0.1 baseline (#2556; docs/wip/2026-11-21-finesse-benchmark-baseline.md, "Grading
+ * round"). Changing it starts a new benchmark version.
  */
-export const TAG_JUDGE_MODELS: Readonly<Record<string, string>> = {};
+export const TAG_JUDGE_MODELS: Readonly<Record<string, string>> = {
+  finesse: 'anthropic/claude-opus-5.5',
+};
 
 /**
  * The judge model a case asks for: its own `judge_model`, else its tag's, else undefined (the

@@ -4,7 +4,7 @@ Working note · Issue #2556 · 2026-11-21 · Draft
 
 The finesse benchmark is the 46 scenario cases written from the casebook (`docs/wip/2026-11-10-finesse-casebook.md`), as revised from six executive assistants' reviews (`docs/wip/2026-11-21-finesse-ea-review-synthesis.md`). This note is its v0.1 baseline, measured before any product fix. Later work is compared against it.
 
-**Versioning.** v0.1 is provisional: its judge (gpt-4o, the suite default) has not yet been checked against human grades. The benchmark becomes v1 once the grading round picks a judge (`TAG_JUDGE_MODELS.finesse`). After that, a change to a case's setup or criteria means a new version and a new baseline, not a re-score against this one.
+**Versioning.** v0.1 was provisional: its judge (gpt-4o, the suite default) had not been checked against human grades. The grading round below picked `anthropic/claude-opus-5.5` (`TAG_JUDGE_MODELS.finesse`) and settled two criteria, and that makes the benchmark v1. v1's baseline is these transcripts re-judged by Opus (pending). After that, a change to a case's setup or criteria, or to the judge, means a new version and a new baseline, not a re-score against this one.
 
 ## Summary
 
@@ -157,10 +157,41 @@ So the criteria were revised first. The judge is chosen in the grading round bel
 
 ## Grading round
 
-A 25-item voice sheet is sampled from this baseline, one item per case across all ten tasks (`pnpm grading sample … --seed finesse-2026-11-21`, local beside the results). The owner and one or two EAs grade the same items. That gives human-to-human agreement first, then each judge's agreement with the graders (`pnpm grading agree --current-cases`). The chosen judge makes the benchmark v1.
+A 25-item voice sheet was sampled from this baseline, one item per case across all ten tasks (`pnpm grading sample … --seed finesse-2026-11-21`, local beside the results). Three people graded all 25: the owner and two of the casebook's reviewers (Reviewer A and Reviewer E in the synthesis).
+
+**The graders agree with each other only loosely.**
+
+| Pair | Exact | Pass/fail | κ |
+|---|---|---|---|
+| Owner, Reviewer A | 56% | 68% | 0.27 |
+| Owner, Reviewer E | 52% | 64% | 0.22 |
+| Reviewer A, Reviewer E | 56% | 80% | 0.28 |
+
+Fleiss' κ across all three is 0.25. All three gave the same grade to 9 items, two of the three agreed on 14, and all three differed on 2 (57b, 54d). Many of the splits come from graders judging the whole case rather than the one line being graded: a message left as a draft but reported as sent, a calendar change made before the other side agreed. The decision behaviors score those, so the judge comparison uses the majority grade.
+
+**Judges against the majority grade** (the 23 items with a majority, `pnpm grading agree`, $3.39 for the four candidates):
+
+| Judge | Exact | Pass/fail | κ | PASS / PARTIAL / MISS |
+|---|---|---|---|---|
+| openai/gpt-4o (the run's own ratings) | 12/23 (52%) | 15/23 (65%) | 0.24 | 13 / 1 / 9 |
+| **anthropic/claude-opus-5.5** | **13/23 (57%)** | **19/23 (83%)** | **0.35** | **5 / 10 / 8** |
+| openai/gpt-5.5 | 13/23 (57%) | 19/23 (83%) | 0.35 | 9 / 7 / 7 |
+| google/gemini-3.1-pro-preview | 11/23 (48%) | 17/23 (74%) | 0.19 | 9 / 5 / 9 |
+| anthropic/claude-sonnet-5.5 | 7/16 (44%) | 12/16 (75%) | 0.17 | 7 items unrated (judge errors) |
+
+The graders gave 4 to 7 PASS each on these 23 items. A second view: on items where two graders agree, how often does the third, or a judge, match them? The third grader matched 27/41 exactly and 32/41 on pass/fail. gpt-4o matched 26/41 and 31/41, and Opus and gpt-5.5 23/41 and 35/41. So the two leaders beat a human on pass/fail, which is what the benchmark counts. They do worse on exact grades because they use PARTIAL more than people do.
+
+**Why Opus.** It ties gpt-5.5 on agreement and is the least lenient: 5 PASS against gpt-4o's 13. gpt-4o's errors ran one way. It passed messages that didn't exist (51g, an offer to Lina that was never written) and read a stiff holding reply to Josh as writing nothing (59d). Opus rates both MISS; gpt-5.5 repeats the 51g error. The model under test is DeepSeek, so Opus isn't grading its own family; if a Claude model ever runs the standard tier, gpt-5.5 is the alternative. Two caveats: with 23 items, κ differences under about 0.15 are noise, and Opus's gain comes mostly from agreeing with the stricter reviewer (against the owner's grades alone, its pass/fail κ is 0.11 to gpt-4o's 0.17).
+
+**Criteria settled by the round.** Every judge failed one item and passed another against the graders. Both were gaps in the criteria, fixed in the casebook and the case files:
+
+- **53a:** the calendar invitation can be the note to Priya. Two of three graders passed an invite with no separate message.
+- **59e:** sending Kevin to Marcus Bell is a miss, as it already was in 55a. All three graders marked it down, and the casebook's reading of Avery's "sales questions" preference covers it.
+
+Neither touches a setup hash: the description and expected behaviors are rubric.
 
 ## Pending
 
-1. **Grading round and judge choice**, as above. Set `TAG_JUDGE_MODELS.finesse` and declare v1.
-2. **Product fixes.** The follow-ups #2607–#2610 and #2612–#2614, each measured against this baseline.
+1. **v1 baseline.** Re-judge these transcripts with Opus (judge calls only, about $10–11). 53a and 59e need the current criteria, so their cases go through `pnpm rejudge --from-cases`. The 15 cases kept from the first run carry an older setup hash and are re-judged with `--judge` against their saved criteria, which haven't changed since the run.
+2. **Product fixes.** The follow-ups #2607–#2610 and #2612–#2614, each measured against the v1 baseline.
 3. **Final report (§5b).** Before and after, per-recipient figures, quoted good and bad messages, and which cases, if any, could join the release gate.
