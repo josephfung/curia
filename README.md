@@ -97,14 +97,20 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 **Getting started has two phases.**
 
-- **Setup** (whoever runs Curia; about 5 minutes to install, then an hour or two to connect): Docker, an Anthropic API key and a domain, then Curia's own email, a way to message the executive, a voice, and access to Google Docs.
+- **Setup** (whoever runs Curia; about 5 minutes to install, then an hour or two to connect): Docker, a model provider key (Anthropic, OpenRouter or AWS Bedrock) and a domain, then Curia's own email, a way to message the executive, a voice, and access to Google Docs.
 - **Onboarding** (the executive): Curia invites them to a first conversation, by voice or chat, and takes it from there.
 
 **[What to expect →](https://docs.meetcuria.com/get-started/what-to-expect)** (who does what, time, costs, and what you'll need)
 
 ### Operator install (image)
 
-The installer needs [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin) and `curl`, and an [Anthropic API key](https://console.anthropic.com) is required: the installer asks for one and won't continue without it. No Node or pnpm.
+The installer needs [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin) and `curl`, plus credentials for one model provider. It asks which provider to use:
+
+- **Anthropic** (the default): an [Anthropic API key](https://console.anthropic.com).
+- **OpenRouter**: an [OpenRouter API key](https://openrouter.ai/settings/keys). The installer then offers models for each tier, with a recommended set.
+- **AWS Bedrock**: an IAM access key with Bedrock model access, and its region. Voice calls need streaming, which Bedrock doesn't have, so voice stays off.
+
+No Node or pnpm.
 
 ```bash
 mkdir curia && cd curia
