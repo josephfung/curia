@@ -357,7 +357,10 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
     if (result.success) expect(result.data).not.toHaveProperty('left_in_inbox');
     const writes = f.calls.filter((c) => c.method !== 'GET');
     expect(writes).toHaveLength(1);
-    expect(JSON.stringify(writes[0])).not.toContain('unread');
+    // The drain path really ran (the setting was read), and the one write is the archive PUT in
+    // the mailbox holding the message, not a mark-read.
+    expect(getSpy).toHaveBeenCalled();
+    expect(writes[0]).toMatchObject({ grant: 'grant-personal', method: 'PUT' });
   });
 
   it('setting read throws -> archives, success', async () => {
@@ -400,5 +403,9 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
       .mockResolvedValue(jsonResponse({ type: 'server_error' }, 500));
     const result = await new CeoInboxArchiveHandler().execute(drainCtx());
     expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('Failed to mark principal inbox message read');
+    expect(result.error).not.toContain('archive');
+    expect(calls(fetchSpy)[2]).toBe(`PUT /messages/${MSG}`);
   });
 });

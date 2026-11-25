@@ -75,7 +75,12 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       }
 
       if (await this.filingMode(ctx, mailbox.id) === 'leave_in_inbox') {
-        await client.markAsRead(messageId);
+        try {
+          await client.markAsRead(messageId);
+        } catch (err) {
+          ctx.log.error({ err, messageId }, 'ceo-inbox-archive: failed to mark read (ceo_inbox/filing)');
+          return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to mark principal inbox message read') };
+        }
         ctx.log.info({ messageId }, 'ceo-inbox-archive: left in inbox, marked read (ceo_inbox/filing)');
         return { success: true, data: { message_id: messageId, ...described, left_in_inbox: true, ...mbx } };
       }
