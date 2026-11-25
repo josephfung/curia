@@ -824,9 +824,9 @@ states it, matching the boot warning at `src/index.ts:824`), 6 (`docs/dev/setup.
 enable the channel in the console), 8 (spec 18 and `docs/dev/setup.md` no longer put channel
 values in `.env`; spec 08 says no `curia setup` CLI exists and points to spec 18) and 9 (the
 README's channel row). The `curia` side of 5 agrees: `docs/dev/setup.md` and `.env.example`
-both use `channel.email.nylas_api_key`, seeded from `NYLAS_API_KEY`. Open: 1 needs a decision
-(the installers, `scripts/setup-common.sh:178`, still require an `sk-ant-` key; either the
-installer takes other providers or the docs say Anthropic is required to install); 2 is the
+both use `channel.email.nylas_api_key`, seeded from `NYLAS_API_KEY`. 1 is decided: the docs
+say an Anthropic key is required to install, as the installers (`scripts/setup-common.sh:178`)
+enforce; installing with another provider is #2749. Open: 2 is the
 website PR; 3, 7, 10, 11 and the curia-docs side of 1 and 5 are in curia-docs.
 
 1. **LLM providers.**

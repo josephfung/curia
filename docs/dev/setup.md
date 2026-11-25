@@ -100,8 +100,8 @@ for you:
 1. Checks prerequisites (`docker`, `docker compose`, Node 26+, `pnpm`, `openssl`).
 2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
    with `openssl rand -hex 32`.
-3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
-   3 retries).
+3. Prompts for your **Anthropic API key**, which is required to install (validated
+   against `sk-ant-...`, 3 retries).
 4. Writes `.env` from `.env.example`, leaving the optional embedding-server
    vars commented out. Channel credentials and the optional Tavily key are not
    `.env` config: they go in the vault, from the console or `seed-vault`.
