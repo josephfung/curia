@@ -82,6 +82,12 @@ describe('buildDescription', () => {
     expect(buildDescription(tool, input)).toBe(expected);
   });
 
+  // #2699: a sampled archive that the filing mode turned into a mark-read is described as one.
+  it('describes a ceo-inbox-archive result that left the mail in the inbox as a mark-read', () => {
+    expect(buildDescription('ceo-inbox-archive', { message_id: 'm-1' }, { left_in_inbox: true })).toBe('Mark an email read');
+    expect(buildDescription('ceo-inbox-archive', { message_id: 'm-1' }, { subject: 'x' })).toBe('Archive an email');
+  });
+
   it('appends the labels applied by a label tool', () => {
     expect(buildDescription('ceo-inbox-label', { message_id: 'm-1', labels: ['🚨 Urgent', 'BOARD'] }))
       .toBe('Label an email: 🚨 Urgent, BOARD');
