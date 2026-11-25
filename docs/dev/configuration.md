@@ -622,8 +622,11 @@ Compose refuses to start the container when the file is missing, rather than
 mount an empty directory there. Both installers create the file. For an
 OpenRouter or AWS Bedrock install they write the chosen tier and judge models
 into it, between `# >>> models chosen at install` and `# <<< models chosen at
-install` lines that a rerun replaces (#2749). After editing it, run
-`docker compose restart curia`.
+install` lines (#2749). A rerun that chooses OpenRouter or Bedrock again
+updates only the five `model:` values in that block, so a key you merged into it
+(such as `filter.llmJudge.failMode`) stays. A rerun that chooses Anthropic removes
+the whole block, keys you merged into it included: put those back outside the
+markers afterwards. After editing the file, run `docker compose restart curia`.
 
 From a source checkout, the same mount applies the repository's
 `config/local.yaml` to the container. A value you set there for host-side
