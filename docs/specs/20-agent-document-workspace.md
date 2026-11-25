@@ -157,6 +157,22 @@ remove the key, approved or not. The key is matched case-insensitively and any v
 (fail closed); `src/memory/console-only-docs.ts` holds the reader, and code that relies on a
 document being console-owned checks the mark with `isConsoleOnlyMarked`.
 
+**Publishing to Google Docs (#2758).** A document becomes a formatted Google Doc through
+`doc-publish-google` (a standalone tool, `action_risk: low`, reached through discovery rather than
+the auto-pin). The document stays the source of truth; the Doc is a formatted copy:
+
+- The body (never the frontmatter) is uploaded as `text/markdown` with the Google Docs mimeType,
+  so Google's own Markdown import formats it. Reading a Doc back uses the matching Markdown
+  export (`get_doc_as_markdown`), and the text returns to the document through `doc-write`.
+- The first publish records the Doc in frontmatter under `google_doc` (`id`, `url`,
+  `published_at`, `modified_time`; `src/google/published-doc.ts`). A `doc-write` replace that
+  leaves the key out keeps it; `google_doc: null` clears it, so the next publish starts a new Doc.
+- A later publish replaces the recorded Doc's whole content. It overwrites only a Doc whose Drive
+  `appProperties` bind it to this document, and, unless the caller passes `overwrite`, only when
+  the Doc's `modifiedTime` still matches the record and it has no open comments.
+- Recording the Doc is a write, so publishing passes `doc-write`'s guards: console-only documents,
+  `/shared/` documents the agent does not declare, and the send ledger are refused.
+
 ## 7. Harness injection & auto-pin
 
 The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot

@@ -33,7 +33,7 @@ inbound:
           Deep-dive drafts ready: /meetings/onboarding/deep-dive/working-rules.md,
           /meetings/onboarding/deep-dive/time-and-priorities.md,
           /meetings/onboarding/deep-dive/writing-voice.md. Contacts added: 42. Coverage:
-          {{date:today-92}}–{{date:today-2}}. Copy each to a Google Doc and book the review (onboarding skill,
+          {{date:today-92}}–{{date:today-2}}. Publish each as a Google Doc and book the review (onboarding skill,
           "Deep-dive review").
 tool_stubs:
   onboarding-progress:
@@ -99,6 +99,9 @@ tool_stubs:
 
           Concise and direct. Short paragraphs. Signs off with the first name.
   # Google Workspace refuses: creating the Doc fails, so there is nothing to share.
+  doc-publish-google:
+    - match: {}
+      error: "Google Workspace is not signed in or its credentials are unreadable: Google OAuth token cache not found."
   create_doc:
     - match: {}
       error: Google Workspace is not connected for this account. Sign in from Setup to create documents.
@@ -159,9 +162,10 @@ expected_behaviors:
       with: { skill: google-workspace }
   - id: tries_a_document
     weight: critical
-    description: Tries to create a Google Doc (or Drive file) from a draft, meeting the failure.
+    description: Tries to publish a draft as a Google Doc (or create a Doc or Drive file), meeting the failure.
     check:
       any_of:
+        - called: doc-publish-google
         - called: create_doc
         - called: create_drive_file
   - id: raises_delivery_notice

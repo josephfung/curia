@@ -185,6 +185,16 @@ tool_stubs:
       return: *voice_text
     - match: {}
       error: Document not found.
+  # The read-back drive-files.md names since #2758; the same text as get_doc_content.
+  get_doc_as_markdown:
+    - match: { document_id: 1WrkRul2362DpDvQ8zTn4Kx7Vb3Mx9Pd5Hs1Vf6Yq3Je }
+      return: *rules_text
+    - match: { document_id: 1TmPri2362DpDvR5wLc2Hn8Zq4Kt7Xs3Mb9Fd1Gy6Ua }
+      return: *priorities_text
+    - match: { document_id: 1WrtVce2362DpDvK3pNs6Dt9Yb2Lw5Qh8Rc4Ej7Zm0Uo }
+      return: *voice_text
+    - match: {}
+      error: Document not found.
   # The "moved to Curia" line at the top of each Doc.
   modify_doc_text:
     - match: {}

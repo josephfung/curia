@@ -520,6 +520,35 @@ describe('DocWriteHandler', () => {
     });
   });
 
+  describe('published-Doc record (#2758)', () => {
+    const RECORD = { id: 'gdoc-1', url: 'https://docs.google.com/document/d/gdoc-1/edit', published_at: 'a', modified_time: 'b' };
+
+    function replaceWith(frontmatter: Record<string, unknown> | undefined) {
+      const stored = makeDoc({ version: 2, frontmatter: { title: 'Brief', google_doc: RECORD } });
+      const update = vi.fn().mockResolvedValue({ ok: true, document: stored });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(stored), update });
+      return { repo, update, input: { path: '/projects/x/brief.md', mode: 'replace', body: 'new', expected_version: 2, ...(frontmatter ? { frontmatter } : {}) } };
+    }
+
+    it('replace keeps google_doc when the caller leaves it out', async () => {
+      const { repo, update, input } = replaceWith({ title: 'Renamed' });
+      await new DocWriteHandler().execute(makeCtx(input, repo));
+      expect(update.mock.calls[0]![1].frontmatter).toEqual({ title: 'Renamed', google_doc: RECORD });
+    });
+
+    it('replace lets the caller clear google_doc with null', async () => {
+      const { repo, update, input } = replaceWith({ title: 'Brief', google_doc: null });
+      await new DocWriteHandler().execute(makeCtx(input, repo));
+      expect(update.mock.calls[0]![1].frontmatter).toEqual({ title: 'Brief', google_doc: null });
+    });
+
+    it('replace without frontmatter leaves the stored frontmatter alone', async () => {
+      const { repo, update, input } = replaceWith(undefined);
+      await new DocWriteHandler().execute(makeCtx(input, repo));
+      expect(update.mock.calls[0]![1].frontmatter).toBeUndefined();
+    });
+  });
+
   describe('section-delete (#2339)', () => {
     const PATH = '/projects/x/brief.md';
     const body = '## Board mail\n\n- When: from the board\n\n## Newsletters\n\n- When: Substack\n';

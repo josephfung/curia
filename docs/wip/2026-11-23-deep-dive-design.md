@@ -31,8 +31,10 @@ not the deep dive ran.
 
 ## Anti-goals
 
-- **A Google client in Curia.** No TypeScript creates, shares, reads or edits a Google Doc.
-  The coordinator does that with the existing `google-workspace` MCP tools.
+- **A Google client built for the deep dive.** Delivery adds no Google code of its own: the
+  coordinator publishes the drafts with `doc-publish-google`, the general tool every Curia
+  document uses to become a formatted Doc (#2758), and shares and reads them with the existing
+  `google-workspace` MCP tools.
 - **New system code to write documents agents already know how to write.** Rules are written
   by the agents that own them; voice and priorities by the coordinator's existing tools.
 - **Coordinator prompt growth beyond the priorities pin.** The coordinator does not pin the

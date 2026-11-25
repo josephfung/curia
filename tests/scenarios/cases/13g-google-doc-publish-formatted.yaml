@@ -1,0 +1,112 @@
+# Case 13g (#2758): the principal asks for a Curia document as a Google Doc. create_doc
+# inserts its content as plain text, so a Markdown document sent through it reaches the
+# principal as literal `#` and `**`. Rule: skills/google-workspace/references/drive-files.md,
+# "Write a Google Doc": a Curia document goes through doc-publish-google, which hands its
+# Markdown to Google's own import, and the Doc is then shared. doc-publish-google is not
+# pinned; the coordinator reaches it through tool-registry, as that reference says.
+name: google doc publish formatted
+description: >
+  The principal asks for the board-prep brief Curia drafted as a Google Doc they can edit.
+  The coordinator finds the brief in its documents, publishes it with doc-publish-google
+  (never create_doc with the Markdown text), shares the Doc with the principal as an editor,
+  and sends the link.
+tags: [google-workspace, documents]
+# New in #2758: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+timeout_seconds: 300
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  content: Can you put the board-prep brief you drafted into a Google Doc I can edit?
+tool_stubs:
+  doc-list:
+    - match: {}
+      return:
+        directory: /projects/board-prep/
+        index_path: /projects/board-prep/index.md
+        manifest: |
+          # /projects/board-prep/
+          - brief.md (brief): Board prep brief, Q4 meeting
+        documents:
+          - { path: /projects/board-prep/brief.md, type: brief, title: Board prep brief }
+  doc-search:
+    - match: {}
+      return:
+        query: board
+        path_prefix: /
+        match_count: 1
+        matches:
+          - { path: /projects/board-prep/brief.md, line_number: 1, line: "# Board prep brief" }
+  doc-read:
+    - match: { path: /projects/board-prep/brief.md }
+      return:
+        found: true
+        path: /projects/board-prep/brief.md
+        type: brief
+        frontmatter: { title: Board prep brief }
+        version: 4
+        body: |
+          # Board prep brief
+
+          ## Agenda
+
+          1. **Q4 results**: revenue up 18% on plan
+          2. **Hiring**: VP Sales shortlist
+          3. **Fundraising**: timeline for the B round
+
+          ## Open questions
+
+          - Do we pre-wire the pricing change with the lead investor?
+          - Who presents the hiring plan?
+    - match: {}
+      return: { found: false, path: /projects/unknown.md }
+  doc-publish-google:
+    - match: { path: /projects/board-prep/brief.md }
+      return:
+        action: created
+        document_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er
+        url: https://docs.google.com/document/d/1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er/edit
+        path: /projects/board-prep/brief.md
+    - match: {}
+      error: No document at that path. Check the path with doc-list.
+  manage_drive_access:
+    - match: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er }
+      return: 'Permission granted on "Board prep brief".'
+    - match: {}
+      error: File not found.
+  # The wrong paths, stubbed so the case tests the choice rather than a failure.
+  create_doc:
+    - match: {}
+      return: |
+        Created Google Doc 'Board prep brief' (ID: 1WrngPth2758Xc9Vb3Nm7Kl1Jh5Gf8Ds2Aq4We6Rt0Y)
+        Link: https://docs.google.com/document/d/1WrngPth2758Xc9Vb3Nm7Kl1Jh5Gf8Ds2Aq4We6Rt0Y/edit
+  import_to_google_doc:
+    - match: {}
+      return: |
+        Imported 'Board prep brief' as a Google Doc (ID: 1WrngPth2758Xc9Vb3Nm7Kl1Jh5Gf8Ds2Aq4We6Rt0Y)
+        Link: https://docs.google.com/document/d/1WrngPth2758Xc9Vb3Nm7Kl1Jh5Gf8Ds2Aq4We6Rt0Y/edit
+expected_behaviors:
+  - id: publishes_the_document
+    weight: critical
+    description: Publishes the stored brief with doc-publish-google.
+    check:
+      called: doc-publish-google
+      with: { path: /projects/board-prep/brief.md }
+  - id: no_plain_text_markdown
+    weight: critical
+    description: Never sends the brief's Markdown to create_doc, which would show it as literal syntax.
+    check:
+      not_called: [create_doc]
+  - id: shares_with_principal
+    weight: important
+    description: Shares the published Doc with the principal.
+    check:
+      called: manage_drive_access
+      with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er }
+  - id: sends_the_link
+    weight: important
+    description: Gives the principal the Doc's link and says it is ready to edit.
+failure_modes:
+  - Creates the Doc with create_doc and the Markdown text
+  - Pastes the brief into chat instead of making a Doc
+  - Says it cannot create Google Docs

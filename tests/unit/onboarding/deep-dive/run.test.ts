@@ -83,7 +83,7 @@ const summaryDoc = (s: unknown = summary()): Partial<WorkingDocRow> => ({
   version: 1,
 });
 
-const NOTE_TAIL = 'Copy each to a Google Doc and book the review (onboarding skill, "Deep-dive review").';
+const NOTE_TAIL = 'Publish each as a Google Doc and book the review (onboarding skill, "Deep-dive review").';
 
 function setup(opts: {
   scan?: RunDeps['scan'];
@@ -396,7 +396,7 @@ describe('runDeepDive', () => {
     });
     expect(t.onboardingService.openSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'review-1' }), 'review');
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('review-1', {
-      progressNote: expect.stringContaining('Coverage: 2026-08-24–2026-11-22, truncated. Copy each'),
+      progressNote: expect.stringContaining('Coverage: 2026-08-24–2026-11-22, truncated. Publish each'),
     });
     expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'review-1' }));
     expect(await t.read()).toMatchObject({ status: 'delivered', reviewTaskId: 'review-1' });
