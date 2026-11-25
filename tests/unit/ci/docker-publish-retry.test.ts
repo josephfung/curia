@@ -21,13 +21,16 @@ interface BuildStep {
   'continue-on-error'?: boolean;
 }
 
+interface Job {
+  'timeout-minutes': number;
+  permissions: Record<string, string>;
+  steps: BuildStep[];
+}
+
 interface Workflow {
   jobs: {
-    build: {
-      'timeout-minutes': number;
-      permissions: Record<string, string>;
-      steps: BuildStep[];
-    };
+    'build-arch': Job;
+    build: Job;
     'notify-failure': {
       if: string;
       needs: string[];
@@ -40,21 +43,27 @@ const workflow = yaml.load(
 ) as Workflow;
 
 describe('docker-publish retry wiring (#1864)', () => {
+  // build-arch builds and pushes each platform; build assembles them under the tags and signs.
+  const arch = workflow.jobs['build-arch'];
   const build = workflow.jobs.build;
+  const archStep = arch.steps.find((candidate) => candidate.id === 'build');
   const step = build.steps.find((candidate) => candidate.id === 'build');
 
-  it('retries inside the build step, so a recovered attempt stays a success', () => {
-    expect(step?.run).toBe('bash docker/publish-image.sh');
-    expect(step?.['continue-on-error']).toBeUndefined();
-    expect(step?.if ?? '').not.toMatch(/always\s*\(/);
+  it('retries inside the build and assemble steps, so a recovered attempt stays a success', () => {
+    expect(archStep?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/publish-image.sh"');
+    expect(step?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/assemble-image.sh"');
+    for (const s of [archStep, step]) {
+      expect(s?.['continue-on-error']).toBeUndefined();
+      expect(s?.if ?? '').not.toMatch(/always\s*\(/);
+    }
+    expect(readFileSync(join(ROOT, 'docker/assemble-image.sh'), 'utf8')).toContain('buildx-retry.sh');
   });
 
-  it('keeps the 60 minute wall and can write the Actions cache', () => {
+  it('keeps the 60 minute wall, and only the building legs write the Actions cache', () => {
+    expect(arch['timeout-minutes']).toBe(60);
+    expect(arch.permissions).toEqual({ contents: 'read', packages: 'write', actions: 'write' });
     expect(build['timeout-minutes']).toBe(60);
-    expect(build.permissions.actions).toBe('write');
-    expect(build.permissions.packages).toBe('write');
-    expect(build.permissions['id-token']).toBe('write');
-    expect(build.permissions.contents).toBe('read');
+    expect(build.permissions).toEqual({ contents: 'read', packages: 'write', 'id-token': 'write' });
   });
 
   it('still requests an SBOM and max provenance, scoped per image', () => {
@@ -75,7 +84,7 @@ describe('docker-publish retry wiring (#1864)', () => {
   // day. The retry must stay inside the sign step for the same reason as above.
   it('signs through the retrying script, inside the step', () => {
     const sign = build.steps.find((candidate) => candidate.run?.includes('sign-image.sh'));
-    expect(sign?.run).toBe('bash docker/sign-image.sh');
+    expect(sign?.run).toBe('bash "$RUNNER_TEMP/publish-tools/docker/sign-image.sh"');
     expect(sign?.['continue-on-error']).toBeUndefined();
     expect(build.steps.some((candidate) => /^\s*cosign sign\b/m.test(candidate.run ?? ''))).toBe(false);
     const script = readFileSync(join(ROOT, 'docker/sign-image.sh'), 'utf8');

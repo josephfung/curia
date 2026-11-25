@@ -37,6 +37,7 @@ function setup(opts: {
   parent?: Partial<typeof parent> & { waitingOnContactId?: string | null };
   topic?: Partial<typeof openTopic> & { waitingOnContactId?: string | null };
   updateTask?: (id: string) => Promise<unknown>;
+  resumeIfStalled?: (now: Date) => Promise<boolean>;
 }) {
   const data = new Map<string, string>();
   const get = vi.fn(async (ns: string, k: string) => data.get(`${ns}/${k}`) ?? null);
@@ -53,6 +54,7 @@ function setup(opts: {
   const enqueueTaskWake = vi.fn(async () => ({ jobId: 'j1' }));
   const readInvitation = vi.fn(async () => (opts.invitation ? { redeemedAt: null, ...opts.invitation } : null));
   const nextSessionBooked = vi.fn(async () => opts.booked ?? false);
+  const resumeIfStalled = vi.fn(opts.resumeIfStalled ?? (async () => false));
   const watcher = new OnboardingWatcher({
     taskRepo: taskRepo as never,
     scheduler: { enqueueTaskWake, runTaskWakeEarly: vi.fn(async (): Promise<'moved' | 'busy' | 'none'> => 'none') },
@@ -61,9 +63,10 @@ function setup(opts: {
     logger,
     readInvitation,
     nextSessionBooked,
+    deepDive: { resumeIfStalled },
   });
   const seed = () => writeOnboardingState(configStore, { ...baseState, ...opts.state });
-  return { watcher, get, set, enqueueTaskWake, taskRepo, readInvitation, seed, configStore };
+  return { watcher, get, set, enqueueTaskWake, taskRepo, readInvitation, seed, configStore, resumeIfStalled };
 }
 
 describe('OnboardingWatcher.tick', () => {
@@ -74,6 +77,19 @@ describe('OnboardingWatcher.tick', () => {
     expect(t.set).not.toHaveBeenCalled();
     expect(t.enqueueTaskWake).not.toHaveBeenCalled();
     expect(t.readInvitation).not.toHaveBeenCalled();
+  });
+
+  it('tick calls resumeIfStalled even with no onboarding task open', async () => {
+    const t = setup({ open: false });
+    await t.watcher.tick(later);
+    expect(t.resumeIfStalled).toHaveBeenCalledWith(later);
+  });
+
+  it('a deep-dive resume that throws does not stop the tick', async () => {
+    const t = setup({ open: true, resumeIfStalled: async () => { throw new Error('store down'); } });
+    await t.seed();
+    await t.watcher.tick(later);
+    expect(t.readInvitation).toHaveBeenCalled();
   });
 
   it('sets a resumed onboarding task back to waiting on the principal, and leaves a waiting one alone', async () => {

@@ -266,6 +266,8 @@ import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js'
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { createOnboardingStateLock } from './onboarding/state.js';
+import { DeepDiveService } from './onboarding/deep-dive/service.js';
+import { readWorkingHoursFact } from './contacts/working-hours-fact.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3517,7 +3519,37 @@ async function main(): Promise<void> {
     ...(outboundGateway ? { gateway: outboundGateway } : {}),
     ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
   });
-  const onboardingService = new OnboardingService({
+  // The deep dive (#2362): one slow read of the principal's mail and calendar history, started on
+  // Start or a mailbox connect during onboarding, resumed by the watcher and at boot.
+  const deepDive: DeepDiveService = new DeepDiveService({
+    configStore: triageConfig,
+    stateLock: onboardingStateLock,
+    mailboxes: principalMailboxes,
+    workingDocsRepo,
+    taskRepo,
+    contactService,
+    // Curia's own addresses, boot accounts and any added since (as the inbox filter reads them).
+    officeAddresses: async () => [...resolvedEmailAccounts.map((a) => a.selfEmail), ...(await curiaEmailAddresses())],
+    // onboardingService is built below with this service; the hand-off only calls it at run time.
+    onboardingService: { openSession: (parent, sessionId) => onboardingService.openSession(parent, sessionId) },
+    scheduler: schedulerService,
+    // Drafting calls the powerful tier through the same router and telemetry InfraLlmService uses.
+    providerRouter: infraLlmRouter,
+    modelRouter,
+    bus,
+    estimateCost: estimateCostUsd,
+    modelRegistry,
+    ...(executiveProfileService ? { executiveProfile: executiveProfileService } : {}),
+    officeIdentity: officeIdentityService,
+    readWorkingHours: async () => {
+      const principal = await contactService.findContactBySystemRole('principal');
+      return principal?.kgNodeId ? readWorkingHoursFact(pool, principal.kgNodeId) : null;
+    },
+    timezone: principalHomeTz,
+    logger,
+    notifyOperator: operatorNotifier,
+  });
+  const onboardingService: OnboardingService = new OnboardingService({
     pool,
     taskRepo,
     registry: registryService,
@@ -3537,8 +3569,12 @@ async function main(): Promise<void> {
     persistentStore: entityMemory !== undefined,
     logger,
     operatorNotifier,
+    deepDive,
+    hasPrincipalMailbox: async () => (await principalMailboxes.list()).length > 0,
   });
   executionLayer.setOnboardingService(onboardingService);
+  // The deep-dive-run tool: the principal's explicit re-run, during onboarding or after it.
+  executionLayer.setDeepDiveService(deepDive);
   const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
 
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
@@ -3920,6 +3956,7 @@ async function main(): Promise<void> {
     logger,
     notifyOperator: operatorNotifier,
     googleClientId: googleOAuthClientId,
+    deepDive,
   }).start();
 
   // Onboarding watcher (#2360): greeting follow-ups, the idle nudge and the expired-invitation notice.
@@ -3934,8 +3971,8 @@ async function main(): Promise<void> {
     readInvitation: () => readCurrentInvitationTiming(pool),
     nextSessionBooked: (taskId, now) =>
       isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
+    deepDive,
   });
-  onboardingWatcher.start();
 
   // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
   // General meetings infrastructure; runs only when a calendar can be read.
@@ -4425,6 +4462,7 @@ async function main(): Promise<void> {
     setupRequiredAtBoot,
     setupChecklist,
     onboardingService,
+    deepDiveService: deepDive,
     bootStartedAt,
     processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
@@ -4735,6 +4773,14 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');
     await shutdown(1);
   }
+
+  // The onboarding watcher and the deep dive's boot resume start after the email adapters, so a
+  // run they resume that fails at once can still email its failure notice.
+  onboardingWatcher.start();
+  // A scanning/drafting run at boot was orphaned by the restart (Start may schedule one): resume it.
+  void deepDive.resumeAtBoot().catch((err: unknown) => {
+    logger.error({ err }, 'deep-dive: boot resume failed; the watcher retries once the run looks stalled');
+  });
 
   // Historical Signal 1:1 and SMS senders. Migration 090 only stamps seven
   // days inside the boot transaction; older null rows would mark those

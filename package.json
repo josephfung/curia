@@ -19,7 +19,7 @@
     "check:dist-imports": "node scripts/check-dist-imports.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:shell": "bash tests/setup/test-setup-functions.sh && bash tests/docker/test-pnpm-retry.sh && bash tests/docker/test-buildx-retry.sh && bash tests/docker/test-sign-image.sh && bash tests/ci/test-filter-suppressed-sarif.sh",
+    "test:shell": "bash tests/setup/test-setup-functions.sh && bash tests/docker/test-pnpm-retry.sh && bash tests/docker/test-buildx-retry.sh && bash tests/docker/test-assemble-image.sh && bash tests/docker/test-sign-image.sh && bash tests/ci/test-filter-suppressed-sarif.sh",
     "test:postgres-image": "bash tests/docker/test-postgres-init.sh",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json && pnpm -r run typecheck",

@@ -56,7 +56,9 @@ import {
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
 import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
-import { notifyOperatorOnce } from './notify-operator-once.js';
+import { raiseOperatorNoticeOnce } from './notify-operator-once.js';
+import type { DeepDiveService } from './deep-dive/service.js';
+import { isRunning as isDeepDiveRunning, readDeepDiveState } from './deep-dive/state.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -210,6 +212,16 @@ export interface OnboardingServiceDeps {
    * Absent: the tool still records the notice on the task; nobody is emailed.
    */
   operatorNotifier?: OperatorNotifier;
+  /**
+   * The deep dive (#2362): Start begins it when a principal mailbox is already connected (one
+   * connected in Setup, before onboarding). Absent: nothing starts.
+   */
+  deepDive?: Pick<DeepDiveService, 'startOnce'>;
+  /**
+   * Whether any principal mailbox is connected: skips the startOnce call when none. Absent:
+   * startOnce is always called and answers `no_mailbox` itself.
+   */
+  hasPrincipalMailbox?: () => Promise<boolean>;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
   /** Defaults to the pairing-invitations stop-by-id on `pool`. */
@@ -234,24 +246,17 @@ export class OnboardingService {
   }
 
   /**
-   * Raise an operator notice once per onboarding run (#2360, #2710): the same dedupe the
-   * watcher and the event subscribers use, so a model that raises the same event repeatedly
-   * emails the operator once. The progress note and the audit row are written either way.
-   * Without an injected notifier the notice is still recorded on the task and nobody is emailed.
+   * Raise an operator notice once (#2360, #2710): once per onboarding run on the onboarding task,
+   * the same dedupe the watcher and the event subscribers use, and once per event on a standalone
+   * deep-dive review task (#2362). A model that raises the same event repeatedly emails the
+   * operator once. Without an injected notifier the notice is still recorded and nobody is emailed.
    */
-  async raiseOperatorNotice(
+  raiseOperatorNotice(
     taskId: string,
     event: OperatorEvent,
     notice: OperatorNotice = {},
   ): Promise<{ alreadyRaised: boolean; recorded: boolean }> {
-    // Checked up front so the caller can say "already raised" instead of "could not be recorded":
-    // the model would otherwise retry a notice that is deliberately not sent twice (#2710).
-    // notifyOperatorOnce re-checks under the state lock, so this is only about the message.
-    const state = await readOnboardingState(this.deps.configStore, this.deps.logger);
-    if (state !== null && state.taskId === taskId && state.operatorNotified.includes(event)) {
-      return { alreadyRaised: true, recorded: true };
-    }
-    const recorded = await notifyOperatorOnce(
+    return raiseOperatorNoticeOnce(
       {
         taskRepo: this.deps.taskRepo,
         logger: this.deps.logger,
@@ -263,7 +268,6 @@ export class OnboardingService {
       event,
       notice,
     );
-    return { alreadyRaised: false, recorded };
   }
 
   async status(): Promise<OnboardingStatus> {
@@ -334,6 +338,15 @@ export class OnboardingService {
   }
 
   /**
+   * Whether the deep dive (#2362) is scanning or drafting. Onboarding does not complete while it
+   * is, so its drafts reach the Review session; a delivered or failed run holds nothing. Read from
+   * the same config store the deep-dive service writes its run state to.
+   */
+  async deepDiveRunning(): Promise<boolean> {
+    return isDeepDiveRunning(await readDeepDiveState(this.deps.configStore, this.deps.logger));
+  }
+
+  /**
    * Record that the greeting reached the principal. Keeps an earlier time (follow-ups are not
    * the greeting). Null when onboarding has no state.
    */
@@ -389,6 +402,8 @@ export class OnboardingService {
 
     // Only after the commit: a rolled-back rotation must never reach the cache.
     if (rotatedTo) noteWebThreadRotated(pool, rotatedTo);
+    // Before the restart is armed: the run must be recorded before the exit can fire, or no boot resumes it.
+    if (result.ok) await this.startDeepDive(result.taskId);
     if (result.ok && result.restartScheduled) {
       // A principal start leaves the calling turn time to say Curia will be back.
       const delayMs = opts.actor === 'principal' ? PRINCIPAL_RESTART_EXIT_DELAY_SECONDS * 1000 : RESTART_EXIT_DELAY_MS;
@@ -401,6 +416,23 @@ export class OnboardingService {
       }
     }
     return result;
+  }
+
+  /**
+   * Start the deep dive after a committed Start, when a mailbox is already connected; a mailbox
+   * connected later starts it from the subscriber. A restart Start scheduled kills the job, and
+   * the next boot resumes it (DeepDiveService.resumeAtBoot). Never fails Start: logged instead.
+   */
+  private async startDeepDive(taskId: string): Promise<void> {
+    const { deepDive, hasPrincipalMailbox, logger } = this.deps;
+    if (!deepDive) return;
+    try {
+      if (hasPrincipalMailbox && !(await hasPrincipalMailbox())) return;
+      const started = await deepDive.startOnce();
+      logger.info({ taskId, ...started }, 'onboarding: deep dive start on Start');
+    } catch (err) {
+      logger.error({ err, taskId }, 'onboarding: could not start the deep dive');
+    }
   }
 
   /**

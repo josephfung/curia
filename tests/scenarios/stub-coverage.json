@@ -1433,6 +1433,22 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-22T01:04:59.119Z"
     },
+    "deep dive confirm imports rules by delegation after a read-back": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive set aside writes nothing": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive workspace failure falls back to the console drafts": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive no rule delegated before the yes": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
     "priorities offer to start when goals come up": {
       "unstubbed": null,
       "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
