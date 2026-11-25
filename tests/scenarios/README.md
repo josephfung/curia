@@ -714,8 +714,8 @@ pnpm scenarios --tags finesse --model deepseek/deepseek-v4.1-flash
 
 **Versions.** It is a benchmark, not a gate: product fixes are measured against a recorded
 baseline, so the cases and their criteria hold still between baselines. The current version
-is v1: the cases as of the judge choice, judged by `anthropic/claude-opus-5.5`. v0.1 (gpt-4o)
-and the grading round that picked the judge are in
+is v1: the cases as of the judge choice, judged by `anthropic/claude-opus-5.5`. Its baseline,
+v0.1 (gpt-4o) and the grading round that picked the judge are in
 [docs/wip/2026-11-21-finesse-benchmark-baseline.md](../../docs/wip/2026-11-21-finesse-benchmark-baseline.md).
 A change to a case's setup or criteria, or to the judge, is a new version with a new
 baseline. `pnpm rejudge --from-cases` only re-scores runs whose setup is unchanged, and the results' setup hashes show which runs those are.

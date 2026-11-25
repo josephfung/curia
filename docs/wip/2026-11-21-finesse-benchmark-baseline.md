@@ -1,12 +1,16 @@
-# Finesse benchmark v0.1: baseline
+# Finesse benchmark: v0.1 and v1 baselines
 
-Working note · Issue #2556 · 2026-11-21 · Draft
+Working note · Issue #2556 · 2026-11-21, v1 added 2026-11-25 · Draft
 
-The finesse benchmark is the 46 scenario cases written from the casebook (`docs/wip/2026-11-10-finesse-casebook.md`), as revised from six executive assistants' reviews (`docs/wip/2026-11-21-finesse-ea-review-synthesis.md`). This note is its v0.1 baseline, measured before any product fix. Later work is compared against it.
+The finesse benchmark is the 46 scenario cases written from the casebook (`docs/wip/2026-11-10-finesse-casebook.md`), as revised from six executive assistants' reviews (`docs/wip/2026-11-21-finesse-ea-review-synthesis.md`). This note holds its v0.1 baseline and, since the grading round, its **v1 baseline**: the same transcripts judged by Claude Opus 5.5 against the settled criteria ([v1 baseline](#v1-baseline)). Both were measured before any product fix. Later work is compared against v1.
 
-**Versioning.** v0.1 was provisional: its judge (gpt-4o, the suite default) had not been checked against human grades. The grading round below picked `anthropic/claude-opus-5.5` (`TAG_JUDGE_MODELS.finesse`) and settled two criteria, and that makes the benchmark v1. v1's baseline is these transcripts re-judged by Opus (pending). After that, a change to a case's setup or criteria, or to the judge, means a new version and a new baseline, not a re-score against this one.
+**Versioning.** v0.1 was provisional: its judge (gpt-4o, the suite default) had not been checked against human grades. The grading round below picked `anthropic/claude-opus-5.5` (`TAG_JUDGE_MODELS.finesse`) and settled two criteria, and that makes the benchmark v1. v1's baseline is these transcripts re-judged by Opus. From here on, a change to a case's setup or criteria, or to the judge, means a new version and a new baseline, not a re-score against this one.
 
 ## Summary
+
+- **v1 (Opus judge): 7 of 46 cases pass, decision 66%, voice 41%.** The v0.1 figures below (gpt-4o) are higher mainly because gpt-4o is more lenient; see [v1 baseline](#v1-baseline).
+
+v0.1, as first measured:
 
 - **Curia decides better than it writes.** Decision averaged 70% and voice 44%. 12 of 46 cases passed every critical behavior.
 - **Rescheduling and running late are weakest.** Task 51 scored 15% on voice and task 52 17%.
@@ -190,8 +194,97 @@ The graders gave 4 to 7 PASS each on these 23 items. A second view: on items whe
 
 Neither touches a setup hash: the description and expected behaviors are rubric.
 
+## v1 baseline
+
+**What was judged.** v0.1's transcripts, with one change: the 15 cases kept from the first full run were run again (5 runs each, $2.34) at the same commit (`49e0e438f`), model and settings as the other 31, so every case carries the current setup hash. The fresh runs replace those 15 cases' old transcripts; the case files' setup didn't change for them. All 230 runs were then scored with `pnpm rejudge --from-cases --judge anthropic/claude-opus-5.5` against the v1 case files: checks re-evaluated, the rest judged by Opus. That cost $11.22 (230 judge calls) with no judge errors. Results: `2026-11-25-finesse-v1-input.rescored-2026-11-25T05-31-40-291Z.json` (local).
+
+**What moved, and why.** The judge accounts for the whole net drop of 5 passing cases:
+
+- The re-runs alone, still judged by gpt-4o, left the total at 12: 50c went from pass to fail and 54d from fail to pass.
+- On the same transcripts, Opus flipped 7 verdicts. 53a now passes, from its settled criterion (the invite counts as the note). Six now fail: 54b, 54d, 56a, 57e, 58b and 58c.
+- Opus reads each element of a criterion as required, as the grading round showed (more PARTIALs than any grader). Some of the six are real misses: in one 54b run Curia nudged an investor in its own voice rather than Avery's, and one 58c invitation was in Alex's voice. Others are literal readings: 57e proposes flowers in every run but never frames them as from Avery and Morgan, 56a omits good wishes for the event, and 58c says "my home" rather than "our home".
+
+**By task** (v1, with v0.1 in brackets, both computed from each case's layer scores):
+
+| Task | Cases | Passed | Decision | Voice |
+|---|---|---|---|---|
+| 50 An attendee drops out | 4 | 1 (2) | 70% (90%) | 39% (56%) |
+| 51 Rescheduling | 7 | 0 (0) | 43% (50%) | 6% (15%) |
+| 52 Running late | 5 | 1 (1) | 66% (59%) | 45% (17%) |
+| 53 Asking for time | 5 | 2 (1) | 65% (63%) | 55% (57%) |
+| 54 Nudging after no reply | 5 | 1 (2) | 86% (85%) | 60% (53%) |
+| 55 Declining a request for time | 4 | 1 (1) | 79% (85%) | 53% (43%) |
+| 56 Declining an invitation | 3 | 1 (2) | 88% (86%) | 71% (78%) |
+| 57 Family and household | 5 | 0 (1) | 57% (62%) | 33% (51%) |
+| 58 Mixed audiences | 3 | 0 (2) | 78% (85%) | 60% (71%) |
+| 59 A casual invitation | 5 | 0 (0) | 51% (58%) | 25% (36%) |
+| **All** | **46** | **7** (12) | **66%** (70%) | **41%** (44%) |
+
+**By information level** (from each case file's header; the v0.1 table above placed 43 cases, this one all 46):
+
+| Level | How Curia could know | Cases | Passed | Decision | Voice |
+|---|---|---|---|---|---|
+| 1 | Stated in the request | 6 | 1 (3) | 68% (76%) | 54% (45%) |
+| 2 | Contact record only | 22 | 5 (6) | 71% (74%) | 43% (48%) |
+| 3 | Notes or memory only | 12 | 1 (3) | 65% (71%) | 35% (41%) |
+| 4 | Only by looking it up | 3 | 0 (0) | 39% (42%) | 33% (33%) |
+| 5 | Only from earlier threads | 3 | 0 (0) | 53% (48%) | 35% (33%) |
+
+**By case** (v1):
+
+| Case | | Score | Decision | Voice |
+|---|---|---|---|---|
+| 50a | drops out of board update | **pass** 69% | 81% | 25% |
+| 50b | drops out of board deep dive | 45% | 51% | 22% |
+| 50c | drops out of one-on-one | 54% | 57% | 40% |
+| 50d | drops out of vendor demo | 88% | 92% | 70% |
+| 51a | reschedules a direct report | 21% | 28% | 0% |
+| 51b | reschedules an agency | 22% | 26% | 0% |
+| 51c | reschedules the board chair | 54% | 79% | 9% |
+| 51d | reschedules an unknown vc | 25% | 29% | 0% |
+| 51e | reschedules a friend | 19% | 28% | 0% |
+| 51f | leaves the chair's meeting early | 50% | 59% | 0% |
+| 51g | excuse on request | 47% | 53% | 37% |
+| 52a | late to team stand-up | 78% | 84% | 60% |
+| 52b | late to board chair one-on-one | 66% | 83% | 24% |
+| 52c | late to largest customer | 21% | 18% | 30% |
+| 52d | late to lunch with a friend | 58% | 67% | 40% |
+| 52e | two minutes late to stand-up | **pass** 78% | 80% | 70% |
+| 53a | ask time with direct report | **pass** 96% | 96% | 98% |
+| 53b | ask time with prospective investor | **pass** 78% | 76% | 90% |
+| 53c | ask time with prominent stranger | 33% | 38% | 0% |
+| 53d | ask time with friend | 76% | 83% | 60% |
+| 53e | ask time with peer ceo | 32% | 33% | 30% |
+| 54a | nudge investor too soon | **pass** 100% | 100% | 100% |
+| 54b | nudge investor with deadline | 69% | 78% | 42% |
+| 54c | nudge late agency | 71% | 82% | 36% |
+| 54d | nudge late direct report | 92% | 100% | 70% |
+| 54e | nudge prospective investor | 64% | 68% | 50% |
+| 55a | decline persistent salesperson | 76% | 88% | 30% |
+| 55b | decline board chair nephew | 58% | 62% | 45% |
+| 55c | decline former colleague | 60% | 65% | 38% |
+| 55d | largest customer asks for time | **pass** 100% | 100% | 100% |
+| 56a | decline conference panel | 94% | 100% | 88% |
+| 56b | decline board chair gala | **pass** 83% | 89% | 75% |
+| 56c | friend wedding invitation | 73% | 76% | 50% |
+| 57a | ruth asks about sunday dinner | 88% | 98% | 50% |
+| 57b | move ruth's visit | 60% | 58% | 64% |
+| 57c | move parent-teacher conference | 20% | 29% | 0% |
+| 57d | move contractor walk-through | 17% | 29% | 0% |
+| 57e | ruth's birthday | 70% | 72% | 50% |
+| 58a | board agenda with staff copied | 33% | 39% | 17% |
+| 58b | customer follow-up with sales copied | 98% | 97% | 100% |
+| 58c | dinner invitation to mixed guests | 91% | 98% | 62% |
+| 59a | casual invite from lead investor | 34% | 39% | 0% |
+| 59b | casual invite from board chair | 49% | 55% | 0% |
+| 59c | casual invite from unknown vc | 58% | 50% | 100% |
+| 59d | casual invite from friend | 52% | 59% | 24% |
+| 59e | casual invite from salesperson | 42% | 52% | 0% |
+
+**Blind identification** is still not measured: the groups' messages span two runs. The final report measures it from a single run of all cases.
+
 ## Pending
 
-1. **v1 baseline.** Re-judge these transcripts with Opus (judge calls only, about $10–11). The other 31 cases (their transcripts carry the current setup hash) go through `pnpm rejudge --from-cases`, which applies the new 53a and 59e criteria and saves the results. The 15 cases kept from the first run are a gap: `--from-cases` refuses them (older setup hash), and plain `--judge` prints a report but saves no results. Their criteria haven't changed since the run, so the choice is a fresh run of those 15 cases (about $4) or a rejudge option that accepts a named setup-hash mismatch. Decide before re-judging.
+1. **v1 baseline.** Done, above.
 2. **Product fixes.** The follow-ups #2607–#2610 and #2612–#2614, each measured against the v1 baseline.
 3. **Final report (§5b).** Before and after, per-recipient figures, quoted good and bad messages, and which cases, if any, could join the release gate.
