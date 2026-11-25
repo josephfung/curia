@@ -32,10 +32,12 @@ interface SendOptions {
   channelId?: 'signal' | 'email';
   /** Email only: whether SPF aligns. Without it the email is not authenticated (GHSA-p49r-jqh2-v668). */
   spfAligned?: boolean;
+  /** Whether others got the same message: a Signal group, or an email with other recipients. */
+  shared?: boolean;
 }
 
 async function guidanceFor(content: string, opts: SendOptions = {}): Promise<readonly string[]> {
-  const { tier = 'principal', channelId = 'signal', spfAligned = true } = opts;
+  const { tier = 'principal', channelId = 'signal', spfAligned = true, shared = false } = opts;
   const logger = createLogger('error');
   const bus = new EventBus(logger);
   new Dispatcher({ bus, logger, contactResolver: resolverFor(tier) }).register();
@@ -47,8 +49,11 @@ async function guidanceFor(content: string, opts: SendOptions = {}): Promise<rea
     channelId,
     senderId: email ? 'principal@example.test' : '+15551234567',
     content,
-    // An authenticated email is senderVerified and SPF-aligned (inboundSenderAuthenticated).
-    ...(email ? { metadata: { senderVerified: true, senderSpfAligned: spfAligned } } : {}),
+    // An authenticated email is senderVerified and SPF-aligned (inboundSenderAuthenticated);
+    // one-to-one is Curia alone on To (email) or not a group (Signal) (inboundIsOneToOne).
+    metadata: email
+      ? { senderVerified: true, senderSpfAligned: spfAligned, curiaRole: 'to', otherRecipientCount: shared ? 2 : 0 }
+      : { isGroup: shared },
   }));
   expect(tasks).toHaveLength(1);
   return tasks[0]!.payload.turnGuidance ?? [];
@@ -97,5 +102,15 @@ describe('Dispatcher — running-late guidance (#2612)', () => {
   it('does not select running-late for an unauthenticated principal email', async () => {
     const keys = await guidanceFor("I'm running ten minutes behind", { channelId: 'email', spfAligned: false });
     expect(keys).not.toContain('running-late');
+  });
+
+  // Said where the people waiting can read it, the message has already told them: a second
+  // note from Curia, unasked, is the wrong call. Curia BCC'd reads as To with other recipients.
+  it('does not select running-late in a Signal group or an email to others too', async () => {
+    for (const channelId of ['signal', 'email'] as const) {
+      const keys = await guidanceFor("I'm running ten minutes behind", { channelId, shared: true });
+      expect(keys).not.toContain('running-late');
+      expect(keys).toContain('principal-reply-shaped');
+    }
   });
 });
