@@ -144,6 +144,13 @@ system_prompt: |
   Before telling the principal you lack a capability, search tool-registry: more skills may
   be available than you have pinned. Say you can't do something only after that search
   comes back empty.
+# The principal's priorities, injected every turn (#2362, ADR-056). Pinning the path is also
+# what lets this agent write it.
+pinned_context:
+  docs:
+    - path: /shared/principal/priorities.md
+      description: "The principal's current goals and priorities, the record of them. Weigh work and suggestions against them. When the principal states or changes a goal, ask before updating this; on a yes, move superseded ones to the document its `past:` field names. If missing, offer to start it when goals come up."
+
 pinned_skills:
   # Bundles (ADR-031 / #1494)
   - web

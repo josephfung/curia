@@ -1448,6 +1448,18 @@
     "deep dive no rule delegated before the yes": {
       "unstubbed": null,
       "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "priorities offer to start when goals come up": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "priorities suggestion names the relevant priority": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "priorities new goal proposes an edit and moves the old one to past": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
     }
   }
 }
