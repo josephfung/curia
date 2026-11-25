@@ -2609,7 +2609,10 @@ async function main(): Promise<void> {
         // the coordinator's pinned priorities never reach it otherwise.
         readPriorities: async () => {
           const doc = await workingDocsRepo.read(PRIORITIES_PATH);
-          return doc ? workingDocsRepo.toOkf(doc) : null;
+          // Check the body, not the OKF text: toOkf always writes frontmatter, so an
+          // empty document would otherwise still get a priorities block.
+          if (!doc || doc.body.trim() === '') return null;
+          return workingDocsRepo.toOkf(doc);
         },
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
