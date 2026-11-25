@@ -2347,7 +2347,7 @@ export class ExecutionLayer {
       // them makes the sample gradable ("Archive an email" alone is not). Only triage tools
       // are read this way, so another tool's `subject` output is never mistaken for an email's.
       const email = TRIAGE_SKILLS.has(toolName) ? sampleEmailFromResult(resultData) : undefined;
-      const base = buildDescription(toolName, input);
+      const base = buildDescription(toolName, input, resultData);
       await this.actionLogRepo.insertSampled({
         taskId: options?.taskEventId ?? options?.parentEventId ?? 'system',
         ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
