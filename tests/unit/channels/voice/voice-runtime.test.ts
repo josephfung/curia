@@ -4547,16 +4547,44 @@ describe('VoiceRuntime principal priorities (#2363)', () => {
     return llm.seenMessages.map(systemText);
   }
 
-  it('reads the priorities once per session and puts them in every turn\'s prompt', async () => {
+  it('reads the priorities once per session and puts them in every caller turn\'s prompt', async () => {
     const readPriorities = vi.fn(async () => PRIORITIES_DOC);
-    const prompts = await runCall({ sessionId: 'prio-once', readPriorities });
+    const [, ...turns] = await runCall({ sessionId: 'prio-once', readPriorities });
 
     expect(readPriorities).toHaveBeenCalledTimes(1);
     const block = formatPrioritiesPromptBlock(PRIORITIES_DOC)!;
-    for (const prompt of prompts) {
+    expect(turns).toHaveLength(2);
+    for (const prompt of turns) {
       expect(prompt).toContain(block);
       expect(prompt).toContain('## Close the Series A');
     }
+  });
+
+  it('keeps the priorities out of the opening greeting, so a call never opens on them', async () => {
+    const without = await runCall({ sessionId: 'prio-greet-baseline' });
+    const [greeting] = await runCall({ sessionId: 'prio-greet', readPriorities: async () => PRIORITIES_DOC });
+    expect(greeting).toBe(without[0]);
+  });
+
+  it('does not hold the greeting for a slow priorities read', async () => {
+    const reads = new Gate();
+    const llm = new FakeStreamProvider([replyScript('Hi.')]);
+    const { runtime } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      readPriorities: async () => { await reads.pass(); return PRIORITIES_DOC; },
+      historyReadTimeoutMs: GATED_READ_TIMEOUT_MS,
+    });
+    await runtime.startSession({
+      sessionId: 'prio-greet-slow',
+      conversationId: 'voice:prio-greet-slow',
+      roomName: 'voice-prio-greet-slow',
+      agentToken: 'tok',
+      caller: principalCaller(),
+    });
+    await runtime.awaitIdle('prio-greet-slow');
+    expect(llm.seenMessages).toHaveLength(1);
+    reads.open();
   });
 
   it('leaves the prompt unchanged when there is no priorities document', async () => {

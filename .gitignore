@@ -53,6 +53,7 @@ tests/redteam/results/
 # diffs) — local workflow artifacts, never committed
 .superpowers/
 scripts/spikes/voice-brain-parity/results*.json
+scripts/spikes/voice-priorities/results.json
 
 # Bundled embedder weights (fetched by `pnpm fetch:embedder`); manifest.json stays tracked
 models/embedding/*

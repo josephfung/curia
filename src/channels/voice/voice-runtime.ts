@@ -321,7 +321,7 @@ export function formatPrioritiesPromptBlock(content: string): string | null {
   if (content.trim() === '') return null;
   return [
     '## Principal priorities',
-    `The principal's current priorities (${PRIORITIES_PATH}), read when this call started. Use them when the principal asks what to focus on. If they change a priority on this call, what they said wins over this copy.`,
+    `The principal's current priorities (${PRIORITIES_PATH}), read when this call started. Background for weighing requests, not a topic: do not raise them unprompted or steer the call toward them. Mention one only when the principal asks what to focus on, or when a request clearly conflicts with one. If they change a priority on this call, what they said wins over this copy.`,
     fenced(content),
   ].join('\n\n');
 }
@@ -1496,7 +1496,7 @@ export class VoiceRuntime {
         },
       });
 
-      const systemPrompt = await this.buildTurnSystemPrompt(session);
+      const systemPrompt = await this.buildTurnSystemPrompt(session, opts.turnKind);
       if (session.ending || controller.signal.aborted) return;
 
       const messages = opts.assembleMessages({ systemPrompt, priorHistory, contactRecent });
@@ -1899,7 +1899,7 @@ export class VoiceRuntime {
    * never abort the spoken turn) and assemble the per-turn system prompt.
    * Mirrors AgentRuntime.processTask's guard-and-omit pattern for the same blocks.
    */
-  private async buildTurnSystemPrompt(session: ActiveSession): Promise<string> {
+  private async buildTurnSystemPrompt(session: ActiveSession, turnKind: 'greeting' | 'user'): Promise<string> {
     let identityBlock: string | null = null;
     if (this.toolBridge?.identityBlock) {
       try {
@@ -1996,7 +1996,9 @@ export class VoiceRuntime {
       specialistRoster,
       outboundContextBlock,
       timeContextBlock,
-      prioritiesBlock: await session.priorities,
+      // Not in the greeting (#2363): a call must not open on the priorities, and
+      // the greeting then never waits on the read.
+      prioritiesBlock: turnKind === 'greeting' ? null : await session.priorities,
       agendaBlock: formatAgendaPromptBlock({
         loaded: session.loadedAgendas,
         index: session.agendaIndex,
