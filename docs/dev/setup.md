@@ -100,11 +100,11 @@ for you:
 1. Checks prerequisites (`docker`, `docker compose`, Node 26+, `pnpm`, `openssl`).
 2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
    with `openssl rand -hex 32`.
-3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
-   3 retries).
-4. Writes `.env` from `.env.example`, leaving optional channel vars
-   (Nylas, embeddings, Tavily, Signal) commented out for Tiers 2 and 3 and the
-   optional Tavily upgrade.
+3. Prompts for your **Anthropic API key**, which is required to install (validated
+   against `sk-ant-...`, 3 retries).
+4. Writes `.env` from `.env.example`, leaving the optional embedding-server
+   vars commented out. Channel credentials and the optional Tavily key are not
+   `.env` config: they go in the vault, from the console or `seed-vault`.
 5. Starts the Postgres container, waits for it to be healthy, and applies
    all database migrations.
 6. **Seeds the encrypted secrets vault** from the values it just generated
@@ -220,8 +220,8 @@ Two things to know before relying on a removal:
 > Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
 > `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
 > etc.) belong in `.env`. Everything else goes through the vault. The principal's
-> email is not env config; it's set in the onboarding wizard and lives in the
-> contacts store.
+> email is not env config; it's set on the Setup page's *Who it's for* step and
+> lives in the contacts store.
 
 ---
 

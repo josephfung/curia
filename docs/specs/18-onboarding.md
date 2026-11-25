@@ -21,6 +21,17 @@ instance in one path with no detours. The onboarding flow spans four layers:
 The layers are independent (each can be re-entered or skipped), but
 when run in sequence they constitute the end-to-end first-run experience.
 
+Getting started has two phases, told the same way here, in the README and in the
+public docs (#2356):
+
+- **Setup** (the operator: whoever runs Curia, who may be the executive) is Layers 1–3:
+  install, then the Setup page, ending at Start onboarding.
+- **Onboarding** (the principal) is Layer 4: Curia invites the principal to a first
+  conversation and learns how they work.
+
+An operator install from the published image uses `install.sh` rather than Layer 1's
+`pnpm run setup`; both end at the Setup page.
+
 ---
 
 ## Layer 1 — Host bootstrap (`pnpm run setup`)
@@ -47,9 +58,9 @@ Fails fast with a one-line message and install link if any are missing:
 2. Prompt for an Anthropic API key (validated against `sk-ant-[A-Za-z0-9_-]+`,
    3 retries).
 3. Write `.env` from `.env.example`, substituting generated and collected values.
-   Optional channel vars (Nylas, OpenAI, Signal) and the optional Tavily key stay
-   commented. Web search needs no key: it runs Tavily keyless, and a key only raises
-   its limits (#2445).
+   The optional embedding-server vars stay commented. Channel credentials and the
+   optional Tavily key are not `.env` config; they go in the vault. Web search needs no
+   key: it runs Tavily keyless, and a key only raises its limits (#2445).
 4. `docker compose up -d postgres`, poll health every 2s up to 60s.
 5. Install npm dependencies (`pnpm install --frozen-lockfile`) when
    `node_modules/` is absent.
@@ -85,7 +96,7 @@ is absent — that signals a previous run was interrupted partway.
 
 ### Out of scope for the script
 
-- In-app onboarding (covered by Layers 2 and 3).
+- The rest of Setup (Layers 2 and 3) and Onboarding (Layer 4).
 - Windows-native support (WSL works).
 
 ---
