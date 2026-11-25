@@ -4,7 +4,7 @@
 
 **Goal:** A per-mailbox `ceo_inbox/filing` setting that, under `leave_in_inbox`, makes triage mark mail read instead of archiving it (#2699).
 
-**Architecture:** A small setting module beside `triage-cadence.ts` parses and validates the value. `config-store` refuses bad writes like it does for `sending`/`triage`. `ceo-inbox-archive` reads the setting on inbox-drain turns only and marks read instead of archiving; the agent prompt and onboarding text learn the setting.
+**Architecture:** A small setting module beside `triage-cadence.ts` parses and validates the value. `config-store` refuses bad writes like it does for `sending`/`triage`. `ceo-inbox-archive` reads the setting on system-lineage turns only (the inbox drain and the resumes it starts) and marks read instead of archiving; the agent prompt and onboarding text learn the setting.
 
 **Tech Stack:** TypeScript (ESM), Vitest, Nylas via `skills/_shared/principal-mailbox-client.ts`, KG-backed `ConfigStore`.
 
@@ -14,7 +14,7 @@
 
 - Key: namespace `ceo_inbox`, key `filing`, value `{"<mailbox id>": "archive" | "leave_in_inbox"}`.
 - Unlisted mailbox, missing setting, unparseable value or unknown mode → `archive`.
-- The setting applies only on inbox-drain turns; any other `ceo-inbox-archive` call archives.
+- The setting applies only on system-lineage turns (`hasSystemLineage`: the inbox drain and the resumes it starts, such as calendar-consult replies); a principal-originated `ceo-inbox-archive` call always archives. (Widened from drain-only by the final review, which found consult resumes archiving.)
 - Never log the stored value; mailbox ids are fine.
 - No version bumps in `tool.json`, `SKILL.md` or `agents/*.yaml`.
 - No console UI. No paid scenario runs.
@@ -27,7 +27,7 @@
 2. `leave_in_inbox` on a message already out of the inbox → report `already_archived` as today, no mark-read PUT. Test in Task 3.
 3. Mark-read fails under `leave_in_inbox` → `success: false` with the Nylas failure, so step 5's retry path applies. Test in Task 3.
 4. Setting names mailbox A only; message is in mailbox B → B archives. Test in Task 3.
-5. A forged drain (system lineage, `inbox-drain` tag but `createdBy` not `heartbeat`) → archives. Test in Task 3.
+5. A principal-lineage turn, or an `agent` turn not laddered from system → archives without reading the setting. Test in Task 3.
 
 ---
 
@@ -141,7 +141,7 @@ Add `namespace === TRIAGE_NAMESPACE && key === FILING_KEY` to the `mailboxKeyed`
   - `drain turn + archive: archives` — `get` resolves `'{"<id>":"archive"}'`; PUT body `folders: ['Label_3']`; no `left_in_inbox`.
   - `drain turn + unset: archives` — `get` resolves `null`.
   - `principal turn ignores leave_in_inbox` — no drain metadata, `get` would return leave; archives and `get` is not called.
-  - `forged drain (createdBy: 'agent') archives`.
+  - `agent turn not laddered from system archives`, and `consult resume (system lineage, no inbox-drain task) leaves in inbox`.
   - `other mailbox's entry does not apply` — with `twoMailboxFixture`, the setting names the mailbox not holding the message; archives.
   - `setting read throws → archives, success` — `get` rejects.
   - `no entityMemory → archives, success`.
@@ -156,7 +156,7 @@ Expected: the leave_in_inbox tests FAIL.
 
 - [ ] **Step 3: Implement**
 
-Add `private async filingMode(ctx, mailboxId): Promise<FilingMode>`: returns `'archive'` unless `isInboxDrainTurn(ctx)`; without `ctx.entityMemory` warns `'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving'` and returns `'archive'`; reads `new ConfigStore(ctx.entityMemory, ctx.log).get(TRIAGE_NAMESPACE, FILING_KEY)` in a try/catch that warns with `errName` and the same message; warns `{ mailbox }` `'ceo_inbox/filing is malformed; archiving'` when `malformed`. In `execute`, after the already-archived check: if mode is `leave_in_inbox`, `await client.markAsRead(messageId)`, log info `'ceo-inbox-archive: left in inbox, marked read (ceo_inbox/filing)'`, return `{ message_id, ...described, left_in_inbox: true, ...mbx }`. The existing catch covers a mark-read failure. Use the located mailbox's `id` (from `located.at.mailbox`) as the setting key.
+Add `private async filingMode(ctx, mailboxId): Promise<FilingMode>`: returns `'archive'` unless `hasSystemLineage(ctx.taskMetadata)`; without `ctx.entityMemory` warns `'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving'` and returns `'archive'`; reads `new ConfigStore(ctx.entityMemory, ctx.log).get(TRIAGE_NAMESPACE, FILING_KEY)` in a try/catch that warns with `errName` and the same message; warns `{ mailbox }` `'ceo_inbox/filing is malformed; archiving'` when `malformed`. In `execute`, after the already-archived check: if mode is `leave_in_inbox`, `await client.markAsRead(messageId)`, log info `'ceo-inbox-archive: left in inbox, marked read (ceo_inbox/filing)'`, return `{ message_id, ...described, left_in_inbox: true, ...mbx }`. The existing catch covers a mark-read failure. Use the located mailbox's `id` (from `located.at.mailbox`) as the setting key.
 
 - [ ] **Step 4: Run to verify they pass**, plus `skills/ceo-inbox/tools/ceo-inbox-list/handler.test.ts` (the move must not change it). Expected: PASS.
 
