@@ -8,7 +8,8 @@
 // The scenario suite drives the coordinator, never the voice runtime's prompt, so
 // this runs production's own buildVoiceSystemPrompt on prod's voice model with
 // voice's reasoning setting (none), voice's real tool definitions and roster
-// (voice-brain-parity/production-context.ts). Tools answer with a generic success.
+// (voice-brain-parity/production-context.ts). date-resolve runs its real handler, so
+// the call is anchored on today; other tools answer with a generic success.
 // The greeting is not run: it never carries the priorities (unit-tested).
 //
 // Scoring is deterministic: a reply "mentions" the priorities when its spoken text
@@ -28,6 +29,8 @@ import { NO_REASONING } from '../../../src/agents/llm/sampling-options.js';
 import { DEFAULT_STREAMING_MAX_ROUNDS, runStreamingToolLoop } from '../../../src/agents/llm/streaming-turn.js';
 import { buildVoiceSystemPrompt, formatPrioritiesPromptBlock } from '../../../src/channels/voice/voice-runtime.js';
 import { createSilentLogger } from '../../../src/logger.js';
+import type { ToolContext } from '../../../src/skills/types.js';
+import { DateResolveHandler } from '../../../skills/date-resolve/handler.js';
 import { formatTimeContextBlock } from '../../../src/time/time-context.js';
 import { loadProductionVoiceContext, meterProvider } from '../voice-brain-parity/production-context.js';
 
@@ -38,13 +41,23 @@ const PARITY_FIXTURES = resolve(import.meta.dirname, '../voice-brain-parity/fixt
 const RESULTS_PATH = resolve(import.meta.dirname, 'results.json');
 
 // Synthetic priorities, in the OKF shape workingDocsRepo.toOkf produces.
+const TIMEZONE = 'America/Toronto';
+
+/** Two weeks out, spelled the way people say dates ("Wednesday, December 9"), so the clash needs no date arithmetic. */
+function spokenDate(daysAhead: number): string {
+  const date = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+  return date.toLocaleDateString('en-US', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric' });
+}
+const MEETING_DAY_1 = spokenDate(14);
+const MEETING_DAY_2 = spokenDate(15);
+
 const PRIORITIES_DOC = `---
 title: Priorities
-as_of: 2026-07-20
+as_of: ${new Date().toISOString().slice(0, 10)}
 ---
 
 ## Close the Series A
-Term sheet expected by mid-August. Partner meetings in Boston next Thursday and Friday.
+Term sheet expected next month. Partner meetings in Boston on ${MEETING_DAY_1} and ${MEETING_DAY_2}.
 
 ## Hire a VP of Engineering
 Two finalists; final interviews this week.
@@ -54,7 +67,7 @@ Lease signed; opening in September.
 `;
 
 /** Words that only appear in talk about the priorities above. */
-const PRIORITY_KEYWORDS = ['series a', 'term sheet', 'investor', 'vp of engineering', 'vp engineering', 'finalist', 'halifax', 'priorit'];
+const PRIORITY_KEYWORDS = ['series a', 'term sheet', 'investor', 'vp of engineering', 'vp engineering', 'finalist', 'halifax', 'boston', 'partner meeting', 'priorit'];
 
 interface SpikeCase {
   id: string;
@@ -70,13 +83,12 @@ const CASES: SpikeCase[] = [
   { id: 'focus-question', utterance: 'What should I be focusing on this week?', expectMention: true },
   {
     id: 'clashing-request',
-    utterance: 'Block off next Thursday and Friday for a golf trip with the agency folks.',
+    utterance: `Block off ${MEETING_DAY_1} and ${MEETING_DAY_2} for a golf trip with the agency folks.`,
     expectMention: true,
   },
 ];
 
 interface Fixtures {
-  anchor: { iso: string; timezone: string };
   identityBlock: string;
 }
 
@@ -93,13 +105,14 @@ async function main(): Promise<void> {
   const fixtures = JSON.parse(readFileSync(PARITY_FIXTURES, 'utf8')) as Fixtures;
   const logger = createSilentLogger();
   const { provider, meter } = meterProvider(new AnthropicProvider(apiKey, logger, new ModelRegistry(logger)), VOICE_MODEL);
-  const ctx = loadProductionVoiceContext({ identityBlock: fixtures.identityBlock, timezone: fixtures.anchor.timezone });
+  const ctx = loadProductionVoiceContext({ identityBlock: fixtures.identityBlock, timezone: TIMEZONE });
+  const dateResolve = new DateResolveHandler();
 
   const system = buildVoiceSystemPrompt({
     identityBlock: fixtures.identityBlock,
     specialistRoster: ctx.specialistRoster,
     prioritiesBlock: formatPrioritiesPromptBlock(PRIORITIES_DOC),
-    timeContextBlock: formatTimeContextBlock(fixtures.anchor.timezone, new Date(fixtures.anchor.iso)),
+    timeContextBlock: formatTimeContextBlock(TIMEZONE, new Date()),
     audience: { liveTurn: true },
   });
 
@@ -124,6 +137,10 @@ async function main(): Promise<void> {
         requestOptions: { reasoning: NO_REASONING },
         invokeTool: async (call) => {
           tools.push(call.name);
+          if (call.name === 'date-resolve') {
+            const out = await dateResolve.execute({ input: call.input, timezone: TIMEZONE, log: logger } as unknown as ToolContext);
+            return { content: JSON.stringify(out), ...(out.success ? {} : { is_error: true }) };
+          }
           return { content: JSON.stringify({ success: true, data: { status: 'done' } }) };
         },
       });

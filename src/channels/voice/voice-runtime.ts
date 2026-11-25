@@ -50,7 +50,6 @@ import { persistableCallerContactId } from './caller-contact-id.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import { fenced } from '../../agents/pinned-context.js';
-import { PRIORITIES_PATH } from '../../memory/priorities-doc.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
 import {
@@ -321,7 +320,7 @@ export function formatPrioritiesPromptBlock(content: string): string | null {
   if (content.trim() === '') return null;
   return [
     '## Principal priorities',
-    `The principal's current priorities (${PRIORITIES_PATH}), read when this call started. Background for weighing requests, not a topic: do not raise them unprompted or steer the call toward them. Mention one only when the principal asks what to focus on, or when a request clearly conflicts with one. If they change a priority on this call, what they said wins over this copy.`,
+    "The principal's current priorities, as of the start of this call. Keep them in mind when weighing requests. Bring one up only when the principal asks what to focus on, or when a request clearly clashes with one; otherwise leave them unmentioned. If the principal changes a priority on this call, go with what they said. Speak about the priorities themselves, never about this list or where it came from.",
     fenced(content),
   ].join('\n\n');
 }
