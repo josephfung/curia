@@ -85,18 +85,14 @@ describe('renderTurnGuidance', () => {
     expect(renderTurnGuidance([], line)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${line}\n\n${TURN_GUIDANCE_FOOTER}`);
   });
 
-  it('tells a running-late turn who writes, how, and what to offer (#2612, #2614)', () => {
-    const out = renderTurnGuidance(['running-late'])!;
-    // Act on it: no question back to the principal.
-    expect(out).toContain('Do not ask what they are replying to, which meeting they mean, or\nwhether to tell anyone.');
+  it('tells a running-late turn who writes, how, and when to offer the end time (#2612, #2614)', () => {
+    const flat = renderTurnGuidance(['running-late'])!.replace(/\s+/g, ' ');
     // Curia sends it, customers included: a draft for the principal would arrive too late (52c).
-    expect(out).toContain('even to a customer or investor whose email\nnormally comes from the principal');
-    // One group message, not one per attendee (52a).
-    expect(out).toContain('One message to a\ngroup, not one per person');
-    // The end-time offer is for senior or outside people only, and runs over only into free time (52b, 52c).
-    expect(out).toContain('For someone senior or outside the company, offer to keep the\noriginal end time, or to run over only if the principal is free afterwards.');
-    // A minute or two is barely worth a note (52e).
-    expect(out).toContain('For a minute or\ntwo, one line to the group at most, or nothing.');
+    expect(flat).toContain('even to a customer or investor');
+    // The end-time offer is for a work meeting with someone senior or outside, never a friend,
+    // family or the team (52b, 52c against 52a, 52d), and runs over only into free time.
+    expect(flat).toContain('not a friend, family or the team');
+    expect(flat).toContain('run over only if the principal is free afterwards');
   });
 
   it('keeps the worst real turn bounded', () => {

@@ -30,10 +30,12 @@ function resolverFor(tier: 'principal' | 'external'): ContactResolver {
 interface SendOptions {
   tier?: 'principal' | 'external';
   channelId?: 'signal' | 'email';
+  /** Email only: whether SPF aligns. Without it the email is not authenticated (GHSA-p49r-jqh2-v668). */
+  spfAligned?: boolean;
 }
 
 async function guidanceFor(content: string, opts: SendOptions = {}): Promise<readonly string[]> {
-  const { tier = 'principal', channelId = 'signal' } = opts;
+  const { tier = 'principal', channelId = 'signal', spfAligned = true } = opts;
   const logger = createLogger('error');
   const bus = new EventBus(logger);
   new Dispatcher({ bus, logger, contactResolver: resolverFor(tier) }).register();
@@ -45,8 +47,8 @@ async function guidanceFor(content: string, opts: SendOptions = {}): Promise<rea
     channelId,
     senderId: email ? 'principal@example.test' : '+15551234567',
     content,
-    // An authenticated email: senderVerified and SPF-aligned (inboundSenderAuthenticated).
-    ...(email ? { metadata: { senderVerified: true, senderSpfAligned: true } } : {}),
+    // An authenticated email is senderVerified and SPF-aligned (inboundSenderAuthenticated).
+    ...(email ? { metadata: { senderVerified: true, senderSpfAligned: spfAligned } } : {}),
   }));
   expect(tasks).toHaveLength(1);
   return tasks[0]!.payload.turnGuidance ?? [];
@@ -88,5 +90,12 @@ describe('Dispatcher — running-late guidance (#2612)', () => {
     const keys = await guidanceFor("I'm running ten minutes behind", { tier: 'external' });
     expect(keys).not.toContain('running-late');
     expect(keys).toContain('non-principal-reply-shaped');
+  });
+
+  // The guidance has Curia write to attendees without asking, so a forged principal email (the
+  // principal's address, failing SPF) must not get it: it has no live turn.
+  it('does not select running-late for an unauthenticated principal email', async () => {
+    const keys = await guidanceFor("I'm running ten minutes behind", { channelId: 'email', spfAligned: false });
+    expect(keys).not.toContain('running-late');
   });
 });

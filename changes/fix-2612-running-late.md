@@ -1,3 +1,3 @@
 ### Fixed
 
-- **`running-late` guidance** — Curia tells the people waiting, offering to keep the end time, instead of asking. (#2612, #2614)
+- **`running-late` guidance** — tells the people waiting instead of asking; offers senior or outside attendees the end time. (#2612, #2614)

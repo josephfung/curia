@@ -162,7 +162,7 @@ const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+g
 // The start of the message, a sentence, or a dash-opened aside. The lookbehind keeps the match
 // on the status phrase, so the clause before a sentence break cannot deny it
 // ("I'm not sure what you mean. Running late, sorry").
-const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s{0,64}|(?:^|\s)-+\s{0,64})`;
+const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s{0,64}|(?:^|\s)-{1,8}\s{0,64})`;
 // A subjectless status: the principal's own ("running ..."), or one with no subject at all
 // ("stuck in traffic"). Someone else's name or a thing before the phrase rules both out.
 // The word boundary keeps the end of a name from reading as a subject ("Jim" is not "im").
