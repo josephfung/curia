@@ -8,7 +8,7 @@ The finesse benchmark is the 46 scenario cases written from the casebook (`docs/
 
 ## Summary
 
-- **v1 (Opus judge): 7 of 46 cases pass, decision 66%, voice 41%.** The v0.1 figures below (gpt-4o) are higher mainly because gpt-4o is more lenient; see [v1 baseline](#v1-baseline).
+- **v1 (Opus judge): 7 of 46 cases pass, decision 66%, voice 41%.** The v0.1 figures below (gpt-4o) are higher mainly because gpt-4o is more lenient; see [v1 baseline](#v1-baseline). [How to read these numbers](#how-to-read-these-numbers) explains why only 15% of cases pass while decision scores 66%.
 
 v0.1, as first measured:
 
@@ -17,6 +17,23 @@ v0.1, as first measured:
 - **Curia rarely looks people up.** At information level 4 (only a web search shows who someone is), decision scored 42% and voice 33%.
 - **The new excuse case (51g) scores 51%.** Asked outright for an excuse, Curia mostly refused or asked instead of writing one.
 - **Before the review**, a pilot run of the draft casebook (2026-11-14, 45 cases) scored about the same overall: decision 70%, voice 48%, 7 cases passing. Its cases were graded differently, so it isn't a baseline. What it taught is under Background.
+
+## How to read these numbers
+
+Each case lists the behaviors it checks, weighted critical (3), important (2) or nice-to-have (1), and each behavior is marked decision (the call: act, ask Avery or do nothing, and who sends) or voice (how the messages read). The judge or a code check rates each behavior PASS (1), PARTIAL (0.5) or MISS (0) in each of the case's 5 runs. Two kinds of figure come from those ratings:
+
+- **Cases passing** is all or nothing. A case passes only if every critical behavior gets a full PASS in at least 4 of its 5 runs; PARTIAL counts as a fail here. One weak critical behavior fails the whole case, however good the rest is. This is the bar for joining the release gate.
+- **Decision and voice** are partial credit: each behavior's 5 ratings averaged, the behaviors combined by weight within the layer, and that averaged over the cases. They move with any improvement, even when no case flips.
+
+So 7 of 46 passing (15%) and decision at 66% are both true: Curia gets a lot partly right, but few cases are clean on every critical behavior. 57e shows it. Curia sends Ruth nothing, buys nothing without a yes and uses the right date, which earns 72% on decision. But "suggests a gift from Avery and Morgan" is critical and got PARTIAL in all 5 runs, so the case fails.
+
+**Comparing later work against v1:**
+
+- **Compare with v1, not v0.1.** v0.1's higher figures come from its more lenient judge, not from Curia.
+- **The layer scores are the main measure; cases passing is the milestone.** A fix to what Curia does should move decision, and a fix to how it writes should move voice.
+- **Look at the task a fix targets, not only the total.** The reschedule fixes (#2607, #2608) should show in task 51 (decision 43%, voice 6%, none of 7 passing) while the other tasks hold steady.
+- **Allow for noise.** Re-running 15 cases with nothing changed flipped two of them (50c to fail, 54d to pass) and moved the overall scores by 1–2 points. A swing of about 2 cases, or 2–3 points overall, is noise. A real fix should move its target task clearly, for example task 51's decision from about 43% to 70% or more.
+- **Hold the judge and criteria fixed.** Later runs must be judged by Opus against the v1 case files (`TAG_JUDGE_MODELS` does that). Changing either makes a v2 with its own baseline, and comparisons start again from there.
 
 ## What was run
 
