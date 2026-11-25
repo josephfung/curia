@@ -826,8 +826,11 @@ values in `.env`; spec 08 says no `curia setup` CLI exists and points to spec 18
 README's channel row). The `curia` side of 5 agrees: `docs/dev/setup.md` and `.env.example`
 both use `channel.email.nylas_api_key`, seeded from `NYLAS_API_KEY`. 1 is decided: the docs
 say an Anthropic key is required to install, as the installers (`scripts/setup-common.sh:178`)
-enforce; installing with another provider is #2749. Open: 2 is the
-website PR; 3, 7, 10, 11 and the curia-docs side of 1 and 5 are in curia-docs.
+enforce; installing with another provider is #2749. In curia-docs, 3, 7, 10
+and 11 and that side of 1, 5 and 9 were already fixed by the Setup-half PR (checked on
+2026-11-25: no Ollama provider, installation lists the key as required, one set of
+`channel.email.*` key names, the Signal socket path asked for consistently, no IMAP, no
+"under 15 minutes"). Open: 2, the website PR.
 
 1. **LLM providers.**
    - `curia-docs/core-concepts/introduction.mdx:108` lists Ollama, which has no provider in the
