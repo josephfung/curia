@@ -1818,6 +1818,23 @@ _assert_var "after a hand merge: rerun succeeds"       "$_wm_rc" "0"
 _assert_var "after a hand merge: one models block"     "$(grep -c '^model_routing:' "$_wm" | tr -d ' ')" "1"
 _assert_var "after a hand merge: has the new models"   "$(grep -c 'model: "b2"' "$_wm" | tr -d ' ')" "1"
 _assert_var "after a hand merge: setting kept"         "$(grep -c '^intentDrift:' "$_wm" | tr -d ' ')" "1"
+# A setting the operator merged under the block's own keys survives a rerun:
+# only the model values change (CodeRabbit, #2757).
+printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
+write_model_config "$_wm" openrouter f1 s1 p1 j1 2>/dev/null
+awk '{ print } /^  llmJudge:$/ { print "    failMode: closed" }' "$_wm" > "$_wm.x"; cat "$_wm.x" > "$_wm"; rm -f "$_wm.x"
+_wm_rc=0; write_model_config "$_wm" bedrock f2 s2 p2 j2 2>/dev/null || _wm_rc=$?
+_assert_var "merged key under the block: rerun succeeds"  "$_wm_rc" "0"
+_assert_var "merged key under the block: kept"            "$(grep -c '^    failMode: closed$' "$_wm" | tr -d ' ')" "1"
+_assert_var "merged key under the block: judge updated"   "$(grep -c 'model: "j2"' "$_wm" | tr -d ' ')" "2"
+_assert_var "merged key under the block: tiers updated"   "$(grep -cE 'model: "(f2|s2|p2)"' "$_wm" | tr -d ' ')" "3"
+_assert_var "merged key under the block: provider named"  "$(grep -c '^# Models for bedrock\.' "$_wm" | tr -d ' ')" "1"
+# A block edited out of shape (a model line removed): refuse, file untouched.
+grep -v 'model: "p2"' "$_wm" > "$_wm.x"; cat "$_wm.x" > "$_wm"; rm -f "$_wm.x"
+_wm_before="$(cat "$_wm")"
+_wm_rc=0; write_model_config "$_wm" openrouter a b c d 2>/dev/null || _wm_rc=$?
+_assert_var "block missing a model line: returns 1"       "$_wm_rc" "1"
+_assert_var "block missing a model line: file unchanged"  "$([[ "$(cat "$_wm")" == "$_wm_before" ]] && echo yes || echo no)" yes
 # A file it can't write: return 1, not success.
 if [[ "$(id -u)" != 0 ]]; then
     printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"; chmod 444 "$_wm"

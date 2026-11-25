@@ -538,6 +538,40 @@ without_model_block() {
       END { if (held) print "" }' "$1"
 }
 
+# Echo local.yaml $1 with the provider named in the installer's block set to $2 and
+# its five model values to $3..$6 (fast, standard, powerful, judge), every other
+# line kept as it is: the
+# operator may have merged settings of their own under the block's keys (such as
+# filter.llmJudge.failMode). Each `model:` line takes the value for the key
+# above it. Returns 1 unless all five were found, so a block edited out of that
+# shape is never half updated.
+set_block_models() {
+    awk -v b="$MODEL_BLOCK_BEGIN" -v e="$MODEL_BLOCK_END" -v prov="$2" \
+        -v fast="$3" -v standard="$4" -v powerful="$5" -v judge="$6" '
+      $0 == b { inblock = 1; print; next }
+      inblock && /^# Models for [a-z]+\./ { sub(/^# Models for [a-z]+\./, "# Models for " prov "."); print; next }
+      $0 == e { inblock = 0; print; next }
+      inblock && /^[[:space:]]*[A-Za-z]+:[[:space:]]*$/ {
+        key = $0; gsub(/[[:space:]:]/, "", key); print; next
+      }
+      inblock && /^[[:space:]]*model:/ {
+        v = ""
+        if (key == "fast") v = fast
+        else if (key == "standard") v = standard
+        else if (key == "powerful") v = powerful
+        else if (key == "llmJudge" || key == "judge") v = judge
+        if (v != "") {
+          ind = $0; sub(/model:.*/, "", ind)
+          print ind "model: \"" v "\""; done[key] = 1; next
+        }
+      }
+      { print }
+      END {
+        n = 0; for (k in done) n++
+        exit (n == 5 ? 0 : 1)
+      }' "$1"
+}
+
 # Make local.yaml $1 match provider $2 with models $3..$6 (fast, standard,
 # powerful, judge). The block an earlier run wrote is replaced. For anthropic it
 # is only removed: config/default.yaml's models are Anthropic's. Settings the
@@ -558,11 +592,15 @@ write_model_config() {
     tmp="$(mktemp)" || return 1
     if [[ "$provider" != anthropic ]] && grep -qxF "$MODEL_BLOCK_BEGIN" "$file"; then
         # The block is already there: an earlier run wrote it, or the operator merged
-        # it as asked. Replace it where it stands and keep every other setting.
-        awk -v b="$MODEL_BLOCK_BEGIN" '$0 == b { exit } { print }' "$file" > "$tmp" \
-          && model_config_block "${@:2}" >> "$tmp" \
-          && awk -v e="$MODEL_BLOCK_END" 'after { print } $0 == e { after = 1 }' "$file" >> "$tmp" \
-          || { rm -f "$tmp"; return 1; }
+        # it as asked, perhaps with settings of their own under its keys. Update only
+        # its model values, so nothing else in it or around it changes.
+        if ! set_block_models "$file" "${@:2}" > "$tmp"; then
+            rm -f "$tmp"
+            warn "The models block in $file doesn't have its five model: lines, so it was left alone."
+            hint "Set these by hand (fast, standard, powerful tiers; both judges), then run the installer again:"
+            model_config_block "${@:2}" | sed 's/^/     /' >&2
+            return 1
+        fi
     else
         without_model_block "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
         # No block, and settings of the operator's: appending could repeat one of
