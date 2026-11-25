@@ -304,4 +304,4 @@ Neither touches a setup hash: the description and expected behaviors are rubric.
 
 1. **v1 baseline.** Done, above.
 2. **Product fixes.** The follow-ups #2607–#2610 and #2612–#2614, each measured against the v1 baseline.
-3. **Final report (§5b).** Before and after, per-recipient figures, quoted good and bad messages, and which cases, if any, could join the release gate.
+3. **Final report.** Done: [the v1 report](2026-11-25-finesse-benchmark-v1-report.md), with results by recipient, blind identification, failure clusters, quoted messages, product recommendations and release-gate candidates.
