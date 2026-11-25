@@ -54,7 +54,7 @@ tool_stubs:
             confidence: 0.9
             decay_class: slow
             sensitivity: internal
-            last_confirmed_at: "2026-10-05T10:00:00-04:00"
+            last_confirmed_at: "{{at:now-24h}}"
             score: 0.83
   calendar-list-events:
     - match: {}

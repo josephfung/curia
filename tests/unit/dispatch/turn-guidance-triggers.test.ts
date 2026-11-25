@@ -419,6 +419,16 @@ describe('looksLikeRunningLate', () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  it('scans long filler runs in linear time, across lines or on one', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate('about\n'.repeat(16_000))).toBe(false);
+    expect(looksLikeRunningLate(`${'so '.repeat(30_000)}x`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+    // Filler on one line still reads.
+    expect(looksLikeRunningLate("I'm still running about ten minutes behind")).toBe(true);
+    expect(looksLikeRunningLate('Really very sorry, still running late')).toBe(true);
+  });
+
   it('scans a long clause without a break in linear time', () => {
     const text = `not ${"I'm late ".repeat(8000)}`;
     const start = Date.now();

@@ -155,7 +155,9 @@ export function looksLikeMakeRoom(text: string): boolean {
 // behind" needs a time gap ("ten minutes behind"), "running", or "schedule" for the same
 // reason.
 const TIME_GAP = String.raw`(?:(?:about|around|roughly|maybe|a\s+bit)\s+)?(?:(?:\d{1,3}|an?|a\s+few|a\s+couple\s+of|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:min|mins|minute|minutes|m|hour|hours|hr|hrs)\b\s*)`;
-const LATENESS_FILLER = String.raw`(?:(?:a\s+bit|a\s+little|about|around|maybe|roughly|so|still|already|really|very|quite)\s+)*`;
+// Bounded and on one line: an unbounded run that crossed newlines made "about\n" repeated
+// quadratic, since every line start in the 'm' patterns re-scanned the rest of the run.
+const LATENESS_FILLER = String.raw`(?:(?:a[^\S\n]+bit|a[^\S\n]+little|about|around|maybe|roughly|so|still|already|really|very|quite)[^\S\n]+){0,4}`;
 // The contractions that are also words keep their apostrophe: "we'?re" would read "we were
 // late" as a present-tense status, and "we'?ll" would read "well".
 const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+going\s+to\s+be|i['’]?m\s+gonna\s+be|i['’]ll\s+be|i\s+will\s+be|i['’]?m|i\s+am|we['’]re\s+going\s+to\s+be|we\s+are\s+going\s+to\s+be|we['’]ll\s+be|we\s+will\s+be|we['’]re|we\s+are)`;
