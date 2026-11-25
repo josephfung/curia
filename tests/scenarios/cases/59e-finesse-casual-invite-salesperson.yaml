@@ -95,8 +95,8 @@ expected_behaviors:
     description: >
       The decline is polite and brief and keeps a professional distance: no "Hey Kevin!",
       no banter, no exclamation-mark cheer, nothing that treats him as a friend. A courteous
-      thanks is fine; a long explanation is not. Sending him on to someone else (Marcus Bell
-      or anyone) is a miss: it keeps the door open.
+      thanks is fine; a long explanation is not. Sending him on to Marcus Bell is a miss:
+      Avery's preference about sales questions doesn't cover vendors selling to Halcyon.
 contrast:
   group: finesse-59-casual-invite
   recipient: A salesperson at a vendor trying to sell to the company.

@@ -192,6 +192,6 @@ Neither touches a setup hash: the description and expected behaviors are rubric.
 
 ## Pending
 
-1. **v1 baseline.** Re-judge these transcripts with Opus (judge calls only, about $10–11). 53a and 59e need the current criteria, so their cases go through `pnpm rejudge --from-cases`. The 15 cases kept from the first run carry an older setup hash and are re-judged with `--judge` against their saved criteria, which haven't changed since the run.
+1. **v1 baseline.** Re-judge these transcripts with Opus (judge calls only, about $10–11). The other 31 cases (their transcripts carry the current setup hash) go through `pnpm rejudge --from-cases`, which applies the new 53a and 59e criteria and saves the results. The 15 cases kept from the first run are a gap: `--from-cases` refuses them (older setup hash), and plain `--judge` prints a report but saves no results. Their criteria haven't changed since the run, so the choice is a fresh run of those 15 cases (about $4) or a rejudge option that accepts a named setup-hash mismatch. Decide before re-judging.
 2. **Product fixes.** The follow-ups #2607–#2610 and #2612–#2614, each measured against the v1 baseline.
 3. **Final report (§5b).** Before and after, per-recipient figures, quoted good and bad messages, and which cases, if any, could join the release gate.

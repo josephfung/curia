@@ -2,7 +2,7 @@
 
 Issue #2556 · Started 2026-11-10 · Last revised 2026-11-21, after review by six executive assistants (see **Revision history** at the end, and the [review synthesis](2026-11-21-finesse-ea-review-synthesis.md))
 
-This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests, the **finesse benchmark** (now v0.1; it becomes v1 once its automated judge is chosen). When the tests and this document disagree, this document wins, and the tests are changed to match.
+This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests, the **finesse benchmark** (v1 since 2026-11-24, when its automated judge was chosen; v0.1 before that). When the tests and this document disagree, this document wins, and the tests are changed to match.
 
 ---
 
