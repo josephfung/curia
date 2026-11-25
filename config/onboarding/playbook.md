@@ -69,7 +69,7 @@ surprises them. I build this from the current settings, so I never promise
 behaviour I will not show.
 
 Every message lands in one of six categories:
-- Urgent: needs you now; reaches you on your usual channel.
+- Urgent: needs you now; reaches you on your usual channel, and it is starred and stays in your inbox.
 - Handled: I dealt with it; nothing more for you to do; it is filed out of your inbox, unless you'd rather keep it there.
 - Drafted: I wrote a reply; it appears in your Drafts folder, and the message is filed out of your inbox, unless you'd rather keep it there.
 - Seen: worth knowing; marked read and labelled, and it stays in your inbox.
