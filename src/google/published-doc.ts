@@ -8,6 +8,9 @@
 /** Frontmatter key holding the record. */
 export const GOOGLE_DOC_KEY = 'google_doc';
 
+/** `modified_time` when Drive reported none after the write: the next publish asks for a read-back. */
+export const UNKNOWN_MODIFIED_TIME = 'unknown';
+
 export interface PublishedDocRecord {
   id: string;
   url: string;
@@ -16,6 +19,7 @@ export interface PublishedDocRecord {
   /**
    * The Doc's Drive `modifiedTime` right after that write. A later Drive `modifiedTime` means
    * someone changed the Doc since, so republishing would overwrite their edits.
+   * `UNKNOWN_MODIFIED_TIME` when Drive reported none.
    */
   modified_time: string;
 }

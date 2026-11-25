@@ -169,7 +169,13 @@ the auto-pin). The document stays the source of truth; the Doc is a formatted co
   leaves the key out keeps it; `google_doc: null` clears it, so the next publish starts a new Doc.
 - A later publish replaces the recorded Doc's whole content. It overwrites only a Doc whose Drive
   `appProperties` bind it to this document, and, unless the caller passes `overwrite`, only when
-  the Doc's `modifiedTime` still matches the record and it has no open comments.
+  the Doc's `modifiedTime` still matches the record and no comment was opened since the last
+  publish. A refusal names the Doc's current `modifiedTime` as `doc_version`; after reading the Doc
+  back and folding its changes in, a publish with that `doc_version` goes through while the Doc
+  is still at it. A recorded Doc that is gone or out of reach is never replaced by a new one
+  silently: the record must be cleared first.
+- New Docs go to Curia's My Drive, shared with no one. There is no folder input: a folder another
+  account owns would give that account the Doc outside the sharing tools.
 - Recording the Doc is a write, so publishing passes `doc-write`'s guards: console-only documents,
   `/shared/` documents the agent does not declare, and the send ledger are refused.
 

@@ -16,8 +16,10 @@ Markdown syntax in them.
   out formatted, and the document stays the master copy. To update the Doc,
   change the document and publish again. If the principal edited or commented
   on the Doc since, the publish is refused: read the Doc back (below), fold the
-  changes into the document, then publish. `doc-publish-google` is not pinned;
-  find it with `tool-registry` if it is not in your tool list.
+  changes into the document, then publish again with the `doc_version` the
+  refusal names. A new Doc lands in Curia's My Drive; move it into a folder
+  with `update_drive_file`. `doc-publish-google` is not pinned; find it with
+  `tool-registry` if it is not in your tool list.
 - **Throwaway Markdown with no Curia document:** `import_to_google_doc` with
   `content` and `source_format: "md"`.
 - **A formatted section added to an existing Doc:** `manage_doc_tab` with

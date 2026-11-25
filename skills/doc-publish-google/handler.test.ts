@@ -153,6 +153,14 @@ describe('doc-publish-google — input and document checks', () => {
     expect(drive.create).not.toHaveBeenCalled();
   });
 
+  it('refuses the principal-mailbox send ledger', async () => {
+    const ledger = '/scratch/principal-mailbox-sends/2026-11.md';
+    const repo = makeRepo(makeDoc({ path: ledger }));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: ledger }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('only the send path writes') });
+    expect(drive.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a malformed google_doc record rather than starting a second Doc', async () => {
     const repo = makeRepo(makeDoc({ frontmatter: { google_doc: { id: 'gdoc-1' } } }));
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
@@ -161,9 +169,11 @@ describe('doc-publish-google — input and document checks', () => {
   });
 
   it('reports a missing Google sign-in as a tool error', async () => {
-    getDriveClient.mockRejectedValueOnce(new Error('Google OAuth token cache not found'));
+    getDriveClient.mockRejectedValueOnce(new Error('Failed to read Google OAuth token cache at /home/x: SyntaxError "refresh_tok…'));
     const result = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('token cache not found') });
+    expect(result).toEqual({ success: false, error: expect.stringContaining('not signed in') });
+    // The detail can quote the token file; it stays in the logs.
+    expect((result as { error: string }).error).not.toContain('refresh_tok');
   });
 });
 
@@ -178,6 +188,7 @@ describe('doc-publish-google — first publish', () => {
     createOk();
     const repo = makeRepo(makeDoc());
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH, folder_id: 'folder-9' }));
+    // There is no folder input: a new Doc always goes to Curia's My Drive.
 
     expect(result).toEqual({
       success: true,
@@ -188,7 +199,6 @@ describe('doc-publish-google — first publish', () => {
       name: 'Board brief',
       mimeType: GDOC,
       appProperties: { curiaDocumentId: DOC_ID },
-      parents: ['folder-9'],
     });
     expect(request.media).toEqual({ mimeType: 'text/markdown', body: BODY });
     expect(request.media.body).not.toContain('title:');
@@ -230,8 +240,34 @@ describe('doc-publish-google — first publish', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
 
     expect(result).toEqual({ success: false, error: expect.stringContaining('did not convert') });
-    expect(drive.delete).toHaveBeenCalledWith({ fileId: 'gdoc-new', supportsAllDrives: true });
+    expect(drive.delete).toHaveBeenCalledWith({ fileId: 'gdoc-new' });
+    expect((result as { error: string }).error).not.toContain('still in');
     expect(repo.updates).toHaveLength(0);
+  });
+
+  it('names a leftover unconverted upload when deleting it fails', async () => {
+    createOk({ mimeType: 'text/markdown' });
+    drive.delete.mockRejectedValueOnce(new Error('backend error'));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('file ID gdoc-new) is still in') });
+  });
+
+  it('reads modifiedTime back when the create response lacks it', async () => {
+    createOk({ modifiedTime: undefined });
+    drive.get.mockResolvedValueOnce({ data: { modifiedTime: '2026-11-25T15:00:05.000Z' } });
+    const repo = makeRepo(makeDoc());
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result.success).toBe(true);
+    expect(repo.current!.frontmatter.google_doc).toMatchObject({ modified_time: '2026-11-25T15:00:05.000Z' });
+  });
+
+  it('records an unknown modifiedTime, never the local clock, and says so', async () => {
+    createOk({ modifiedTime: undefined });
+    drive.get.mockResolvedValueOnce({ data: {} });
+    const repo = makeRepo(makeDoc());
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect((result as { data: { note?: string } }).data.note).toContain('did not report');
+    expect(repo.current!.frontmatter.google_doc).toMatchObject({ modified_time: 'unknown' });
   });
 
   it('reports a Drive failure and records nothing', async () => {
@@ -242,10 +278,12 @@ describe('doc-publish-google — first publish', () => {
     expect(repo.updates).toHaveLength(0);
   });
 
-  it('names the folder when Drive cannot write to it', async () => {
-    drive.create.mockRejectedValueOnce(Object.assign(new Error('File not found'), { code: 404 }));
-    const result = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH, folder_id: 'folder-x' }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('folder-x') });
+  it('names a full Drive or a rate limit as such', async () => {
+    drive.create.mockRejectedValueOnce(Object.assign(new Error('The user has exceeded their Drive storage quota'), {
+      code: 403, errors: [{ reason: 'storageQuotaExceeded' }],
+    }));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('out of storage or rate-limited (storageQuotaExceeded)') });
   });
 
   it('retries the record on a concurrent write and notes that the Doc shows earlier text', async () => {
@@ -318,18 +356,44 @@ describe('doc-publish-google — publishing again', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('it was edited') });
     expect((result as { error: string }).error).toContain('get_doc_as_markdown');
+    expect((result as { error: string }).error).toContain('doc_version: "2026-11-25T09:00:00.000Z"');
     expect(drive.update).not.toHaveBeenCalled();
   });
 
-  it('refuses when the Doc has an open comment, but not for resolved or deleted ones', async () => {
+  it('goes through with the doc_version a refusal named while the Doc is still at it', async () => {
+    docUnchanged({ modifiedTime: '2026-11-25T09:00:00.000Z' });
+    updateOk();
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: '2026-11-25T09:00:00.000Z' }));
+    expect(result.success).toBe(true);
+    expect(drive.commentsList).not.toHaveBeenCalled();
+  });
+
+  it('refuses a doc_version the Doc has moved past', async () => {
+    docUnchanged({ modifiedTime: '2026-11-25T11:00:00.000Z' });
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: '2026-11-25T09:00:00.000Z' }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('changed again') });
+    expect((result as { error: string }).error).toContain('doc_version: "2026-11-25T11:00:00.000Z"');
+    expect(drive.update).not.toHaveBeenCalled();
+  });
+
+  it('asks for a read-back when the recorded modifiedTime is unknown', async () => {
     docUnchanged();
-    drive.commentsList.mockResolvedValueOnce({ data: { comments: [{ resolved: true }, { deleted: true }, { resolved: false }] } });
+    const repo = makeRepo(makeDoc({ frontmatter: { google_doc: { ...RECORD, modified_time: 'unknown' } } }));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('could not tell') });
+  });
+
+  it('refuses on a comment opened since the last publish, not on resolved, deleted or older ones', async () => {
+    const NEW = '2026-11-24T12:00:00.000Z';
+    const OLD = '2026-11-23T12:00:00.000Z';
+    docUnchanged();
+    drive.commentsList.mockResolvedValueOnce({ data: { comments: [{ resolved: true, modifiedTime: NEW }, { deleted: true, modifiedTime: NEW }, { resolved: false, modifiedTime: NEW }] } });
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('open comments') });
+    expect(result).toEqual({ success: false, error: expect.stringContaining('new open comments') });
 
     docUnchanged();
     updateOk();
-    drive.commentsList.mockResolvedValueOnce({ data: { comments: [{ resolved: true }, { deleted: true }] } });
+    drive.commentsList.mockResolvedValueOnce({ data: { comments: [{ resolved: true, modifiedTime: NEW }, { deleted: true, modifiedTime: NEW }, { resolved: false, modifiedTime: OLD }] } });
     const second = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
     expect(second.success).toBe(true);
   });
@@ -342,6 +406,42 @@ describe('doc-publish-google — publishing again', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('open comments') });
     expect(drive.commentsList.mock.calls[1]![0]).toMatchObject({ pageToken: 'p2' });
+  });
+
+  it('treats more comment pages than it reads as blocking (fail closed)', async () => {
+    docUnchanged();
+    drive.commentsList.mockResolvedValue({ data: { comments: [{ resolved: true }], nextPageToken: 'more' } });
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('open comments') });
+    expect(drive.commentsList).toHaveBeenCalledTimes(10);
+  });
+
+  it('reports an update Drive refuses, without touching the record', async () => {
+    docUnchanged();
+    drive.update.mockRejectedValueOnce(new Error('internal error'));
+    const repo = recordedRepo();
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('internal error') });
+    expect(repo.updates).toHaveLength(0);
+  });
+
+  it('fails when the update does not confirm a Google Doc', async () => {
+    docUnchanged();
+    drive.update.mockResolvedValueOnce({ data: { id: 'gdoc-1', modifiedTime: '2026-11-25T16:00:00.000Z' } });
+    const repo = recordedRepo();
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('did not confirm') });
+    expect(repo.updates).toHaveLength(0);
+  });
+
+  it('reports a record failure after an update without telling the agent to overwrite', async () => {
+    docUnchanged();
+    updateOk();
+    const repo = recordedRepo();
+    repo.update.mockRejectedValueOnce(new Error('connection reset'));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('was updated') });
+    expect((result as { error: string }).error).not.toContain('overwrite');
   });
 
   it('overwrites an edited, commented Doc when overwrite is true', async () => {
@@ -371,24 +471,21 @@ describe('doc-publish-google — publishing again', () => {
     expect(drive.update).not.toHaveBeenCalled();
   });
 
-  it('creates a new Doc when the recorded one was deleted, and says so', async () => {
-    drive.get.mockRejectedValueOnce(Object.assign(new Error('File not found'), { code: 404 }));
-    drive.create.mockResolvedValueOnce({
-      data: { id: 'gdoc-2', webViewLink: 'https://docs.google.com/document/d/gdoc-2/edit', mimeType: GDOC, modifiedTime: '2026-11-25T17:00:00.000Z' },
-    });
-    const repo = recordedRepo();
-    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
-
-    expect(result).toMatchObject({ success: true, data: { action: 'created', document_id: 'gdoc-2' } });
-    expect((result as { data: { note?: string } }).data.note).toContain(RECORD.url);
-    expect(repo.current!.frontmatter.google_doc).toMatchObject({ id: 'gdoc-2' });
+  it('never starts a second Doc when the recorded one is gone or out of reach', async () => {
+    for (const code of [404, 403]) {
+      drive.get.mockRejectedValueOnce(Object.assign(new Error('File not found'), { code }));
+      const repo = recordedRepo();
+      const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+      expect(result).toEqual({ success: false, error: expect.stringContaining('deleted, or Curia can no longer open it') });
+      expect(repo.updates).toHaveLength(0);
+    }
+    expect(drive.create).not.toHaveBeenCalled();
   });
 
-  it('reports lost access without creating a duplicate', async () => {
-    drive.get.mockRejectedValueOnce(Object.assign(new Error('forbidden'), { code: 403 }));
+  it('reports a rate limit on the lookup as a rate limit, not lost access', async () => {
+    drive.get.mockRejectedValueOnce(Object.assign(new Error('Rate limit exceeded'), { code: 403, errors: [{ reason: 'userRateLimitExceeded' }] }));
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('no longer has access') });
-    expect(drive.create).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: false, error: expect.stringContaining('rate-limited') });
   });
 
   it('fails without overwriting when the comment check errors', async () => {
