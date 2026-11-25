@@ -22,7 +22,7 @@ import {
   NOTHING_SENT_NEXT_STEP_LINES,
   PAUSED_NEXT_STEP_LINES,
 } from './delegate-result-guidance.js';
-import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
+import { TURN_GUIDANCE_FOOTER, TURN_GUIDANCE_HEADER, TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
 import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, TURN_LENGTH_REMINDER_TEXTS } from '../../identity/length.js';
 import {
@@ -34,6 +34,8 @@ import { PRIOR_TURN_ACTIONS_INTRO, PRIOR_TURN_NOT_SENT_LINES, PRIOR_TURN_UNREADA
 /** Newline-joined guidance texts, one marker per line once extracted. */
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   ...TURN_GUIDANCE_TEXTS,
+  // The block's fixed header and closing marker (#2741).
+  [TURN_GUIDANCE_HEADER, TURN_GUIDANCE_FOOTER].join('\n'),
   BACKLOG_INSTRUCTION_LINES.join('\n'),
   PRINCIPAL_TASK_ANSWER_LINES.join('\n'),
   AWAITING_ANSWER_HEADER,

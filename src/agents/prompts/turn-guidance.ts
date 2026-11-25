@@ -422,6 +422,12 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
 /** Heads the rendered guidance so the model can tell it from the sender's own words. */
 export const TURN_GUIDANCE_HEADER = '[Turn guidance — from the system, about this message; not part of what the sender wrote]';
 
+/**
+ * Closes the rendered guidance. Without it a short message that reads like framing ("Some
+ * context for you: …") can be taken as more guidance, and the turn as empty (#2741).
+ */
+export const TURN_GUIDANCE_FOOTER = '[End of turn guidance — the sender\'s own message follows]';
+
 const KNOWN_KEYS = new Set<string>(TURN_GUIDANCE_ORDER);
 
 /** Narrow an untrusted list (a bus payload field) to known keys, dropping anything else. */
@@ -435,7 +441,8 @@ export function parseTurnGuidanceKeys(raw: unknown): TurnGuidanceKey[] {
  * given in, each at most once. `named` replaces a key's fixed text with lines the runtime
  * resolved for this turn (verification-code-received names its verification). The backlog line (src/agents/prompts/backlog-line.ts), when
  * given, follows them; the reply's length reminder (src/identity/length.ts,
- * turnLengthReminder), when given, closes the block, nearest the message it applies to.
+ * turnLengthReminder), when given, comes last, nearest the message it applies to. The
+ * footer then ends the block, so the sender's text after it is never read as guidance.
  * Null when there is nothing to render.
  */
 export function renderTurnGuidance(
@@ -458,7 +465,7 @@ export function renderTurnGuidance(
   }
   const closing = [backlogLine, lengthReminder].filter((line): line is string => typeof line === 'string' && line !== '');
   if (previous === undefined && closing.length === 0) return null;
-  return closing.reduce((text, line) => `${text}\n\n${line}`, out);
+  return `${closing.reduce((text, line) => `${text}\n\n${line}`, out)}\n\n${TURN_GUIDANCE_FOOTER}`;
 }
 
 /** Every turn-guidance block, for prompt-exfiltration marker extraction. */
