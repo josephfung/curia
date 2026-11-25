@@ -1,3 +1,3 @@
 ### Fixed
 
-- **`running-late` guidance** — a principal running late now gets calendar-and-attendees guidance, not a clarification ask. (#2612)
+- **`running-late` guidance** — Curia tells the people waiting, offering to keep the end time, instead of asking. (#2612, #2614)

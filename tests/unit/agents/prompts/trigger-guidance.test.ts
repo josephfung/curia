@@ -85,6 +85,20 @@ describe('renderTurnGuidance', () => {
     expect(renderTurnGuidance([], line)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${line}\n\n${TURN_GUIDANCE_FOOTER}`);
   });
 
+  it('tells a running-late turn who writes, how, and what to offer (#2612, #2614)', () => {
+    const out = renderTurnGuidance(['running-late'])!;
+    // Act on it: no question back to the principal.
+    expect(out).toContain('Do not ask what they are replying to, which meeting they mean, or\nwhether to tell anyone.');
+    // Curia sends it, customers included: a draft for the principal would arrive too late (52c).
+    expect(out).toContain('even to a customer or investor whose email\nnormally comes from the principal');
+    // One group message, not one per attendee (52a).
+    expect(out).toContain('One message to a\ngroup, not one per person');
+    // The end-time offer is for senior or outside people only, and runs over only into free time (52b, 52c).
+    expect(out).toContain('For someone senior or outside the company, offer to keep the\noriginal end time, or to run over only if the principal is free afterwards.');
+    // A minute or two is barely worth a note (52e).
+    expect(out).toContain('For a minute or\ntwo, one line to the group at most, or nothing.');
+  });
+
   it('keeps the worst real turn bounded', () => {
     // The passages moved out of agents/coordinator.yaml (#1959, prompt trim PR 4) were
     // ~16KB on every turn. A turn gets the subset its triggers pick, and some blocks
@@ -106,7 +120,8 @@ describe('renderTurnGuidance', () => {
     // carry both beside the blocks above: 5,791 chars measured, so the bound moved 5,000 → 6,000.
     // The acquaintance notes ride only on an outside sender's turn, never the worst one above.
     // make-room joins live principal turns, forwards and booking links included: 6,678 chars
-    // measured with it, so the bound moved 6,000 → 7,000.
+    // measured with it, so the bound moved 6,000 → 7,000. running-late (#2612, #2614) needs a
+    // live turn with no outbound block, so it never joins the worst turn: 6,737 measured.
     const backlogLine = renderBacklogLine({ decayWarnings: 99, pendingApprovals: 99, principalTasks: 99 });
     const fullEntry = { bind_reply: true, task_id: 't', resume_token: 'r', subject: 'Board prep' };
     // verification-code-received (#2017) rides on any live principal turn, CC'd included (it

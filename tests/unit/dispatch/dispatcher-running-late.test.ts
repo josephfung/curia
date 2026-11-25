@@ -45,7 +45,8 @@ async function guidanceFor(content: string, opts: SendOptions = {}): Promise<rea
     channelId,
     senderId: email ? 'principal@example.test' : '+15551234567',
     content,
-    ...(email ? { metadata: { senderVerified: true } } : {}),
+    // An authenticated email: senderVerified and SPF-aligned (inboundSenderAuthenticated).
+    ...(email ? { metadata: { senderVerified: true, senderSpfAligned: true } } : {}),
   }));
   expect(tasks).toHaveLength(1);
   return tasks[0]!.payload.turnGuidance ?? [];

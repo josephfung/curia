@@ -54,19 +54,31 @@ const PRINCIPAL_REPLY_SHAPED = [
 ];
 
 /**
- * The principal says they are running late (#2612). The message names no meeting, so the
- * reply-shaped note read it as a reply and the coordinator asked what they were replying to
- * (finesse 52b/c/d, 3 of 15 baseline runs). It is self-contained: the meeting is on the
- * calendar. Replaces the reply-shaped note, and says who to write to and how.
+ * The principal says they are running late (#2612, #2614). The message names no meeting, so
+ * the reply-shaped note read it as a reply and the coordinator asked what they were replying
+ * to (finesse v1: 52c 2 of 5 runs, 52d 1 of 5). It is self-contained: the meeting is on the
+ * calendar. Replaces the reply-shaped note, and says who to write to and how, per the
+ * casebook's task 52 as revised by the EA review (docs/wip/2026-11-10-finesse-casebook.md):
+ * - Curia writes, even to a customer: in v1, 52c drafted in the principal's mailbox (their
+ *   standing preference for customers) and Robert was never told before the start.
+ * - One message to a group, not one per person (52a); a text where texts are the norm (52b, 52d).
+ * - The end-time offer (#2614): keep the end time, or run over only if the calendar is free
+ *   after (52b, 52c); none for a stand-up or a friend.
+ * - A minute or two is one line at most, or nothing (52e).
  */
 const RUNNING_LATE = [
   'The principal is telling you they are running late, not replying to anything earlier: look at',
-  'what is on the calendar now or next, and tell the people waiting that the principal is running',
-  'late by the amount they gave. Do not ask what they are replying to or which meeting they mean.',
-  'Write to each of them in the way that suits who they are: a short line to someone close, a',
-  'properly apologetic note to a board chair or a customer. Say how late only; if the principal',
-  'gave a personal reason, do not pass it on. If the delay is a deliverable rather than a',
-  'meeting, ignore this note. If the principal named who to tell, tell only those people.',
+  'what is on the calendar now or next, and tell the people waiting, before it starts, by the',
+  'amount the principal gave. Do not ask what they are replying to, which meeting they mean, or',
+  'whether to tell anyone. Send it yourself now, even to a customer or investor whose email',
+  'normally comes from the principal: a draft would arrive after the start. One message to a',
+  'group, not one per person; a text to someone who prefers texts or whom the principal texts.',
+  'Suit who they are: a short casual line to a friend or the team, a properly apologetic note to',
+  'a board chair or a customer. For someone senior or outside the company, offer to keep the',
+  'original end time, or to run over only if the principal is free afterwards. For a minute or',
+  'two, one line to the group at most, or nothing. Say how late only; if the principal gave a',
+  'personal reason, do not pass it on. If the delay is a deliverable rather than a meeting,',
+  'ignore this note. If the principal named who to tell, tell only those people.',
 ];
 
 /**
