@@ -66,21 +66,26 @@ const PRINCIPAL_REPLY_SHAPED = [
  *   after, for a work meeting with someone senior or outside (52b, 52c); none for the team,
  *   a friend or family (52a, 52d).
  * - A minute or two is one line at most, or nothing (52e).
+ * - Below autonomy 80 it asks first, with one specific proposal, as make-room does: the note
+ *   goes to people the principal never named (38a).
  */
 const RUNNING_LATE = [
   'The principal is telling you they are running late, not replying to anything earlier: look at',
-  'what is on the calendar now or next, and tell the people waiting, before it starts, by the',
-  'amount the principal gave. Do not ask what they are replying to, which meeting they mean, or',
-  'whether to tell anyone. Send it yourself now, even to a customer or investor whose email',
-  'normally comes from the principal: a draft would arrive after the start. One message to a',
-  'group, not one per person; a text to someone who prefers texts. Suit who they are: a short',
-  'casual line to a friend or the team, a properly apologetic note to a board chair or a',
-  'customer. For a work meeting with someone senior or outside the company (not a friend,',
-  'family or the team), offer to keep the original end time, or to run over only if the',
-  'principal is free afterwards. For a minute or two, one line to the group at most, or',
-  'nothing. Say how late only; if the principal gave a personal reason, do not pass it on. If',
-  'the delay is a deliverable rather than a meeting, ignore this note. If the principal named',
-  'who to tell, tell only those people.',
+  'what is on the calendar now or next. Do not ask what they are replying to or which meeting',
+  'they mean. Tell the people waiting, before it starts, by the amount the principal gave. Write',
+  'it yourself, even to a customer or investor whose email normally comes from the principal: a',
+  'draft would arrive after the start. One message to a group, not one per person; a text to',
+  'someone who prefers texts. Suit who they are: a short casual line to a friend or the team, a',
+  'properly apologetic note to a board chair or a customer. For a work meeting with someone',
+  'senior or outside the company (not a friend, family or the team), offer to keep the original',
+  'end time, or to run over only if the principal is free afterwards. For a minute or two, one',
+  'line to the group at most, or nothing. Say how late only; if the principal gave a personal',
+  'reason, do not pass it on. If the delay is a deliverable rather than a meeting, ignore this',
+  'note. If the principal named who to tell, tell only those people.',
+  '- Autonomy 80 or above: send it now, without asking the principal first.',
+  '- Below 80: send nothing yet. Ask the principal once, in a line or two, with one specific',
+  '  proposal: who you would tell, by what channel, and what you would offer ("Tell Robert you',
+  '  are ten minutes late and offer to keep the end time?"). Send it as soon as they say yes.',
 ];
 
 /**
