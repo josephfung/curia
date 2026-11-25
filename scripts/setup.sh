@@ -96,7 +96,7 @@ generate_secrets() {
 # Templates ENV_EXAMPLE into ENV_FILE, substituting the four bootstrap secrets.
 # Optional vars remain commented.
 write_env() {
-    # ANTHROPIC_API_KEY / API_TOKEN / WEB_APP_BOOTSTRAP_SECRET are NOT written here —
+    # The provider's credentials, API_TOKEN and WEB_APP_BOOTSTRAP_SECRET are NOT written here —
     # they are seeded into the encrypted vault after migrations (#911). Only the four
     # values needed to reach and unlock the vault live in .env.
     sed \

@@ -220,6 +220,9 @@ prompt_validated() {
             read -rsp "Paste your $what: " value || true
             echo "" >&2
         fi
+        # Pasted values often carry a stray space or newline: trim before checking.
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
         if "$validator" "$value"; then
             echo "$value"
             return 0

@@ -202,6 +202,8 @@ echo "=== prompt_validated ==="
 _pv_rc=0
 _pv_out="$(prompt_validated "region" validate_aws_region "bad" "hint" visible 2>/dev/null <<< $'nope\nus-east-1')" || _pv_rc=$?
 _assert_validator validate_aws_region valid "$_pv_out" "retries, then echoes the valid value"
+_pv_out="$(prompt_validated "region" validate_aws_region "bad" "hint" visible 2>/dev/null <<< '  us-east-1  ')"
+if [[ "$_pv_out" == us-east-1 ]]; then echo "  ✓ trims a pasted value before checking it"; PASS=$((PASS + 1)); else echo "  ✗ trims a pasted value before checking it — got '$_pv_out'"; FAIL=$((FAIL + 1)); fi
 _pv_rc=0
 ( prompt_validated "region" validate_aws_region "bad" "hint" visible <<< $'a\nb\nc' ) >/dev/null 2>&1 || _pv_rc=$?
 if [[ $_pv_rc -ne 0 ]]; then echo "  ✓ exits non-zero after 3 bad answers"; PASS=$((PASS + 1)); else echo "  ✗ exits non-zero after 3 bad answers"; FAIL=$((FAIL + 1)); fi
