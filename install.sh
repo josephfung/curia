@@ -24,7 +24,10 @@
 #   2. Fetches the matching release's docker-compose.yml, TLS overlay,
 #      .env.example, and Caddyfile next to install.sh (if not already present).
 #   3. Creates .env from the example, generating secrets for any placeholder values.
-#   4. Prompts for an Anthropic API key (format-validated, 3 retries).
+#   4. Asks which model provider to use (Anthropic by default, OpenRouter or
+#      AWS Bedrock), prompts for its credentials (format-validated, 3 retries)
+#      and, for OpenRouter or Bedrock, which models to use. Those models go in
+#      config/local.yaml, which docker-compose.yml mounts into the container.
 #   5. Asks how people will reach Curia: your domain with HTTPS set up for you
 #      (default), your domain behind HTTPS you already run, or just this computer.
 #   6. Starts Postgres, runs migrations and vault-seed *inside* the pulled image
@@ -676,6 +679,12 @@ pgdata_volume_exists() {
   docker volume inspect "$(compose_project_name "$1")_pgdata" >/dev/null 2>&1
 }
 
+# Returns 0 when the install's docker-compose.yml mounts config/local.yaml (on a
+# line that isn't a comment).
+compose_mounts_local_config() {
+  grep -qE '^[^#]*config/local\.yaml' "$INSTALL_DIR/docker-compose.yml" 2>/dev/null
+}
+
 # Echo "on" when the voice profile is enabled (shell, then .env), else "off".
 voice_state() {
   if [[ ",$(compose_var "$1" COMPOSE_PROFILES)," == *,voice,* ]]; then echo on; else echo off; fi
@@ -935,10 +944,20 @@ fresh_install() {
     set_env_var "$env" SECRET_ENCRYPTION_KEY "$secret_key"
   fi
 
-  # Prompt for the Anthropic key (format-validated, 3 retries). Not written to
-  # .env — passed as a transient env var to the vault-seed container only.
-  local anthropic
-  anthropic="$(prompt_anthropic_key)"
+  # Model provider (#2749): its credentials are format-validated (3 retries)
+  # and never written to .env — they reach the vault-seed container only, as
+  # transient env vars. Only Bedrock's region, not a secret, goes in .env. Models
+  # for OpenRouter or Bedrock go in config/local.yaml, which docker-compose.yml
+  # mounts and needs to exist before any curia container runs.
+  local local_config="$INSTALL_DIR/config/local.yaml"
+  choose_provider_setup
+  if ! write_model_config "$local_config" "$PROVIDER" "$MODEL_FAST" "$MODEL_STANDARD" "$MODEL_POWERFUL" "$MODEL_JUDGE"; then
+    hint "Then re-run install.sh. Postgres was not started."
+    exit 1
+  fi
+  if [[ "$PROVIDER" == bedrock ]]; then
+    set_env_var "$env" AWS_REGION "$PROVIDER_AWS_REGION"
+  fi
 
   # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
   # A rerun after an interrupted install keeps that run's LiveKit settings in .env.
@@ -1001,23 +1020,32 @@ fresh_install() {
     proxy) [[ -n "$PROXY_ORIGIN" ]] || lk_mode=local; lk_value="$PROXY_ORIGIN" ;;
     domain) lk_value="$DOMAIN" ;;
   esac
-  ensure_livekit_env "$env" "$lk_mode"
-  require_livekit_real_keys "$env"
+  local -a lk_seed=()
+  # Voice turns stream, and Bedrock can't (bedrock.ts), so a Bedrock install
+  # leaves voice off rather than run a LiveKit that Curia won't use.
+  if [[ "$PROVIDER" != bedrock ]]; then
+    ensure_livekit_env "$env" "$lk_mode"
+    require_livekit_real_keys "$env"
 
-  # Seed the Voice channel's vault values to match what LiveKit runs on. The
-  # keys are passed to the seed container only, like the other secrets, and
-  # are never printed. seed-vault never replaces values already in the vault.
-  local lk_url lk_pair="" lk_rc=0
-  local -a lk_seed
-  lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
-  lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
-  lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
-  if [[ $lk_rc -eq 0 ]]; then
-    lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
-  else
-    warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
-    hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    # Seed the Voice channel's vault values to match what LiveKit runs on. The
+    # keys are passed to the seed container only, like the other secrets, and
+    # are never printed. seed-vault never replaces values already in the vault.
+    local lk_url lk_pair="" lk_rc=0
+    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
+    lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
+    lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
+    if [[ $lk_rc -eq 0 ]]; then
+      lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+    else
+      warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+      hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    fi
   fi
+
+  # The provider's credentials, as -e pairs for the seed container.
+  local -a provider_seed=()
+  local pv
+  for pv in ${PROVIDER_SEED_VARS[@]+"${PROVIDER_SEED_VARS[@]}"}; do provider_seed+=(-e "$pv"); done
 
   # Start Postgres and wait for it to be ready before running migrations.
   info "Starting Postgres..."
@@ -1044,13 +1072,15 @@ fresh_install() {
   # SEED_VAULT_VERIFY=1 makes seed-vault confirm required rows exist and exit
   # non-zero if any are missing — so a partial seed fails loudly here rather
   # than booting a half-configured instance with auth disabled.
+  # SEED_VAULT_REQUIRE adds the chosen provider's keys to that check.
   info "Seeding secrets vault (in-container)..."
   if ! docker compose --project-directory "$INSTALL_DIR" run --rm \
-    -e "ANTHROPIC_API_KEY=$anthropic" \
+    ${provider_seed[@]+"${provider_seed[@]}"} \
     -e "API_TOKEN=$api_token" \
     -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
     ${lk_seed[@]+"${lk_seed[@]}"} \
     -e SEED_VAULT_VERIFY=1 \
+    -e "SEED_VAULT_REQUIRE=$PROVIDER_REQUIRED_SECRETS" \
     curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
     error "Vault seeding failed."
     hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
@@ -1091,6 +1121,12 @@ existing_install() {
 
   ensure_https_http_bind "$env"
   ensure_https_app_origin "$env" note
+  # A docker-compose.yml from #2749 on mounts config/local.yaml and refuses to
+  # start without it. install.sh never replaces docker-compose.yml, so this
+  # matters only to an operator who updated it by hand.
+  if compose_mounts_local_config; then
+    ensure_local_config "$INSTALL_DIR/config/local.yaml"
+  fi
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
   # migrations, so this is safe on every re-run.
@@ -1113,9 +1149,11 @@ existing_install() {
 
   # Verify-only vault seed: pass NO secret env vars so seed-vault does not
   # rotate any existing row. SEED_VAULT_VERIFY=1 confirms the required rows
-  # (anthropic_api_key, api_token, web_app_bootstrap_secret) are present and
-  # decryptable. If any are missing the re-run fails loudly — the operator
-  # should run a fresh install from a clean install dir in that case.
+  # (api_token, web_app_bootstrap_secret) are present and decryptable. If any
+  # are missing the re-run fails loudly — the operator should run a fresh
+  # install from a clean install dir in that case. The provider's keys aren't
+  # checked here: which provider the tiers use is in config/local.yaml, and
+  # boot names a tier whose provider has no key.
   info "Verifying secrets vault (in-container)..."
   if ! docker compose --project-directory "$INSTALL_DIR" run --rm \
     -e SEED_VAULT_VERIFY=1 \

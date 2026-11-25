@@ -38,6 +38,16 @@ model_routing:
 
 Unset means the provider's default, so Haiku 5.5 thinks adaptively at `medium`. On the Anthropic models, an effort turns on adaptive thinking with summarized display. `none` turns thinking off, on the models that accept it. On Sonnet 5.5, `none` turns off thinking before the first response. Anthropic documents short thinking between tool calls, though none appeared in 16 live requests on 2026-10-21. Curia gives a Sonnet 5.5 call with tools at `none` the 16,384-token output cap as a precaution.
 
+#### Installing with OpenRouter or AWS Bedrock
+
+The installers ask which model provider to use (#2749). For OpenRouter or Bedrock they write the tier and judge models into `config/local.yaml`, from the list in `INSTALL_MODEL_CHOICES` (`scripts/setup-common.sh`); `tests/unit/setup/install-model-choices.test.ts` checks every model on it against the registry and the thinking-off rule below. What differs from an Anthropic install:
+
+- **Reasoning effort.** The installer sets none, so each model runs at its default. Setting `reasoning.effort` on a tier fails boot for the Claude models through OpenRouter, GPT-4o and the Bedrock models, which have no effort entry; Bedrock never turns thinking on.
+- **Prompt caching.** Curia marks cache checkpoints only on Anthropic's own API. Claude through OpenRouter is therefore uncached and costs more per turn than the same model through Anthropic. GPT-4o, Gemini and DeepSeek cache on their own, and Bedrock reports the cache tokens a model reports.
+- **Pricing.** Cost estimates use the registry's rates. OpenRouter's are its published list prices, and the endpoint it routes to can charge differently. Bedrock's mirror Anthropic's and are billed through AWS Marketplace.
+- **Voice.** It runs on the fast tier unless `channels.voice.model` is set, and needs streaming, which Bedrock lacks, so a Bedrock install leaves voice off.
+- **Fast tier on Gemini.** `google/gemini-3.1-flash-lite` rejects the `checkpoint` tool's union-type schema, which stalls the contacts agent's jobs; GPT-4o is the recommended OpenRouter fast tier for that reason.
+
 Boot refuses a model that cannot turn thinking off as the fast-tier model, either judge's model or, when the voice channel starts, `channels.voice.model`, and the error names the key. Opus 5.5, DeepSeek V4.1 Flash and the reasoning models with no measurement (DeepSeek V4 Pro, GLM 5.3 Flash, Qwen 3.8 Flash) are refused there (see `src/agents/llm/small-cap-models.ts`).
 
 ### `channels`
@@ -606,6 +616,20 @@ say "the principal", not a job title — see
 **`config/local.yaml` is gitignored** — it is never committed to the `curia`
 repo. Your deployment tooling writes it to the server at deploy time.
 
+The image never contains it (`.dockerignore` excludes it, #2749). `docker-compose.yml`
+bind-mounts `./config/local.yaml` read-only into the `curia` container, and
+Compose refuses to start the container when the file is missing, rather than
+mount an empty directory there. Both installers create the file. For an
+OpenRouter or AWS Bedrock install they write the chosen tier and judge models
+into it, between `# >>> models chosen at install` and `# <<< models chosen at
+install` lines that a rerun replaces (#2749). After editing it, run
+`docker compose restart curia`.
+
+From a source checkout, the same mount applies the repository's
+`config/local.yaml` to the container. A value you set there for host-side
+`pnpm dev` (such as `channels.voice.livekit_management_url:
+http://localhost:7880`) then applies inside the container too, where it is wrong.
+
 ### Merge semantics
 
 - **Objects** are merged recursively. A key in `local.yaml` that is a YAML
@@ -746,7 +770,8 @@ Add a card from the Secrets page (**Create → Card**), or have an agent send a 
 ### Running tiers on AWS Bedrock
 
 Bedrock is an additive provider (ADR-041). Nothing changes for a deployment without AWS
-credentials. To use it, seed the two vault secrets, set `AWS_REGION` in `.env`, and map a
+credentials. The installers set it up when you choose AWS Bedrock as the model provider (#2749).
+By hand: seed the two vault secrets, set `AWS_REGION` in `.env`, and map a
 tier in **`config/local.yaml`** — not `default.yaml`, which would change the default for
 every deployment:
 

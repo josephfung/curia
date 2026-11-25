@@ -29,9 +29,12 @@ PRESERVED_ENCRYPTION_KEY=""
 # vault holds a copy that seed-vault never overwrites, so regenerating would leave
 # LiveKit and Curia with different keys.
 PRESERVED_LIVEKIT_KEYS=""
-# Global: set by main() from the prompted Anthropic key, consumed by run_infra to
-# seed the vault (#911). Empty on the resume path (vault already seeded on first run).
-SEED_ANTHROPIC_KEY=""
+# Deployment overrides; docker-compose.yml mounts this file into the curia container.
+# The model provider's credentials (PROVIDER_SEED_VARS) and the vault names they must
+# produce (PROVIDER_REQUIRED_SECRETS) come from setup-common.sh: choose_provider_setup
+# sets them in main(), and run_infra seeds them (#911, #2749). Both stay empty on the
+# resume path (vault already seeded on first run).
+LOCAL_CONFIG="$REPO_ROOT/config/local.yaml"
 
 # Verifies docker, docker compose, node >= 26, and pnpm are available.
 # Exits 1 with an install link on the first missing tool.
@@ -103,12 +106,20 @@ write_env() {
         -e "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY}|" \
         "$ENV_EXAMPLE" > "$ENV_FILE"
 
+    if [[ "$PROVIDER" == bedrock ]]; then
+        set_env_var "$ENV_FILE" AWS_REGION "$PROVIDER_AWS_REGION"
+    fi
+
     # LiveKit voice is on by default for source installs (#2357). Write a preserved
     # pair (full reset) first so ensure_livekit_env keeps it instead of generating.
     if [[ -n "${PRESERVED_LIVEKIT_KEYS:-}" ]]; then
         set_env_var "$ENV_FILE" LIVEKIT_KEYS "${PRESERVED_LIVEKIT_KEYS}"
     fi
-    ensure_livekit_env "$ENV_FILE" local
+    # Voice turns stream, and Bedrock can't (bedrock.ts): a Bedrock install leaves
+    # voice off rather than run a LiveKit that Curia won't use.
+    if [[ "$PROVIDER" != bedrock ]]; then
+        ensure_livekit_env "$ENV_FILE" local
+    fi
 }
 
 # Shown when .env already exists. Returns with SETUP_MODE set based on choice.
@@ -218,6 +229,10 @@ run_infra() {
         fi
     done < "$ENV_FILE"
 
+    # docker-compose.yml mounts config/local.yaml into the curia container and
+    # refuses to start without it (#2749).
+    ensure_local_config "$LOCAL_CONFIG"
+
     info "Starting Postgres..."
     docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d postgres
 
@@ -263,7 +278,7 @@ run_infra() {
     #     the seed-vault child can only receive them through these assignments.
     #   - Resume: the vault was already seeded on the first run, so pass NONE of them and
     #     let seed-vault re-verify the existing rows. Forwarding them on resume would
-    #     either clobber an already-seeded ANTHROPIC_API_KEY to empty (failing
+    #     either clobber an already-seeded provider key to empty (failing
     #     verification) or silently re-seed API_TOKEN / WEB_APP_BOOTSTRAP_SECRET from
     #     whatever happens to be in the operator's shell — an unintended secret rotation.
     #     (A legacy pre-vault .env still migrates: run_infra exported its plaintext
@@ -271,10 +286,12 @@ run_infra() {
     info "Seeding secrets vault..."
     seed_secret_env=()
     if [[ "$SETUP_MODE" == "full" ]]; then
+        # SEED_VAULT_REQUIRE adds the chosen provider's keys to the required check.
         seed_secret_env=(
-            "ANTHROPIC_API_KEY=$SEED_ANTHROPIC_KEY"
+            ${PROVIDER_SEED_VARS[@]+"${PROVIDER_SEED_VARS[@]}"}
             "API_TOKEN=$API_TOKEN"
             "WEB_APP_BOOTSTRAP_SECRET=$WEB_APP_BOOTSTRAP_SECRET"
+            "SEED_VAULT_REQUIRE=$PROVIDER_REQUIRED_SECRETS"
         )
     fi
     # LiveKit values go in on resume too: a first run interrupted before the vault
@@ -331,9 +348,14 @@ main() {
 
     if [[ "$SETUP_MODE" == "full" ]]; then
         generate_secrets
-        local anthropic_key
-        anthropic_key=$(prompt_anthropic_key)
-        SEED_ANTHROPIC_KEY="$anthropic_key"
+        # Model provider (#2749). Credentials go to the vault only; models for
+        # OpenRouter or Bedrock go in config/local.yaml, which docker-compose.yml
+        # mounts into the curia container.
+        choose_provider_setup
+        if ! write_model_config "$LOCAL_CONFIG" "$PROVIDER" "$MODEL_FAST" "$MODEL_STANDARD" "$MODEL_POWERFUL" "$MODEL_JUDGE"; then
+            hint "Then run pnpm run setup again."
+            exit 1
+        fi
         write_env
         success ".env written"
     fi

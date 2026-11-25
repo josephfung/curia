@@ -147,6 +147,62 @@ assert_invalid_key "rejects sk-ant with no suffix" "sk-ant"
 assert_invalid_key "rejects sk-ant- with empty suffix" "sk-ant-"
 assert_invalid_key "rejects key with spaces" "sk-ant- abc123"
 
+# --- Provider credential validators (#2749) ---
+
+# $1 validator, $2 expected (valid|invalid), $3 value, $4 description.
+_assert_validator() {
+    local got=invalid
+    if "$1" "$3" 2>/dev/null; then got=valid; fi
+    if [[ "$got" == "$2" ]]; then
+        echo "  ✓ $4"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ $4 — expected '$3' to be $2 for $1"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+echo ""
+echo "=== validate_openrouter_key ==="
+_assert_validator validate_openrouter_key valid   "sk-or-v1-0123abcdef" "accepts sk-or-v1-..."
+_assert_validator validate_openrouter_key invalid "sk-ant-api03-abc"    "rejects an Anthropic key"
+_assert_validator validate_openrouter_key invalid "sk-or-"              "rejects sk-or- with empty suffix"
+_assert_validator validate_openrouter_key invalid "sk-or-v1 abc"        "rejects a key with spaces"
+_assert_validator validate_openrouter_key invalid ""                    "rejects empty string"
+
+echo ""
+echo "=== validate_aws_access_key_id ==="
+_assert_validator validate_aws_access_key_id valid   "AKIAIOSFODNN7EXAMPLE"  "accepts AKIA + 16"
+_assert_validator validate_aws_access_key_id invalid "ASIAIOSFODNN7EXAMPLE"  "rejects a temporary ASIA key (needs a session token)"
+_assert_validator validate_aws_access_key_id invalid "AKIAIOSFODNN7EXAMPL"   "rejects 15 characters after AKIA"
+_assert_validator validate_aws_access_key_id invalid "akiaiosfodnn7example"  "rejects lowercase"
+_assert_validator validate_aws_access_key_id invalid ""                      "rejects empty string"
+
+echo ""
+echo "=== validate_aws_secret_access_key ==="
+_assert_validator validate_aws_secret_access_key valid   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" "accepts 40 base64 characters"
+_assert_validator validate_aws_secret_access_key invalid "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKE"  "rejects 39 characters"
+_assert_validator validate_aws_secret_access_key invalid "wJalrXUtnFEMI-K7MDENG/bPxRfiCYEXAMPLEKEY" "rejects a '-'"
+_assert_validator validate_aws_secret_access_key invalid ""                                         "rejects empty string"
+
+echo ""
+echo "=== validate_aws_region ==="
+_assert_validator validate_aws_region valid   "us-east-1"      "accepts us-east-1"
+_assert_validator validate_aws_region valid   "ap-southeast-2" "accepts ap-southeast-2"
+_assert_validator validate_aws_region valid   "us-gov-west-1"  "accepts us-gov-west-1"
+_assert_validator validate_aws_region invalid "us-east"        "rejects a region with no number"
+_assert_validator validate_aws_region invalid "US-EAST-1"      "rejects uppercase"
+_assert_validator validate_aws_region invalid ""               "rejects empty string"
+
+echo ""
+echo "=== prompt_validated ==="
+_pv_rc=0
+_pv_out="$(prompt_validated "region" validate_aws_region "bad" "hint" visible 2>/dev/null <<< $'nope\nus-east-1')" || _pv_rc=$?
+_assert_validator validate_aws_region valid "$_pv_out" "retries, then echoes the valid value"
+_pv_rc=0
+( prompt_validated "region" validate_aws_region "bad" "hint" visible <<< $'a\nb\nc' ) >/dev/null 2>&1 || _pv_rc=$?
+if [[ $_pv_rc -ne 0 ]]; then echo "  ✓ exits non-zero after 3 bad answers"; PASS=$((PASS + 1)); else echo "  ✗ exits non-zero after 3 bad answers"; FAIL=$((FAIL + 1)); fi
+
 # --- write_env tests ---
 
 echo ""
@@ -1136,6 +1192,7 @@ _ao_paths() {
       note_missing_browser() { :; }
       print_summary() { :; }; getent() { return 0; }
       prompt_anthropic_key() { echo sk-ant-test; }
+      choose_provider() { echo anthropic; }
       choose_topology() { echo "$_AO_TOPOLOGY"; }
       gen_secret_hex() { echo genhex; }; gen_secret_b64() { echo genb64; }
       INSTALL_DIR="$(dirname "$envf")"
@@ -1619,6 +1676,7 @@ _fi_run() {
       check_livekit_exposure() { :; }; note_missing_browser() { :; }
       port_listening() { return 1; }; getent() { return 0; }
       prompt_anthropic_key() { echo sk-ant-test; }
+      choose_provider() { echo anthropic; }
       choose_topology() { echo "$_FI_TOPOLOGY"; }
       INSTALL_DIR="$_fi_dir"
       _FI_TOPOLOGY="$1"
@@ -1685,6 +1743,112 @@ unset _FI_PGDATA
 _assert_var "pgdata exists: placeholder DB password kept" "$(env_value "$_fi_env" DB_PASSWORD)" "your-db-password"
 _assert_var "pgdata exists: warns it is weak" "$(_has "$_fi_out" 'weak default')" yes
 rm -rf "$_fi_dir"
+
+# --- Model provider: menus and config/local.yaml (#2749) ---
+
+echo ""
+echo "=== provider_for_choice ==="
+_assert_var "Enter is anthropic"      "$(provider_for_choice "")"  "anthropic"
+_assert_var "1 is anthropic"          "$(provider_for_choice 1)"   "anthropic"
+_assert_var "2 is openrouter"         "$(provider_for_choice 2)"   "openrouter"
+_assert_var "3 is bedrock"            "$(provider_for_choice 3)"   "bedrock"
+_assert_var "unknown is anthropic"    "$(provider_for_choice x)"   "anthropic"
+
+echo ""
+echo "=== choose_models ==="
+choose_models openrouter <<< "" 2>/dev/null
+_assert_var "Enter keeps the recommended fast model"     "$MODEL_FAST"     "$(model_for_choice openrouter fast 1)"
+_assert_var "Enter keeps the recommended standard model" "$MODEL_STANDARD" "$(model_for_choice openrouter standard 1)"
+# n, then one answer per slot that has more than one model (all four for OpenRouter).
+choose_models openrouter <<< $'n\n2\n2\n\n2' 2>/dev/null
+_assert_var "n: picks per slot (fast)"     "$MODEL_FAST"     "$(model_for_choice openrouter fast 2)"
+_assert_var "n: picks per slot (standard)" "$MODEL_STANDARD" "$(model_for_choice openrouter standard 2)"
+_assert_var "n: Enter keeps recommended"   "$MODEL_POWERFUL" "$(model_for_choice openrouter powerful 1)"
+_assert_var "n: picks per slot (judge)"    "$MODEL_JUDGE"    "$(model_for_choice openrouter judge 2)"
+
+echo ""
+echo "=== write_model_config ==="
+_wm_dir="$(mktemp -d)"
+_wm="$_wm_dir/config/local.yaml"
+write_model_config "$_wm" anthropic "" "" "" "" 2>/dev/null
+_assert_var "anthropic: creates the file" "$([[ -f "$_wm" ]] && echo yes || echo no)" yes
+_assert_var "anthropic: header only"      "$(local_config_has_settings "$_wm" && echo yes || echo no)" no
+write_model_config "$_wm" bedrock "global.anthropic.claude-haiku-4-5-20251001-v1:0" "s" "p" "j" 2>/dev/null
+_assert_var "bedrock: quotes the model id" "$(grep -c 'model: "global.anthropic.claude-haiku-4-5-20251001-v1:0"' "$_wm" | tr -d ' ')" "1"
+write_model_config "$_wm" openrouter "f2" "s2" "p2" "j2" 2>/dev/null
+_assert_var "rerun: replaces the earlier block"  "$(grep -c 'model_routing:' "$_wm" | tr -d ' ')" "1"
+_assert_var "rerun: has the new models"          "$(grep -c 'model: "f2"' "$_wm" | tr -d ' ')" "1"
+write_model_config "$_wm" anthropic "" "" "" "" 2>/dev/null
+_assert_var "back to anthropic: block removed"   "$(local_config_has_settings "$_wm" && echo yes || echo no)" no
+printf 'intentDrift:\n  enabled: false\n' >> "$_wm"
+_wm_rc=0; _wm_out="$(write_model_config "$_wm" openrouter f s p j 2>&1)" || _wm_rc=$?
+_assert_var "operator settings: returns 1"            "$_wm_rc" "1"
+_assert_var "operator settings: file left alone"      "$(grep -c 'model_routing' "$_wm" | tr -d ' ')" "0"
+_assert_var "operator settings: prints the block"     "$(_has "$_wm_out" 'model: "s"')" yes
+rm -rf "$_wm_dir"
+
+echo ""
+echo "=== install.sh: fresh_install per provider ==="
+_fp_dir="$(mktemp -d)"
+_fp_env="$_fp_dir/.env"
+_fp_calls="$_fp_dir/calls"
+_fp_secret="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# $1 provider. Leaves docker calls in $_fp_calls and output in $_fp_out.
+_fp_run() {
+    printf 'DB_PASSWORD=your-db-password\n' > "$_fp_env"
+    rm -rf "$_fp_dir/config"
+    : > "$_fp_calls"
+    _fp_out="$(
+      unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND HTTP_PORT AWS_REGION
+      docker() { printf '%s\n' "$*" >> "$_fp_calls"; [[ "$1 $2" != "volume inspect" ]]; }
+      wait_for_postgres() { :; }; wait_for_curia() { return 0; }
+      check_postgres_exposure() { :; }; check_http_exposure() { :; }
+      check_livekit_exposure() { :; }; note_missing_browser() { :; }
+      port_listening() { return 1; }; getent() { return 0; }
+      choose_topology() { echo local; }
+      choose_provider() { echo "$_FP_PROVIDER"; }
+      choose_models() { MODEL_FAST="$(model_for_choice "$1" fast 1)"; MODEL_STANDARD="$(model_for_choice "$1" standard 1)"
+                        MODEL_POWERFUL="$(model_for_choice "$1" powerful 1)"; MODEL_JUDGE="$(model_for_choice "$1" judge 1)"; }
+      prompt_validated() {
+        case "$2" in
+          (validate_anthropic_key) echo sk-ant-test ;;
+          (validate_openrouter_key) echo sk-or-v1-test ;;
+          (validate_aws_access_key_id) echo AKIAIOSFODNN7EXAMPLE ;;
+          (validate_aws_secret_access_key) echo "$_fp_secret" ;;
+          (validate_aws_region) echo eu-west-2 ;;
+        esac
+      }
+      INSTALL_DIR="$_fp_dir"
+      _FP_PROVIDER="$1"
+      fresh_install "$_fp_env" < /dev/null 2>&1
+    )" || true
+}
+
+_fp_run anthropic
+_assert_var "anthropic: seeds the Anthropic key"      "$(_has "$(grep seed-vault "$_fp_calls")" '-e ANTHROPIC_API_KEY=sk-ant-test ')" yes
+_assert_var "anthropic: requires it"                  "$(_has "$(grep seed-vault "$_fp_calls")" '-e SEED_VAULT_REQUIRE=anthropic_api_key ')" yes
+_assert_var "anthropic: local.yaml created, no models" "$(local_config_has_settings "$_fp_dir/config/local.yaml" && echo yes || echo no)" no
+_assert_var "anthropic: voice on"                     "$(env_value "$_fp_env" COMPOSE_PROFILES)" "voice"
+
+_fp_run openrouter
+_assert_var "openrouter: seeds the OpenRouter key"    "$(_has "$(grep seed-vault "$_fp_calls")" '-e OPENROUTER_API_KEY=sk-or-v1-test ')" yes
+_assert_var "openrouter: no Anthropic key"            "$(_has "$(grep seed-vault "$_fp_calls")" 'ANTHROPIC_API_KEY')" no
+_assert_var "openrouter: requires its key"            "$(_has "$(grep seed-vault "$_fp_calls")" '-e SEED_VAULT_REQUIRE=openrouter_api_key ')" yes
+_assert_var "openrouter: writes its standard model"   "$(grep -c "model: \"$(model_for_choice openrouter standard 1)\"" "$_fp_dir/config/local.yaml" | tr -d ' ')" "1"
+_assert_var "openrouter: voice on"                    "$(env_value "$_fp_env" COMPOSE_PROFILES)" "voice"
+_assert_var "openrouter: key never in .env"           "$(grep -c 'sk-or-v1-test' "$_fp_env" | tr -d ' ')" "0"
+
+_fp_run bedrock
+_assert_var "bedrock: seeds both AWS keys"            "$(_has "$(grep seed-vault "$_fp_calls")" "-e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE -e AWS_SECRET_ACCESS_KEY=$_fp_secret ")" yes
+_assert_var "bedrock: requires both"                  "$(_has "$(grep seed-vault "$_fp_calls")" '-e SEED_VAULT_REQUIRE=aws_access_key_id,aws_secret_access_key ')" yes
+_assert_var "bedrock: region in .env"                 "$(env_value "$_fp_env" AWS_REGION)" "eu-west-2"
+_assert_var "bedrock: secret never in .env"           "$(grep -c "$_fp_secret" "$_fp_env" | tr -d ' ')" "0"
+_assert_var "bedrock: secret never printed"           "$(_has "$_fp_out" "$_fp_secret")" no
+_assert_var "bedrock: writes its fast model"          "$(grep -A1 '^    fast:' "$_fp_dir/config/local.yaml" | grep -c "model: \"$(model_for_choice bedrock fast 1)\"" | tr -d ' ')" "1"
+_assert_var "bedrock: voice left off"                 "$(env_value "$_fp_env" COMPOSE_PROFILES)" ""
+_assert_var "bedrock: no LiveKit values seeded"       "$(_has "$(grep seed-vault "$_fp_calls")" 'SEED_LIVEKIT')" no
+_assert_var "bedrock: says voice is off"              "$(_has "$_fp_out" 'Voice (LiveKit): off.')" yes
+rm -rf "$_fp_dir"
 
 # --- Results ---
 

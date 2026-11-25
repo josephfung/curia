@@ -55,8 +55,16 @@ Fails fast with a one-line message and install link if any are missing:
 
 1. Generate `DB_PASSWORD`, `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET` using
    `openssl rand -hex 32`.
-2. Prompt for an Anthropic API key (validated against `sk-ant-[A-Za-z0-9_-]+`,
-   3 retries).
+2. Ask which model provider to use, then prompt for its credentials (3 retries
+   each, #2749):
+   - Anthropic (the default; Enter keeps it): an API key, `sk-ant-[A-Za-z0-9_-]+`.
+   - OpenRouter: an API key, `sk-or-[A-Za-z0-9_-]+`.
+   - AWS Bedrock: an access key ID (`AKIA` + 16), a 40-character secret, and a
+     region (`AWS_REGION`, written to `.env`). Voice stays off: Bedrock can't stream.
+
+   For OpenRouter or Bedrock, offer recommended fast, standard, powerful and judge
+   models (or a pick per slot) and write them to `config/local.yaml`, which
+   `docker-compose.yml` mounts into the container.
 3. Write `.env` from `.env.example`, substituting generated and collected values.
    The optional embedding-server vars stay commented. Channel credentials and the
    optional Tavily key are not `.env` config; they go in the vault. Web search needs no
@@ -90,7 +98,8 @@ is absent — that signals a previous run was interrupted partway.
 | Failure point | Behaviour |
 |---------------|-----------|
 | Missing prerequisite | Exit 1 with install link; no side effects |
-| Bad Anthropic key | Retry up to 3 times; exit with console URL hint |
+| Bad provider credential (key, access key, secret or region) | Retry up to 3 times; exit with a hint on where to get it |
+| `config/local.yaml` already has operator settings | Leave it alone, print the models block to merge, exit 1 |
 | Postgres health timeout | Exit 1 with `docker compose logs postgres` hint |
 | Migration failure | Exit 1 with "run `pnpm setup`, choose option 2" hint |
 

@@ -157,7 +157,12 @@ interactive `read` prompts, so `curl … | bash` does not work). The script:
    (`DB_PASSWORD`, `SECRET_ENCRYPTION_KEY`; an existing real DB password or encryption
    key is preserved, never rotated). `api_token` and the web-app bootstrap secret are
    generated too but passed only as transient env vars — never written to `.env`.
-4. Prompts for an Anthropic API key (format-validated, 3 retries; passed transiently).
+4. Asks which **model provider** to use: Anthropic (the default), OpenRouter or AWS
+   Bedrock (#2749). Prompts for its credentials (format-validated, 3 retries; passed
+   transiently) and, for OpenRouter or Bedrock, the tier and judge models, which it
+   writes to `config/local.yaml` (mounted into the container). Bedrock's region goes
+   in `.env`, and a Bedrock install leaves voice off. Vault-seed checks the provider's
+   keys landed (`SEED_VAULT_REQUIRE`).
 5. Prompts for **deployment topology**: local/eval (HTTP on `:3000`), public domain +
    HTTPS (Caddy + Let's Encrypt), or public IP / own upstream proxy. The HTTPS choice
    requires a `DOMAIN` and sets `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`
