@@ -109,7 +109,8 @@ for you:
    Bedrock) and prompts for its credentials, as the image install does. For
    OpenRouter or Bedrock it writes the chosen models to `config/local.yaml`. If
    that file already has settings of yours, it stops and prints the models block
-   for you to merge, rather than edit the file.
+   for you to merge, rather than edit the file. Merge it with its marker lines:
+   later runs then replace the block where it stands.
 4. Writes `.env` from `.env.example`, leaving the optional embedding-server
    vars commented out. Channel credentials and the optional Tavily key are not
    `.env` config: they go in the vault, from the console or `seed-vault`.

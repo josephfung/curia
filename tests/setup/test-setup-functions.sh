@@ -1798,15 +1798,33 @@ _wm_rc=0; _wm_out="$(write_model_config "$_wm" openrouter f s p j 2>&1)" || _wm_
 _assert_var "operator settings: returns 1"            "$_wm_rc" "1"
 _assert_var "operator settings: file left alone"      "$(grep -c 'model_routing' "$_wm" | tr -d ' ')" "0"
 _assert_var "operator settings: prints the block"     "$(_has "$_wm_out" 'model: "s"')" yes
-# The installer's block plus an operator setting: a rerun that can't write must
-# leave the earlier block in place, not strip it (review of #2749).
+# The installer's block plus an operator setting: a rerun replaces the block
+# where it stands and keeps the setting (review of #2749).
 printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
 write_model_config "$_wm" openrouter f1 s1 p1 j1 2>/dev/null
 printf 'intentDrift:\n  enabled: false\n' >> "$_wm"
-_wm_before="$(cat "$_wm")"
 _wm_rc=0; write_model_config "$_wm" bedrock f2 s2 p2 j2 2>/dev/null || _wm_rc=$?
-_assert_var "block + operator settings: returns 1"     "$_wm_rc" "1"
-_assert_var "block + operator settings: file unchanged" "$([[ "$(cat "$_wm")" == "$_wm_before" ]] && echo yes || echo no)" yes
+_assert_var "block + operator settings: rewrites it"   "$_wm_rc" "0"
+_assert_var "block + operator settings: new models"    "$(grep -c 'model: "f2"' "$_wm" | tr -d ' ')" "1"
+_assert_var "block + operator settings: old ones gone" "$(grep -c 'model: "f1"' "$_wm" | tr -d ' ')" "0"
+_assert_var "block + operator settings: setting kept"  "$(grep -c '^intentDrift:' "$_wm" | tr -d ' ')" "1"
+# The refused case, then the operator merges the printed block as asked: the
+# rerun accepts it instead of refusing again (CodeRabbit, #2757).
+printf '%s\nintentDrift:\n  enabled: false\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
+write_model_config "$_wm" openrouter a b c d 2>/dev/null || true
+model_config_block openrouter a b c d >> "$_wm"
+_wm_rc=0; write_model_config "$_wm" openrouter a2 b2 c2 d2 2>/dev/null || _wm_rc=$?
+_assert_var "after a hand merge: rerun succeeds"       "$_wm_rc" "0"
+_assert_var "after a hand merge: one models block"     "$(grep -c '^model_routing:' "$_wm" | tr -d ' ')" "1"
+_assert_var "after a hand merge: has the new models"   "$(grep -c 'model: "b2"' "$_wm" | tr -d ' ')" "1"
+_assert_var "after a hand merge: setting kept"         "$(grep -c '^intentDrift:' "$_wm" | tr -d ' ')" "1"
+# A file it can't write: return 1, not success.
+if [[ "$(id -u)" != 0 ]]; then
+    printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"; chmod 444 "$_wm"
+    _wm_rc=0; write_model_config "$_wm" openrouter a b c d 2>/dev/null || _wm_rc=$?
+    chmod 644 "$_wm"
+    _assert_var "unwritable file: returns 1"           "$_wm_rc" "1"
+fi
 # Reruns don't pile up blank lines.
 printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
 write_model_config "$_wm" openrouter a b c d 2>/dev/null

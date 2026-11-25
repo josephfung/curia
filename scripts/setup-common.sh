@@ -481,8 +481,10 @@ LOCAL_CONFIG_HEADER="# Curia deployment overrides, deep-merged over config/defau
 ensure_local_config() {
     local file="$1"
     [[ -f "$file" ]] && return 0
-    mkdir -p "$(dirname "$file")"
-    printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$file"
+    # Each step returns its failure: write_model_config's callers run it under
+    # `if !`, where errexit is off.
+    mkdir -p "$(dirname "$file")" || return 1
+    printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$file" || return 1
     # The container runs as uid 1001, not the host user: under a 077 umask it
     # couldn't read the file. It holds no secrets.
     chmod 644 "$file"
@@ -544,7 +546,9 @@ without_model_block() {
 # hand and this returns 1.
 write_model_config() {
     local file="$1" provider="$2" tmp
-    ensure_local_config "$file"
+    # Callers run this under `if !`, where errexit is off: every step that can
+    # fail returns 1 itself, or a failed write would read as success.
+    ensure_local_config "$file" || return 1
     # A begin marker with no end would drop the rest of the file: leave it to the operator.
     if grep -qxF "$MODEL_BLOCK_BEGIN" "$file" && ! grep -qxF "$MODEL_BLOCK_END" "$file"; then
         warn "$file has a '$MODEL_BLOCK_BEGIN' line but no '$MODEL_BLOCK_END' line."
@@ -552,21 +556,35 @@ write_model_config() {
         return 1
     fi
     tmp="$(mktemp)" || return 1
-    without_model_block "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    # Decide before touching the file: returning 1 leaves it exactly as it was.
-    if [[ "$provider" != anthropic ]] && local_config_has_settings "$tmp"; then
-        rm -f "$tmp"
-        warn "$file already has settings, so the installer did not add the models to it."
-        hint "Merge this into it, replacing any block between the '# >>>' and '# <<<' lines."
-        hint "Without it Curia won't start: its default models are Anthropic's."
-        model_config_block "${@:2}" | sed 's/^/     /' >&2
-        return 1
-    fi
-    if [[ "$provider" != anthropic ]]; then
-        { printf '\n'; model_config_block "${@:2}"; } >> "$tmp"
+    if [[ "$provider" != anthropic ]] && grep -qxF "$MODEL_BLOCK_BEGIN" "$file"; then
+        # The block is already there: an earlier run wrote it, or the operator merged
+        # it as asked. Replace it where it stands and keep every other setting.
+        awk -v b="$MODEL_BLOCK_BEGIN" '$0 == b { exit } { print }' "$file" > "$tmp" \
+          && model_config_block "${@:2}" >> "$tmp" \
+          && awk -v e="$MODEL_BLOCK_END" 'after { print } $0 == e { after = 1 }' "$file" >> "$tmp" \
+          || { rm -f "$tmp"; return 1; }
+    else
+        without_model_block "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+        # No block, and settings of the operator's: appending could repeat one of
+        # their keys. Decide before touching the file, so it is left as it was.
+        if [[ "$provider" != anthropic ]] && local_config_has_settings "$tmp"; then
+            rm -f "$tmp"
+            warn "$file already has settings, so the installer did not add the models to it."
+            hint "Merge this into it, markers included; the installer then keeps it up to date."
+            hint "Without it Curia won't start: its default models are Anthropic's."
+            model_config_block "${@:2}" | sed 's/^/     /' >&2
+            return 1
+        fi
+        if [[ "$provider" != anthropic ]]; then
+            { printf '\n'; model_config_block "${@:2}"; } >> "$tmp" || { rm -f "$tmp"; return 1; }
+        fi
     fi
     # cat, not mv: keeps the file's mode, which the container user must be able to read.
-    cat "$tmp" > "$file"
+    if ! cat "$tmp" > "$file"; then
+        rm -f "$tmp"
+        error "Could not write $file."
+        return 1
+    fi
     rm -f "$tmp"
 }
 
