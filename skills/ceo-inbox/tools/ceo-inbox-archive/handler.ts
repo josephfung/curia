@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
-import { isInboxDrainTurn } from '../../../_shared/inbox-drain-turn.js';
+import { hasSystemLineage } from '../../../../src/contacts/principal.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { TRIAGE_NAMESPACE } from '../../../../src/principal-mailboxes/triage-state.js';
 import { FILING_KEY, readFilingMode, type FilingMode } from '../../../../src/principal-mailboxes/filing-mode.js';
@@ -9,13 +9,14 @@ import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/cha
 
 export class CeoInboxArchiveHandler implements ToolHandler {
   /**
-   * The mailbox's filing mode (#2699). Only the heartbeat's drain turn honors leave_in_inbox; a
+   * The mailbox's filing mode (#2699). Only Curia's own triage honors leave_in_inbox: a turn of
+   * system lineage, which covers the drain and the calendar-consult resume it parks. A
    * principal-asked archive always archives. Anything unreadable falls back to archive.
    */
   private async filingMode(ctx: ToolContext, mailboxId: string): Promise<FilingMode> {
-    if (!isInboxDrainTurn(ctx)) return 'archive';
+    if (!hasSystemLineage(ctx.taskMetadata)) return 'archive';
     if (!ctx.entityMemory) {
-      ctx.log.warn({ mailbox: mailboxId }, 'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving');
+      ctx.log.warn({ mailbox: mailboxId }, 'ceo-inbox-archive: filing mode unreadable on a triage turn; archiving');
       return 'archive';
     }
     try {
@@ -24,10 +25,7 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       if (malformed) ctx.log.warn({ mailbox: mailboxId }, 'ceo_inbox/filing is malformed; archiving');
       return mode;
     } catch (err) {
-      ctx.log.warn(
-        { errName: err instanceof Error ? err.name : typeof err, mailbox: mailboxId },
-        'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving',
-      );
+      ctx.log.warn({ err, mailbox: mailboxId }, 'ceo-inbox-archive: filing mode unreadable on a triage turn; archiving');
       return 'archive';
     }
   }
@@ -53,7 +51,7 @@ export class CeoInboxArchiveHandler implements ToolHandler {
     const { client, mailbox } = located.at;
     const mbx = mailboxFields(mailbox);
 
-    ctx.log.info({ messageId }, 'ceo-inbox-archive: archiving message');
+    ctx.log.info({ messageId }, 'ceo-inbox-archive: filing message');
 
     try {
       // Fetch current folders, then remove INBOX

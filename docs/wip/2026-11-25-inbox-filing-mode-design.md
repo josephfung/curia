@@ -39,9 +39,9 @@ inbox topic is where they hear what triage will do, so the choice belongs there.
 
 ## Approaches
 
-1. **Code enforcement in `ceo-inbox-archive` (chosen).** On an inbox-drain turn
-   (`isInboxDrainTurn`, already used by `ceo-inbox-list`), the handler reads the mailbox's
-   filing mode; under `leave_in_inbox` it marks the message read instead of removing INBOX
+1. **Code enforcement in `ceo-inbox-archive` (chosen).** On a turn of system lineage
+   (`hasSystemLineage`: the drain, and the calendar-consult resume it parks, which inherits the
+   drain's originator through the bullpen thread), the handler reads the mailbox's filing mode; under `leave_in_inbox` it marks the message read instead of removing INBOX
    and returns `left_in_inbox: true`. Deterministic, unit-testable, works whatever the model
    does, and keeps prompt growth to a line or two (ADR-046's top rung).
 2. Prompt-only: pin the setting and branch the triage steps. Model-dependent, testable only
@@ -57,11 +57,11 @@ inbox topic is where they hear what triage will do, so the choice belongs there.
 - **config-store:** `ceo_inbox/filing` joins the mailbox-keyed settings: refused unless keyed
   by live mailbox ids with valid values; success carries the mailbox ids and labels, like
   `sending`.
-- **`ceo-inbox-archive`:** on an inbox-drain turn with `leave_in_inbox` for the located
+- **`ceo-inbox-archive`:** on a system-lineage (triage) turn with `leave_in_inbox` for the located
   mailbox, mark read (unread=false, folders untouched) and return
   `{ message_id, left_in_inbox: true, … }`. If reading the setting fails, fall back to
-  archiving and log it (today's behaviour; still settles the drain). Outside a drain turn,
-  always archive. Manifest output gains `left_in_inbox`.
+  archiving and log it (today's behaviour; still settles the drain). On a principal- or
+  agent-lineage turn ("archive that"), always archive. Manifest output gains `left_in_inbox`.
 - **Agent prompt (`ceo-inbox.yaml`):** pin `ceo_inbox/filing` with a short description;
   step 5 notes a `left_in_inbox` result is already settled; Rule Management gains one line
   for changing it. Stay within the prompt budget.
@@ -77,9 +77,9 @@ inbox topic is where they hear what triage will do, so the choice belongs there.
 ## Tests
 
 - Unit: setting parse/resolve/check; config-store accepts and refuses writes; archive
-  handler — drain turn + `leave_in_inbox` marks read and never removes INBOX; drain turn +
-  `archive` or unset archives; non-drain turn archives regardless; setting read failure
-  archives.
+  handler — drain turn or consult resume + `leave_in_inbox` marks read and never removes
+  INBOX; drain turn + `archive` or unset archives; principal or agent lineage archives
+  regardless; setting read failure archives.
 - No paid scenario runs; the behaviour lives in code.
 
 ## Left to the builder

@@ -327,7 +327,7 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
     expect(putBody()).toEqual({ folders: ['Label_3'] });
   });
 
-  it('principal turn ignores leave_in_inbox', async () => {
+  it('principal turn archives without reading the setting', async () => {
     getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
     stubInbox();
     await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: MSG }, { entityMemory: {} } as Partial<ToolContext>));
@@ -335,11 +335,33 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
     expect(getSpy).not.toHaveBeenCalled();
   });
 
-  it('forged drain (createdBy: agent) archives', async () => {
+  // A calendar consult reply wakes ceo-inbox to finish a scheduling email the drain parked. That
+  // wake is a bullpen task, not the drain, but it carries the drain's system lineage.
+  it('consult resume (system lineage, no inbox-drain task) + leave_in_inbox: marks read', async () => {
     getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
     stubInbox();
-    const forged = { ...drainTurn, boundTask: { ...drainTurn.boundTask, createdBy: 'agent' } };
-    await new CeoInboxArchiveHandler().execute(drainCtx({ taskMetadata: forged } as Partial<ToolContext>));
+    const resume = { originator: { systemRole: 'system' }, taskOrigin: 'bullpen', threadId: 'th1' };
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx({ taskMetadata: resume } as Partial<ToolContext>));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ left_in_inbox: true });
+    expect(putBody()).toEqual({ unread: false });
+  });
+
+  it('a drain turn the ladder demoted to agent still honors leave_in_inbox', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    stubInbox();
+    const laddered = { ...drainTurn, originator: { systemRole: 'agent', ladderedFrom: 'system' } };
+    await new CeoInboxArchiveHandler().execute(drainCtx({ taskMetadata: laddered } as Partial<ToolContext>));
+    expect(putBody()).toEqual({ unread: false });
+  });
+
+  it.each([
+    ['agent', { systemRole: 'agent' }],
+    ['agent laddered from principal', { systemRole: 'agent', ladderedFrom: 'principal' }],
+  ])('%s lineage archives without reading the setting', async (_label, originator) => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    stubInbox();
+    await new CeoInboxArchiveHandler().execute(drainCtx({ taskMetadata: { ...drainTurn, originator } } as Partial<ToolContext>));
     expect(putBody()).toEqual({ folders: ['Label_3'] });
     expect(getSpy).not.toHaveBeenCalled();
   });
@@ -363,12 +385,15 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
     expect(writes[0]).toMatchObject({ grant: 'grant-personal', method: 'PUT' });
   });
 
-  it('setting read throws -> archives, success', async () => {
-    getSpy.mockRejectedValue(new Error('db down'));
+  it('setting read throws -> archives, success, and logs the cause', async () => {
+    const cause = new Error('db down');
+    getSpy.mockRejectedValue(cause);
     stubInbox();
+    const warn = vi.spyOn(logger, 'warn');
     const result = await new CeoInboxArchiveHandler().execute(drainCtx());
     expect(result.success).toBe(true);
     expect(putBody()).toEqual({ folders: ['Label_3'] });
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: cause }), expect.stringContaining('filing mode unreadable'));
   });
 
   it('no entityMemory -> archives, success', async () => {
@@ -385,6 +410,19 @@ describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
     const result = await new CeoInboxArchiveHandler().execute(drainCtx());
     expect(result.success).toBe(true);
     expect(putBody()).toEqual({ folders: ['Label_3'] });
+  });
+
+  it('malformed value -> warns without echoing the stored value', async () => {
+    const stored = '{"work":"leave_in_inbox_typo"}';
+    getSpy.mockResolvedValue(stored);
+    stubInbox();
+    const warn = vi.spyOn(logger, 'warn');
+    await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+    expect(warn).toHaveBeenCalled();
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(stored);
+    expect(logged).not.toContain('leave_in_inbox');
   });
 
   it('leave_in_inbox, message already out of INBOX -> already_archived: true, no PUT', async () => {
