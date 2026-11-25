@@ -629,6 +629,9 @@ From a source checkout, the same mount applies the repository's
 `config/local.yaml` to the container. A value you set there for host-side
 `pnpm dev` (such as `channels.voice.livekit_management_url:
 http://localhost:7880`) then applies inside the container too, where it is wrong.
+A checkout set up before #2749 has no `config/local.yaml`, so `docker compose
+up` fails with "bind source path does not exist". Run `pnpm run setup` (any
+option creates it) or `touch config/local.yaml`.
 
 ### Merge semantics
 

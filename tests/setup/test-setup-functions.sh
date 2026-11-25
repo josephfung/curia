@@ -316,25 +316,26 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test option 3 (confirm): "3\nyes" deletes .env and sets SETUP_MODE=full
-echo "DB_USER=curia" > "$_menu_env"
+# Test option 3 (confirm): "3\nyes" keeps .env and its key, sets SETUP_MODE=full
+printf 'DB_USER=curia\nSECRET_ENCRYPTION_KEY=keepme\n' > "$_menu_env"
 _opt3_rc=0
 (
     ENV_FILE="$_menu_env"
     SETUP_MODE="resume"
     handle_existing_env < <(printf "3\nyes\n")
-    # Verify file was deleted and mode changed
-    if [[ ! -f "$ENV_FILE" ]] && [[ "$SETUP_MODE" == "full" ]]; then
+    # .env stays until write_env replaces it, so a setup that stops partway keeps
+    # the encryption key (#2749); the preserved key is read and the mode changes.
+    if [[ -f "$ENV_FILE" ]] && [[ "$SETUP_MODE" == "full" ]] && [[ -n "$PRESERVED_ENCRYPTION_KEY" ]]; then
         exit 0
     else
         exit 1
     fi
 ) 2>/dev/null || _opt3_rc=$?
-if [[ $_opt3_rc -eq 0 ]] && [[ ! -f "$_menu_env" ]]; then
-    echo "  ✓ option 3 + 'yes' deletes .env and sets SETUP_MODE=full"
+if [[ $_opt3_rc -eq 0 ]] && [[ -f "$_menu_env" ]]; then
+    echo "  ✓ option 3 + 'yes' keeps .env, preserves its key and sets SETUP_MODE=full"
     PASS=$((PASS + 1))
 else
-    echo "  ✗ option 3 + 'yes' should delete .env and set SETUP_MODE=full"
+    echo "  ✗ option 3 + 'yes' should keep .env, preserve its key and set SETUP_MODE=full"
     FAIL=$((FAIL + 1))
 fi
 
@@ -1766,6 +1767,13 @@ _assert_var "n: picks per slot (standard)" "$MODEL_STANDARD" "$(model_for_choice
 _assert_var "n: Enter keeps recommended"   "$MODEL_POWERFUL" "$(model_for_choice openrouter powerful 1)"
 _assert_var "n: picks per slot (judge)"    "$MODEL_JUDGE"    "$(model_for_choice openrouter judge 2)"
 
+_assert_var "bedrock, no region: offers all geographies" "$(model_choice_count bedrock fast)" "3"
+PROVIDER_AWS_REGION=eu-west-2
+_assert_var "bedrock, eu region: global and eu only"     "$(model_choices bedrock fast | cut -d. -f1 | tr '\n' ' ')" "global eu "
+PROVIDER_AWS_REGION=ap-southeast-2
+_assert_var "bedrock, other region: global only"         "$(model_choices bedrock standard | cut -d. -f1 | tr '\n' ' ')" "global "
+PROVIDER_AWS_REGION=""
+
 echo ""
 echo "=== write_model_config ==="
 _wm_dir="$(mktemp -d)"
@@ -1785,6 +1793,30 @@ _wm_rc=0; _wm_out="$(write_model_config "$_wm" openrouter f s p j 2>&1)" || _wm_
 _assert_var "operator settings: returns 1"            "$_wm_rc" "1"
 _assert_var "operator settings: file left alone"      "$(grep -c 'model_routing' "$_wm" | tr -d ' ')" "0"
 _assert_var "operator settings: prints the block"     "$(_has "$_wm_out" 'model: "s"')" yes
+# The installer's block plus an operator setting: a rerun that can't write must
+# leave the earlier block in place, not strip it (review of #2749).
+printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
+write_model_config "$_wm" openrouter f1 s1 p1 j1 2>/dev/null
+printf 'intentDrift:\n  enabled: false\n' >> "$_wm"
+_wm_before="$(cat "$_wm")"
+_wm_rc=0; write_model_config "$_wm" bedrock f2 s2 p2 j2 2>/dev/null || _wm_rc=$?
+_assert_var "block + operator settings: returns 1"     "$_wm_rc" "1"
+_assert_var "block + operator settings: file unchanged" "$([[ "$(cat "$_wm")" == "$_wm_before" ]] && echo yes || echo no)" yes
+# Reruns don't pile up blank lines.
+printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$_wm"
+write_model_config "$_wm" openrouter a b c d 2>/dev/null
+_wm_once="$(cat "$_wm")"
+write_model_config "$_wm" openrouter a b c d 2>/dev/null
+write_model_config "$_wm" openrouter a b c d 2>/dev/null
+_assert_var "reruns: file stable"                      "$([[ "$(cat "$_wm")" == "$_wm_once" ]] && echo yes || echo no)" yes
+# A begin marker with no end: refuse, and keep the rest of the file.
+printf '%s\n' "$MODEL_BLOCK_BEGIN" 'x: 1' > "$_wm"
+_wm_rc=0; write_model_config "$_wm" openrouter a b c d 2>/dev/null || _wm_rc=$?
+_assert_var "unterminated block: returns 1"            "$_wm_rc" "1"
+_assert_var "unterminated block: keeps the rest"       "$(grep -c '^x: 1$' "$_wm" | tr -d ' ')" "1"
+# Created readable by the container user whatever the umask.
+rm -f "$_wm"; ( umask 077; ensure_local_config "$_wm" )
+_assert_var "created 0644 under umask 077"             "$(ls -l "$_wm" | cut -c1-10)" "-rw-r--r--"
 rm -rf "$_wm_dir"
 
 echo ""
@@ -1807,6 +1839,7 @@ _fp_run() {
       port_listening() { return 1; }; getent() { return 0; }
       choose_topology() { echo local; }
       choose_provider() { echo "$_FP_PROVIDER"; }
+      compose_mounts_local_config() { [[ -z "${_FP_OLD_COMPOSE:-}" ]]; }
       choose_models() { MODEL_FAST="$(model_for_choice "$1" fast 1)"; MODEL_STANDARD="$(model_for_choice "$1" standard 1)"
                         MODEL_POWERFUL="$(model_for_choice "$1" powerful 1)"; MODEL_JUDGE="$(model_for_choice "$1" judge 1)"; }
       prompt_validated() {
@@ -1848,6 +1881,15 @@ _assert_var "bedrock: writes its fast model"          "$(grep -A1 '^    fast:' "
 _assert_var "bedrock: voice left off"                 "$(env_value "$_fp_env" COMPOSE_PROFILES)" ""
 _assert_var "bedrock: no LiveKit values seeded"       "$(_has "$(grep seed-vault "$_fp_calls")" 'SEED_LIVEKIT')" no
 _assert_var "bedrock: says voice is off"              "$(_has "$_fp_out" 'Voice (LiveKit): off.')" yes
+
+# An older docker-compose.yml that doesn't mount local.yaml: stop before Postgres.
+_FP_OLD_COMPOSE=1
+_fp_run openrouter
+_assert_var "old compose + openrouter: Postgres never started" "$(grep -c 'up -d postgres' "$_fp_calls" | tr -d ' ')" "0"
+_assert_var "old compose + openrouter: says why"     "$(_has "$_fp_out" "doesn't mount config/local.yaml")" yes
+_fp_run anthropic
+_assert_var "old compose + anthropic: installs"       "$(_has "$(grep seed-vault "$_fp_calls")" 'ANTHROPIC_API_KEY=')" yes
+unset _FP_OLD_COMPOSE
 rm -rf "$_fp_dir"
 
 # --- Results ---

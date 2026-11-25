@@ -40,7 +40,7 @@ The installer will:
 4. Ask which **model provider** to use and prompt for its credentials (format-validated, 3 retries):
    - **Anthropic** (the default; Enter keeps it): an API key starting `sk-ant-`. Tiers keep `config/default.yaml`'s Claude models.
    - **OpenRouter**: an API key starting `sk-or-`. The installer shows recommended models for the fast, standard and powerful tiers and the judges; answer `n` to pick each from a list.
-   - **AWS Bedrock**: an IAM access key ID (`AKIA…`), its secret, and the region where Bedrock model access is on. Models are offered the same way, with global, US-only or EU-only routing. Bedrock can't stream, so voice stays off.
+   - **AWS Bedrock**: an IAM access key ID (`AKIA…`), its secret, and the region where Bedrock model access is on. Models are offered the same way, with global routing, plus US-only or EU-only routing when the region is in that geography. Bedrock can't stream, so voice stays off.
 
    Credentials go to the vault only. The region goes in `.env` as `AWS_REGION`. OpenRouter and Bedrock models go in `config/local.yaml`, which `docker-compose.yml` mounts into the container; an Anthropic install gets that file with comments only. See [`model_routing`](configuration.md#model_routing) to change models later.
 5. Ask about deployment topology: local only, public HTTPS (Caddy), or behind an existing reverse proxy.

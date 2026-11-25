@@ -158,6 +158,8 @@ handle_existing_env() {
             # User chose to start stack manually — exit setup
             info "Starting the stack..."
             hint "You can also run this directly: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d"
+            # A checkout set up before #2749 has no config/local.yaml, which compose now mounts.
+            ensure_local_config "$LOCAL_CONFIG"
             docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d
             success "Stack is up."
             exit 0
@@ -180,7 +182,9 @@ handle_existing_env() {
             # would make all previously stored vault secrets permanently unreadable.
             PRESERVED_ENCRYPTION_KEY=$(grep "^SECRET_ENCRYPTION_KEY=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
             PRESERVED_LIVEKIT_KEYS=$(env_value "$ENV_FILE" LIVEKIT_KEYS)
-            rm "$ENV_FILE"
+            # .env is not deleted here: write_env replaces it. Until then it still holds
+            # the encryption key, so a setup that stops partway (a bad key, local.yaml
+            # needing a hand merge) can be re-run without losing the vault (#2749).
             SETUP_MODE="full"
             ;;
         *)

@@ -373,10 +373,21 @@ INSTALL_MODEL_CHOICES=(
 )
 
 # Echo "model|label" lines offered for provider $1 and slot $2, recommended first.
+# Bedrock's us. and eu. profiles serve only regions in that geography, so once a
+# region is known (PROVIDER_AWS_REGION) the other geography's are left out.
 model_choices() {
-    local provider="$1" slot="$2" entry
+    local provider="$1" slot="$2" entry model
     for entry in "${INSTALL_MODEL_CHOICES[@]}"; do
-        [[ "$entry" == "$provider|$slot|"* ]] && printf '%s\n' "${entry#"$provider|$slot|"}"
+        [[ "$entry" == "$provider|$slot|"* ]] || continue
+        entry="${entry#"$provider|$slot|"}"
+        model="${entry%%|*}"
+        if [[ "$provider" == bedrock && -n "$PROVIDER_AWS_REGION" ]]; then
+            case "$model" in
+                us.*) [[ "$PROVIDER_AWS_REGION" == us-* ]] || continue ;;
+                eu.*) [[ "$PROVIDER_AWS_REGION" == eu-* ]] || continue ;;
+            esac
+        fi
+        printf '%s\n' "$entry"
     done
     return 0
 }
@@ -469,6 +480,9 @@ ensure_local_config() {
     [[ -f "$file" ]] && return 0
     mkdir -p "$(dirname "$file")"
     printf '%s\n' "$LOCAL_CONFIG_HEADER" > "$file"
+    # The container runs as uid 1001, not the host user: under a 077 umask it
+    # couldn't read the file. It holds no secrets.
+    chmod 644 "$file"
 }
 
 # The installer's models block in local.yaml sits between these lines, so a
@@ -507,17 +521,16 @@ $MODEL_BLOCK_END
 EOF
 }
 
-# Drop the installer's models block (between the markers) from local.yaml $1.
-remove_model_block() {
-    local file="$1" tmp
-    grep -qxF "$MODEL_BLOCK_BEGIN" "$file" 2>/dev/null || return 0
-    tmp="$(mktemp)"
+# Echo local.yaml $1 without the installer's models block (between the markers)
+# and the blank line written before it.
+without_model_block() {
     awk -v b="$MODEL_BLOCK_BEGIN" -v e="$MODEL_BLOCK_END" '
-      $0 == b { skip = 1; next }
-      skip && $0 == e { skip = 0; next }
-      !skip { print }' "$file" > "$tmp"
-    cat "$tmp" > "$file"
-    rm -f "$tmp"
+      $0 == b { skip = 1; held = 0; next }
+      skip { if ($0 == e) skip = 0; next }
+      held { print ""; held = 0 }
+      $0 == "" { held = 1; next }
+      { print }
+      END { if (held) print "" }' "$1"
 }
 
 # Make local.yaml $1 match provider $2 with models $3..$6 (fast, standard,
@@ -527,18 +540,31 @@ remove_model_block() {
 # could repeat one of their keys, so the block is printed for them to merge by
 # hand and this returns 1.
 write_model_config() {
-    local file="$1" provider="$2"
+    local file="$1" provider="$2" tmp
     ensure_local_config "$file"
-    remove_model_block "$file"
-    [[ "$provider" != anthropic ]] || return 0
-    if local_config_has_settings "$file"; then
+    # A begin marker with no end would drop the rest of the file: leave it to the operator.
+    if grep -qxF "$MODEL_BLOCK_BEGIN" "$file" && ! grep -qxF "$MODEL_BLOCK_END" "$file"; then
+        warn "$file has a '$MODEL_BLOCK_BEGIN' line but no '$MODEL_BLOCK_END' line."
+        hint "Fix or remove that block by hand, then run the installer again."
+        return 1
+    fi
+    tmp="$(mktemp)" || return 1
+    without_model_block "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    # Decide before touching the file: returning 1 leaves it exactly as it was.
+    if [[ "$provider" != anthropic ]] && local_config_has_settings "$tmp"; then
+        rm -f "$tmp"
         warn "$file already has settings, so the installer did not add the models to it."
-        hint "Merge this into it before starting Curia. Without it Curia won't start:"
-        hint "its default models are Anthropic's."
+        hint "Merge this into it, replacing any block between the '# >>>' and '# <<<' lines."
+        hint "Without it Curia won't start: its default models are Anthropic's."
         model_config_block "${@:2}" | sed 's/^/     /' >&2
         return 1
     fi
-    { printf '\n'; model_config_block "${@:2}"; } >> "$file"
+    if [[ "$provider" != anthropic ]]; then
+        { printf '\n'; model_config_block "${@:2}"; } >> "$tmp"
+    fi
+    # cat, not mv: keeps the file's mode, which the container user must be able to read.
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
 }
 
 # Polls docker for Postgres healthy status every 2s, up to 60s. Exits 1 on timeout.

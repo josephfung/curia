@@ -165,11 +165,15 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # which lacks the helpers this installer calls (#2357). Fetch this release's
 # copy over it once; if that still lacks them (a CURIA_VERSION older than this
 # installer), stop and point at that release's own install.sh.
-if ! declare -F ensure_livekit_env >/dev/null; then
+# Each helper named here is the newest one some release added (#2357, #2749).
+setup_common_is_current() {
+  declare -F ensure_livekit_env >/dev/null && declare -F choose_provider_setup >/dev/null
+}
+if ! setup_common_is_current; then
   download_to "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR/scripts/setup-common.sh" || true
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/scripts/setup-common.sh"
-  if ! declare -F ensure_livekit_env >/dev/null; then
+  if ! setup_common_is_current; then
     printf 'error: scripts/setup-common.sh is older than this installer (CURIA_VERSION=%s).\n' "$CURIA_VERSION" >&2
     printf "hint:  run that release's own installer instead: %s\n" "$(bundle_asset_url install.sh install.sh)" >&2
     exit 1
@@ -951,6 +955,16 @@ fresh_install() {
   # mounts and needs to exist before any curia container runs.
   local local_config="$INSTALL_DIR/config/local.yaml"
   choose_provider_setup
+  # install.sh never replaces docker-compose.yml, so an older one (an interrupted
+  # install from an earlier release) doesn't mount local.yaml: the models would
+  # never reach Curia, which would then fail to boot without an Anthropic key.
+  if [[ "$PROVIDER" != anthropic ]] && ! compose_mounts_local_config; then
+    error "This directory's docker-compose.yml doesn't mount config/local.yaml, which $PROVIDER needs."
+    hint "Replace it with this release's file and re-run install.sh:"
+    hint "  $(bundle_asset_url docker-compose.yml docker-compose.yml)"
+    hint "Postgres was not started."
+    exit 1
+  fi
   if ! write_model_config "$local_config" "$PROVIDER" "$MODEL_FAST" "$MODEL_STANDARD" "$MODEL_POWERFUL" "$MODEL_JUDGE"; then
     hint "Then re-run install.sh. Postgres was not started."
     exit 1
