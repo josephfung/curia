@@ -172,10 +172,13 @@ _assert_validator validate_openrouter_key invalid ""                    "rejects
 
 echo ""
 echo "=== validate_aws_access_key_id ==="
-_assert_validator validate_aws_access_key_id valid   "AKIAIOSFODNN7EXAMPLE"  "accepts AKIA + 16"
-_assert_validator validate_aws_access_key_id invalid "ASIAIOSFODNN7EXAMPLE"  "rejects a temporary ASIA key (needs a session token)"
-_assert_validator validate_aws_access_key_id invalid "AKIAIOSFODNN7EXAMPL"   "rejects 15 characters after AKIA"
-_assert_validator validate_aws_access_key_id invalid "akiaiosfodnn7example"  "rejects lowercase"
+# Fake key IDs are built at runtime: a literal in the AKIA/ASIA shape trips
+# GitHub secret scanning even when it is AWS's documented placeholder.
+_fake16="FAKEKEYFORTESTS0"
+_assert_validator validate_aws_access_key_id valid   "AK""IA$_fake16"        "accepts AKIA + 16"
+_assert_validator validate_aws_access_key_id invalid "AS""IA$_fake16"        "rejects a temporary ASIA key (needs a session token)"
+_assert_validator validate_aws_access_key_id invalid "AK""IA${_fake16%?}"    "rejects 15 characters after AKIA"
+_assert_validator validate_aws_access_key_id invalid "ak""ia$_fake16"        "rejects lowercase"
 _assert_validator validate_aws_access_key_id invalid ""                      "rejects empty string"
 
 echo ""
@@ -1846,7 +1849,7 @@ _fp_run() {
         case "$2" in
           (validate_anthropic_key) echo sk-ant-test ;;
           (validate_openrouter_key) echo sk-or-v1-test ;;
-          (validate_aws_access_key_id) echo AKIAIOSFODNN7EXAMPLE ;;
+          (validate_aws_access_key_id) echo "AK""IA$_fake16" ;;
           (validate_aws_secret_access_key) echo "$_fp_secret" ;;
           (validate_aws_region) echo eu-west-2 ;;
         esac
@@ -1872,7 +1875,7 @@ _assert_var "openrouter: voice on"                    "$(env_value "$_fp_env" CO
 _assert_var "openrouter: key never in .env"           "$(grep -c 'sk-or-v1-test' "$_fp_env" | tr -d ' ')" "0"
 
 _fp_run bedrock
-_assert_var "bedrock: seeds both AWS keys"            "$(_has "$(grep seed-vault "$_fp_calls")" "-e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE -e AWS_SECRET_ACCESS_KEY=$_fp_secret ")" yes
+_assert_var "bedrock: seeds both AWS keys"            "$(_has "$(grep seed-vault "$_fp_calls")" "-e AWS_ACCESS_KEY_ID=AKIA$_fake16 -e AWS_SECRET_ACCESS_KEY=$_fp_secret ")" yes
 _assert_var "bedrock: requires both"                  "$(_has "$(grep seed-vault "$_fp_calls")" '-e SEED_VAULT_REQUIRE=aws_access_key_id,aws_secret_access_key ')" yes
 _assert_var "bedrock: region in .env"                 "$(env_value "$_fp_env" AWS_REGION)" "eu-west-2"
 _assert_var "bedrock: secret never in .env"           "$(grep -c "$_fp_secret" "$_fp_env" | tr -d ' ')" "0"
