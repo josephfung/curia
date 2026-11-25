@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-archive",
-  "description": "Archive a message in the principal's email by removing it from the INBOX folder. Intended for use by the ceo-inbox agent — accesses the principal's email, do not call from other agents.",
+  "description": "Archive a message in the principal's email by removing it from the INBOX folder. Intended for use by the ceo-inbox agent — accesses the principal's email, do not call from other agents. During triage, a mailbox whose ceo_inbox/filing is leave_in_inbox is marked read instead and stays in the inbox.",
   "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -13,10 +13,12 @@
     "message_id": "string",
     "subject": "string (subject of the archived message; omitted when it has none)",
     "from": "string (sender as \"Name (email)\" or just the email; omitted when unknown)",
-    "already_archived": "boolean (true when the message was not in the inbox, so nothing changed; omitted otherwise)"
+    "already_archived": "boolean (true when the message was not in the inbox, so nothing changed; omitted otherwise)",
+    "left_in_inbox": "boolean (true when the mailbox's filing setting kept it in the inbox, marked read; omitted otherwise)"
   },
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["principalMailboxes"]
+  "capabilities": ["principalMailboxes"],
+  "optional_capabilities": ["entityMemory"]
 }

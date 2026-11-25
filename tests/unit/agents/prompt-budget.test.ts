@@ -176,7 +176,8 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // bytes under the coordinator's pre-approval of multi-mailbox wording: 49,516 over 46 local tools.
   // #2474 D6: the batch read-back is guided by send-draft's description only. The code guard and
   // its batch_size / batch_confirmed inputs were removed again (#2653): 49,454 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_454, allowMcpPins: false },
+  // #2699 ceo-inbox-archive's description and left_in_inbox output (+113 bytes): 49,567 over 46 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_567, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same

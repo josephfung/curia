@@ -1,9 +1,37 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
+import { isInboxDrainTurn } from '../../../_shared/inbox-drain-turn.js';
+import { ConfigStore } from '../../../../src/memory/config-store.js';
+import { TRIAGE_NAMESPACE } from '../../../../src/principal-mailboxes/triage-state.js';
+import { FILING_KEY, readFilingMode, type FilingMode } from '../../../../src/principal-mailboxes/filing-mode.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxArchiveHandler implements ToolHandler {
+  /**
+   * The mailbox's filing mode (#2699). Only the heartbeat's drain turn honors leave_in_inbox; a
+   * principal-asked archive always archives. Anything unreadable falls back to archive.
+   */
+  private async filingMode(ctx: ToolContext, mailboxId: string): Promise<FilingMode> {
+    if (!isInboxDrainTurn(ctx)) return 'archive';
+    if (!ctx.entityMemory) {
+      ctx.log.warn({ mailbox: mailboxId }, 'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving');
+      return 'archive';
+    }
+    try {
+      const raw = await new ConfigStore(ctx.entityMemory, ctx.log).get(TRIAGE_NAMESPACE, FILING_KEY);
+      const { mode, malformed } = readFilingMode(raw, mailboxId);
+      if (malformed) ctx.log.warn({ mailbox: mailboxId }, 'ceo_inbox/filing is malformed; archiving');
+      return mode;
+    } catch (err) {
+      ctx.log.warn(
+        { errName: err instanceof Error ? err.name : typeof err, mailbox: mailboxId },
+        'ceo-inbox-archive: filing mode unreadable on a drain turn; archiving',
+      );
+      return 'archive';
+    }
+  }
+
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -44,6 +72,12 @@ export class CeoInboxArchiveHandler implements ToolHandler {
         // already_archived tells the execution layer nothing changed, so the call is not put
         // in the spot-check pool for the principal to grade (#2159).
         return { success: true, data: { message_id: messageId, ...described, already_archived: true, ...mbx } };
+      }
+
+      if (await this.filingMode(ctx, mailbox.id) === 'leave_in_inbox') {
+        await client.markAsRead(messageId);
+        ctx.log.info({ messageId }, 'ceo-inbox-archive: left in inbox, marked read (ceo_inbox/filing)');
+        return { success: true, data: { message_id: messageId, ...described, left_in_inbox: true, ...mbx } };
       }
 
       await client.updateMessageFolders(messageId, withoutInbox);

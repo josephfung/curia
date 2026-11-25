@@ -7,6 +7,7 @@ import { ExecutionLayer } from '../../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
 import { sanitizeObjectOutput } from '../../../../src/skills/sanitize.js';
 import type { ToolContext, ToolManifest } from '../../../../src/skills/types.js';
+import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
@@ -271,5 +272,133 @@ describe('CeoInboxArchiveHandler mailbox selection (#2475)', () => {
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toContain('more than one mailbox');
     expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+  });
+});
+
+describe('CeoInboxArchiveHandler filing mode (#2699)', () => {
+  let fetchSpy: MockInstance<typeof fetch>;
+  let getSpy: MockInstance<ConfigStore['get']>;
+  const MSG = '19a2b3c4d5e6f708';
+  const drainTurn = { originator: { systemRole: 'system' }, boundTask: { taskId: 't1', tags: ['inbox-drain'], createdBy: 'heartbeat' } };
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
+    getSpy = vi.spyOn(ConfigStore.prototype, 'get');
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function drainCtx(extra: Partial<ToolContext> = {}): ToolContext {
+    return buildCtx({ message_id: MSG }, { taskMetadata: drainTurn, entityMemory: {}, ...extra } as Partial<ToolContext>);
+  }
+  function stubInbox(): void {
+    fetchSpy
+      .mockResolvedValueOnce(probe())
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'Label_3'], subject: 'Statement ready', from: [{ email: 'billing@example.com' }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'Label_3'] }));
+  }
+  const putBody = () => JSON.parse(String((fetchSpy.mock.calls[2]![1] as RequestInit).body)) as Record<string, unknown>;
+
+  it('drain turn + leave_in_inbox: marks read, keeps INBOX', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    stubInbox();
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result).toEqual({
+      success: true,
+      data: { message_id: MSG, subject: 'Statement ready', from: 'billing@example.com', left_in_inbox: true, mailbox: 'work', mailbox_label: 'Work' },
+    });
+    expect(calls(fetchSpy)[2]).toBe(`PUT /messages/${MSG}`);
+    expect(putBody()).toEqual({ unread: false });
+    expect(putBody()).not.toHaveProperty('folders');
+  });
+
+  it('drain turn + archive: archives', async () => {
+    getSpy.mockResolvedValue('{"work":"archive"}');
+    stubInbox();
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result.success).toBe(true);
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+    if (result.success) expect(result.data).not.toHaveProperty('left_in_inbox');
+  });
+
+  it('drain turn + unset: archives', async () => {
+    getSpy.mockResolvedValue(null);
+    stubInbox();
+    await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+  });
+
+  it('principal turn ignores leave_in_inbox', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    stubInbox();
+    await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: MSG }, { entityMemory: {} } as Partial<ToolContext>));
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('forged drain (createdBy: agent) archives', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    stubInbox();
+    const forged = { ...drainTurn, boundTask: { ...drainTurn.boundTask, createdBy: 'agent' } };
+    await new CeoInboxArchiveHandler().execute(drainCtx({ taskMetadata: forged } as Partial<ToolContext>));
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it("other mailbox's entry does not apply", async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    const f = twoMailboxFixture(['personal']);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(f.fetchStub as typeof fetch);
+    const ctx = {
+      input: { message_id: 'x1' }, principalMailboxes: f.principalMailboxes, entityMemory: {},
+      taskMetadata: drainTurn, log: logger,
+    } as unknown as ToolContext;
+    const result = await new CeoInboxArchiveHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).not.toHaveProperty('left_in_inbox');
+    const writes = f.calls.filter((c) => c.method !== 'GET');
+    expect(writes).toHaveLength(1);
+    expect(JSON.stringify(writes[0])).not.toContain('unread');
+  });
+
+  it('setting read throws -> archives, success', async () => {
+    getSpy.mockRejectedValue(new Error('db down'));
+    stubInbox();
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result.success).toBe(true);
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+  });
+
+  it('no entityMemory -> archives, success', async () => {
+    stubInbox();
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx({ entityMemory: undefined } as Partial<ToolContext>));
+    expect(result.success).toBe(true);
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('malformed value -> archives', async () => {
+    getSpy.mockResolvedValue('not json');
+    stubInbox();
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result.success).toBe(true);
+    expect(putBody()).toEqual({ folders: ['Label_3'] });
+  });
+
+  it('leave_in_inbox, message already out of INBOX -> already_archived: true, no PUT', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    fetchSpy.mockResolvedValueOnce(probe()).mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['Label_3'] }));
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result).toEqual({ success: true, data: { message_id: MSG, already_archived: true, mailbox: 'work', mailbox_label: 'Work' } });
+    expect(calls(fetchSpy)).toHaveLength(2);
+  });
+
+  it('leave_in_inbox, mark-read PUT fails (500) -> success: false', async () => {
+    getSpy.mockResolvedValue('{"work":"leave_in_inbox"}');
+    fetchSpy
+      .mockResolvedValueOnce(probe())
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX'] }))
+      .mockResolvedValue(jsonResponse({ type: 'server_error' }, 500));
+    const result = await new CeoInboxArchiveHandler().execute(drainCtx());
+    expect(result.success).toBe(false);
   });
 });
