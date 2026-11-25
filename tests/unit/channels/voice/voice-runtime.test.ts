@@ -4,6 +4,7 @@ import type { BusEvent } from '../../../../src/bus/events.js';
 import type { OutboundContextRow } from '../../../../src/dispatch/outbound-context.js';
 import { OutboundContextService } from '../../../../src/dispatch/outbound-context.js';
 import { createSilentLogger, type Logger } from '../../../../src/logger.js';
+import { DEFAULT_PINNED_CONTEXT_WARN_CHARS } from '../../../../src/agents/pinned-context.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../../../src/agents/llm/provider.js';
 import { ABORTED_TOOL_RESULT } from '../../../../src/agents/llm/streaming-turn.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../../../src/agents/prompts/date-resolve-guardrail.js';
@@ -4624,6 +4625,17 @@ describe('VoiceRuntime principal priorities (#2363)', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'prio-slow', timeoutMs: 20 }),
       'priorities read exceeded the voice deadline; call proceeds without priorities',
+    );
+  });
+
+  it('warns about an oversized priorities document but still injects it', async () => {
+    const { log, warn } = warnLogger();
+    const big = `## Big\n${'x'.repeat(DEFAULT_PINNED_CONTEXT_WARN_CHARS)}\n`;
+    const [, turn] = await runCall({ sessionId: 'prio-big', readPriorities: async () => big, logger: log });
+    expect(turn).toContain(formatPrioritiesPromptBlock(big)!);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-big', chars: big.length }),
+      'priorities document exceeds the size warning threshold — injected in full',
     );
   });
 

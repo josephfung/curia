@@ -49,7 +49,7 @@ import {
 import { persistableCallerContactId } from './caller-contact-id.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
-import { fenced } from '../../agents/pinned-context.js';
+import { DEFAULT_PINNED_CONTEXT_WARN_CHARS, fenced } from '../../agents/pinned-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
 import {
@@ -364,7 +364,7 @@ export function buildVoiceSystemPrompt(parts: {
   /**
    * The principal's priorities (#2363), read once per session. Fixed for the
    * call, so it sits ahead of the per-turn blocks. Callers must already have
-   * gated this on liveTurn.
+   * gated this on liveTurn, and leave it out of the greeting.
    */
   prioritiesBlock?: string | null;
   /**
@@ -1883,7 +1883,16 @@ export class VoiceRuntime {
         this.log.warn({ sessionId, timeoutMs }, 'priorities read exceeded the voice deadline; call proceeds without priorities');
         return null;
       }
-      return outcome === null ? null : formatPrioritiesPromptBlock(outcome);
+      if (outcome === null) return null;
+      // Same threshold as the coordinator's pinned context: injected in full, but
+      // a document this large adds to every turn's prompt.
+      if (outcome.length > DEFAULT_PINNED_CONTEXT_WARN_CHARS) {
+        this.log.warn(
+          { sessionId, chars: outcome.length, warnChars: DEFAULT_PINNED_CONTEXT_WARN_CHARS },
+          'priorities document exceeds the size warning threshold — injected in full',
+        );
+      }
+      return formatPrioritiesPromptBlock(outcome);
     } catch (err) {
       this.log.warn({ err, sessionId }, 'priorities read failed; call proceeds without priorities');
       return null;
