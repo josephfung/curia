@@ -11,6 +11,8 @@
 // A failure marks the run failed, tells the operator (`deep_dive_failed`) and notes the open
 // onboarding task, so its Review topics can be declined. With no onboarding task open (a re-run
 // after onboarding) there is no task to note: the failure is logged and kept in the run state.
+// The hand-off records `delivered` before its ready note and wake, so a failure of those is not
+// a run failure: handoffStage tells the operator `deep_dive_delivery_failed` instead.
 
 import type { ConfigStore } from '../../memory/config-store.js';
 import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
@@ -84,7 +86,7 @@ export interface RunDeps {
   /** The principal's home IANA timezone (index.ts principalHomeTz), read when the summary is made. */
   timezone: () => string;
   logger: Logger;
-  /** How the failure notice is emailed. Absent: the failure is noted on the task, nobody is emailed. */
+  /** How the failure and delivery notices are emailed. Absent: the failure is noted on the task, nobody is emailed. */
   notifyOperator?: OperatorNotifier;
   now?: () => Date;
   /** The history scan. Overridable in tests. */

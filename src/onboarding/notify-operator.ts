@@ -24,8 +24,14 @@ export const OPERATOR_EVENTS = [
   'web_search_failed',
   'mailbox_signin_blocked',
   'deep_dive_failed',
+  'deep_dive_delivery_failed',
 ] as const;
 export type OperatorEvent = (typeof OPERATOR_EVENTS)[number];
+
+/** The progress note that records a notice on its task: also the per-task once-only record. */
+export function operatorNoticeNote(event: OperatorEvent): string {
+  return `Operator notice: ${event}`;
+}
 
 /** Facts the emailed notice may carry. Typed on purpose: every field here is code-read, not
  *  model-written, so nothing a model put in a tool call can reach the email. */
@@ -144,6 +150,15 @@ function noticeText(
           "Onboarding carries on without it. The cause is in Curia's logs.",
         ],
       };
+    case 'deep_dive_delivery_failed':
+      return {
+        subject: 'Curia onboarding: the mailbox history drafts could not be handed over',
+        lines: [
+          "Curia reviewed the principal's mail and calendar history and wrote its drafts, but could not hand them over for review.",
+          '',
+          'The drafts are saved in Curia under /meetings/onboarding/deep-dive/ and can be opened from the Documents page in the console.',
+        ],
+      };
   }
 }
 
@@ -163,7 +178,7 @@ export async function notifyOperator(
 ): Promise<OperatorNoticeResult> {
   if (taskId !== null) {
     try {
-      await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
+      await deps.taskRepo.updateTask(taskId, { progressNote: operatorNoticeNote(event) });
     } catch (err) {
       deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
       return { recorded: false };

@@ -2,6 +2,7 @@
 
 Date: 2026-11-22
 Status: Accepted
+Amended: 2026-11-23 — the deep dive adds `deep_dive_failed` (the scan or drafting failed) and `deep_dive_delivery_failed` (drafts written, hand-off lost), both operator-routed (#2362)
 
 ## Context
 
@@ -48,6 +49,7 @@ The published payload carries the resolved `recipient` and the `audience` that c
 | `mailbox_outage` (new: a principal mailbox outage, without the reconnect link) | operator |
 | `principal_mailbox_outage` (with the reconnect link) | principal |
 | `greeting_unanswered`, `invitation_expired`, `web_search_failed`, `mailbox_signin_blocked` (onboarding; new types) | operator |
+| `deep_dive_failed`, `deep_dive_delivery_failed` (onboarding deep dive, #2362; added later) | operator |
 | `inbox_triage_paused`, `contact_rate_limited`, `approval_requested`, `learning_proposal` | principal |
 | `blocked_content`, `approval_expired`, `principal_note` (no longer emitted; kept so replayed payloads resolve) | principal |
 

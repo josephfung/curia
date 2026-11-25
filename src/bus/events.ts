@@ -455,6 +455,8 @@ export type NotificationAudience = 'operator' | 'principal';
 //   - 'greeting_unanswered', 'invitation_expired', 'web_search_failed': operator alerts raised while the
 //                           onboarding program runs (#2360; carried by the onboarding notice, #2710)
 //   - 'deep_dive_failed':   operator alert that the onboarding deep dive (history scan) failed (#2362)
+//   - 'deep_dive_delivery_failed': operator alert that the deep dive's drafts were written but could not be
+//                           handed to the principal (ready note, wake, or Google Doc copy failed) (#2362)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export type NotificationType =
   | 'blocked_content'         // no longer emitted (#2159); kept for historical audit rows
@@ -474,6 +476,7 @@ export type NotificationType =
   | 'web_search_failed'       // onboarding: web search failed during the homework (#2360)
   | 'mailbox_signin_blocked'  // onboarding: a Workspace admin policy blocked the sign-in (#2360)
   | 'deep_dive_failed'        // onboarding: the deep dive's history scan failed (#2362)
+  | 'deep_dive_delivery_failed' // onboarding: the deep dive's drafts could not be handed over (#2362)
   | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
 
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)

@@ -56,7 +56,7 @@ import {
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
 import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
-import { notifyOperatorOnce } from './notify-operator-once.js';
+import { raiseOperatorNoticeOnce } from './notify-operator-once.js';
 import type { DeepDiveService } from './deep-dive/service.js';
 import { isRunning as isDeepDiveRunning, readDeepDiveState } from './deep-dive/state.js';
 
@@ -246,24 +246,17 @@ export class OnboardingService {
   }
 
   /**
-   * Raise an operator notice once per onboarding run (#2360, #2710): the same dedupe the
-   * watcher and the event subscribers use, so a model that raises the same event repeatedly
-   * emails the operator once. The progress note and the audit row are written either way.
-   * Without an injected notifier the notice is still recorded on the task and nobody is emailed.
+   * Raise an operator notice once (#2360, #2710): once per onboarding run on the onboarding task,
+   * the same dedupe the watcher and the event subscribers use, and once per event on a standalone
+   * deep-dive review task (#2362). A model that raises the same event repeatedly emails the
+   * operator once. Without an injected notifier the notice is still recorded and nobody is emailed.
    */
-  async raiseOperatorNotice(
+  raiseOperatorNotice(
     taskId: string,
     event: OperatorEvent,
     notice: OperatorNotice = {},
   ): Promise<{ alreadyRaised: boolean; recorded: boolean }> {
-    // Checked up front so the caller can say "already raised" instead of "could not be recorded":
-    // the model would otherwise retry a notice that is deliberately not sent twice (#2710).
-    // notifyOperatorOnce re-checks under the state lock, so this is only about the message.
-    const state = await readOnboardingState(this.deps.configStore, this.deps.logger);
-    if (state !== null && state.taskId === taskId && state.operatorNotified.includes(event)) {
-      return { alreadyRaised: true, recorded: true };
-    }
-    const recorded = await notifyOperatorOnce(
+    return raiseOperatorNoticeOnce(
       {
         taskRepo: this.deps.taskRepo,
         logger: this.deps.logger,
@@ -275,7 +268,6 @@ export class OnboardingService {
       event,
       notice,
     );
-    return { alreadyRaised: false, recorded };
   }
 
   async status(): Promise<OnboardingStatus> {

@@ -28,6 +28,7 @@ describe('NOTIFICATION_AUDIENCES', () => {
       web_search_failed: 'operator',
       mailbox_signin_blocked: 'operator',
       deep_dive_failed: 'operator',
+      deep_dive_delivery_failed: 'operator',
       // Principal: their own mail, approvals and learning proposals.
       inbox_triage_paused: 'principal',
       contact_rate_limited: 'principal',
@@ -58,7 +59,7 @@ describe('NOTIFICATION_AUDIENCES', () => {
 
   it('tells the operator about onboarding trouble', () => {
     // It is the operator's job to unblock Setup: trust a Google app, check a key, resend a link.
-    for (const type of ['greeting_unanswered', 'invitation_expired', 'web_search_failed', 'mailbox_signin_blocked', 'deep_dive_failed'] as const) {
+    for (const type of ['greeting_unanswered', 'invitation_expired', 'web_search_failed', 'mailbox_signin_blocked', 'deep_dive_failed', 'deep_dive_delivery_failed'] as const) {
       expect(notificationAudience(type)).toBe('operator');
     }
   });
