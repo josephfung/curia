@@ -75,7 +75,7 @@ Three people graded the same 25 messages: the owner and two of the casebook's re
 
 Counts are from the 230 v1 runs.
 
-1. **Handing the choice back (task 51, also 53, 59).** Asked to move a meeting, Curia found the event and free slots, then asked Avery to choose: it wrote to the other person in 1 of 25 runs across 51a–e. The coordinator tells the calendar specialist "Do NOT change anything yet" before anything is known. Worse, in two 51b runs the calendar specialist moved Lina's meeting anyway while the reply told Avery *"I haven't moved it yet"*: the record and the report disagree, and Lina got no note. That part is a bug in its own right. **No issue yet.** Cause and fix: #2607 (a direct instruction is the principal's approval) and #2608 (pick the time and tell the other person).
+1. **Handing the choice back (task 51, also 53, 59).** Asked to move a meeting, Curia found the event and free slots, then asked Avery to choose: it wrote to the other person in 1 of 25 runs across 51a–e. The coordinator tells the calendar specialist "Do NOT change anything yet" before anything is known. (In two 51b runs the meeting did end up moved, but only on the case's second turn, after Lina's scripted reply arrived. That reply arrives whether or not Curia wrote to her, which is a limit of the case, not something Curia did; see the last section.) Cause and fix: #2607 (a direct instruction is the principal's approval) and #2608 (pick the time and tell the other person).
 2. **Holding replies in Alex's voice (task 59).** To a casual invitation, Curia replies as Alex, *"Let me check with Avery and I'll get back to you"*, then asks Avery an open question. That happened to the lead investor (59a), the board chair (59b), the friend (59d) and the salesperson (59e), where the right calls are a warm draft in Avery's voice, a yes, or a polite decline. The casebook names it as a wrong call. **No issue yet.**
 3. **A calendar update in place of a message (57c, 57d).** Moving the teacher's and the contractor's appointments, Curia let the calendar change speak for it: 0 of 10 runs wrote to them (#2609).
 4. **No lookups (51d, 53c, 59c).** Where only a web search shows who someone is, Curia searched in 0 of 15 runs (#2610).
@@ -136,7 +136,7 @@ To Josh again, setting up lunch (53d): *"Avery would like to get lunch with you 
 
 In order of expected effect. Measure each against v1 as the baseline note's "How to read these numbers" describes: the targeted task, both layers, and the noise floor.
 
-1. **#2607 and #2608 first.** Handing the choice back sinks task 51 (decision 43%, voice 6%) and spills into 53 and 59. Because a message that isn't written scores MISS on voice, the fix should lift voice too. Alongside them, a new issue for the 51b mismatch: a calendar change the reply to Avery says didn't happen.
+1. **#2607 and #2608 first.** Handing the choice back sinks task 51 (decision 43%, voice 6%) and spills into 53 and 59. Because a message that isn't written scores MISS on voice, the fix should lift voice too.
 2. **Holding replies (new issue).** When a reply should come from Avery, Curia should draft it in Avery's mailbox and voice, or act on the clear call. It should not send an Alex-signed "let me check" to a friend, the board chair or an investor. Task 59 measures it.
 3. **#2609 and #2610.** Write to the other person when moving a personal appointment, and look up unknown people before writing to them.
 4. **Excuses on request (new issue), and standing preferences kept to their scope (new issue or fixture wording).** Each has one or two cases.
@@ -149,3 +149,8 @@ Recommended: **52e, 54a, 55d and 53a.** Each got a full PASS on every critical b
 Not yet: 50a, 53b and 56b also pass, but each has a critical behavior at 4 of 5 runs, the bare minimum, and 50a and 53b failed the extra run. They would make the gate flaky.
 
 Promoting a case is a separate change, out of scope here. These cases run under the `finesse` identity fixture and with the Opus judge, which adds roughly $1 to a gate run for the four.
+
+## Limits of v1 to fix in a later version
+
+- **Scripted replies arrive unconditionally.** 51b, 52b and 54c script the other person's reply. It arrives even when Curia never wrote to them, so a run can end with the meeting moved on a "confirmation" to a message that was never sent.
+- **Blind identification** needs groups whose situations differ only in the recipient, and wider `contrast.message` sources (see above).
