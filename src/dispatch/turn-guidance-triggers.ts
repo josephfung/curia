@@ -59,6 +59,12 @@ export interface InboundGuidanceFacts {
    * (looksLikeMakeRoom). Only honoured on a live principal turn. Absent means no.
    */
   makeRoom?: boolean;
+  /**
+   * The principal's own words say they are running late (looksLikeRunningLate). The meeting
+   * is on the calendar, so the turn is self-contained rather than reply-shaped. Only honoured
+   * on a live principal turn where Curia is not merely CC'd (#2612).
+   */
+  runningLate?: boolean;
 }
 
 // "Make room" language (#2227): the principal offering to move their own commitments. Plain
@@ -76,16 +82,47 @@ const MAKE_ROOM_PATTERNS: readonly RegExp[] = [
 ];
 
 // A refusal ahead of the match in the same clause: "Don't make room by moving my meetings",
-// "I can't move my focus block", "no need to clear my calendar". A clause ends at . ; ! ? , or
-// a line break, so "Don't worry, I'll make some room" is still a request.
-const MAKE_ROOM_NEGATION = /\b(?:don['’]?t|do\s+not|doesn['’]?t|not|never|no\s+need\s+to|can['’]?t|cannot|won['’]?t|shouldn['’]?t|rather\s+not|without)\b/i;
-const CLAUSE_END = /[.;!?,\n]/;
+// "I can't move my focus block", "no need to clear my calendar". A clause ends at . ; ! ? , a
+// dash, or a line break, so "Don't worry, I'll make some room" is still a request — and so is
+// "I'm not sure what's going on — running late". A denied status reads the same way: "I'm not
+// running late", "I'm never late".
+const CLAUSE_NEGATION = /\b(?:don['’]?t|do[^\S\n]+not|doesn['’]?t|not|never|no[^\S\n]+need[^\S\n]+to|can['’]?t|cannot|won['’]?t|shouldn['’]?t|rather[^\S\n]+not|without)\b/i;
+const CLAUSE_END = /[.;!?,\n—–]/;
 
-/** Whether the match at `index` has a negation earlier in its clause. */
-function negatedInClause(text: string, index: number): boolean {
-  let start = index;
-  while (start > 0 && !CLAUSE_END.test(text[start - 1]!)) start--;
-  return MAKE_ROOM_NEGATION.test(text.slice(start, index));
+/**
+ * An ASCII hyphen ends a clause only as a typed dash: with whitespace on a side ("late - sorry",
+ * "- running late"). Inside a word or range ("check-in", "30-45") it does not.
+ */
+function isClauseBreak(text: string, i: number): boolean {
+  const ch = text[i]!;
+  if (CLAUSE_END.test(ch)) return true;
+  return ch === '-' && (/\s/.test(text[i - 1] ?? '') || /\s/.test(text[i + 1] ?? ''));
+}
+
+/**
+ * A checker for "does the match at `index` have a `marker` earlier in its clause". Built once per
+ * text in a single pass, so each lookup is constant time: a long message with no clause break
+ * and many matches would otherwise rescan the whole clause for every match (quadratic).
+ */
+function clauseMarkerCheck(text: string, marker: RegExp): (index: number) => boolean {
+  const n = text.length;
+  // clauseStart[i]: where the clause containing position i begins.
+  const clauseStart = new Int32Array(n + 1);
+  for (let i = 1; i <= n; i++) clauseStart[i] = isClauseBreak(text, i - 1) ? i : clauseStart[i - 1]!;
+  // lastMarker[i]: start of the latest marker occurrence ending at or before i, or -1. Occurrences
+  // do not overlap and come in order, so if the latest one starts before the clause, none is inside.
+  const lastMarker = new Int32Array(n + 1).fill(-1);
+  const found = [...text.matchAll(new RegExp(marker.source, `${marker.flags.replace('g', '')}g`))];
+  let next = 0;
+  let latest = -1;
+  for (let i = 0; i <= n; i++) {
+    while (next < found.length && found[next]!.index + found[next]![0].length <= i) {
+      latest = found[next]!.index;
+      next++;
+    }
+    lastMarker[i] = latest;
+  }
+  return (index) => lastMarker[index]! >= clauseStart[index]!;
 }
 
 /**
@@ -96,9 +133,114 @@ function negatedInClause(text: string, index: number): boolean {
  */
 export function looksLikeMakeRoom(text: string): boolean {
   const own = text.split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n');
+  const negated = clauseMarkerCheck(own, CLAUSE_NEGATION);
   return MAKE_ROOM_PATTERNS.some((p) => {
     for (const match of own.matchAll(new RegExp(p.source, `${p.flags}g`))) {
-      if (!negatedInClause(own, match.index)) return true;
+      if (!negated(match.index)) return true;
+    }
+    return false;
+  });
+}
+
+// "Running late" language (#2612): the principal saying they are behind schedule. The message
+// names no meeting, but it is self-contained — the meeting it affects is on the calendar. The
+// reply-shaped note read it as a reply to something earlier, and in 3 of the 15 baseline runs
+// across finesse 52b/c/d the coordinator asked what the principal was replying to instead of
+// telling the people waiting.
+//
+// Each pattern needs the lateness on the principal or in a clause-opening phrase ("running
+// late", "will be ten minutes late", "stuck in traffic"), so someone else's delay does not
+// count: "the board deck is behind schedule" and "Dana is stuck in traffic" are not the
+// principal, and "the report is running late" is about work, not the diary. A bare "I'm
+// behind" needs a time gap ("ten minutes behind"), "running", or "schedule" for the same
+// reason.
+const TIME_GAP = String.raw`(?:(?:about|around|roughly|maybe|a\s+bit)\s+)?(?:(?:\d{1,3}|an?|a\s+few|a\s+couple\s+of|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:min|mins|minute|minutes|m|hour|hours|hr|hrs)\b\s*)`;
+// Bounded and on one line: an unbounded run that crossed newlines made "about\n" repeated
+// quadratic, since every line start in the 'm' patterns re-scanned the rest of the run.
+const LATENESS_FILLER = String.raw`(?:(?:a[^\S\n]+bit|a[^\S\n]+little|about|around|maybe|roughly|so|still|already|really|very|quite)[^\S\n]+){0,4}`;
+// The contractions that are also words keep their apostrophe: "we'?re" would read "we were
+// late" as a present-tense status, and "we'?ll" would read "well".
+const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+going\s+to\s+be|i['’]?m\s+gonna\s+be|i['’]ll\s+be|i\s+will\s+be|i['’]?m|i\s+am|we['’]re\s+going\s+to\s+be|we\s+are\s+going\s+to\s+be|we['’]ll\s+be|we\s+will\s+be|we['’]re|we\s+are)`;
+// The start of the message, a sentence, or a dash-opened aside. The lookbehind keeps the match
+// on the status phrase, so the clause before a sentence break cannot deny it
+// ("I'm not sure what you mean. Running late, sorry").
+const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s{0,64}|(?:^|\s)-{1,8}\s{0,64})`;
+// A subjectless status: the principal's own ("running ..."), or one with no subject at all
+// ("stuck in traffic"). Someone else's name or a thing before the phrase rules both out.
+// The word boundary keeps the end of a name from reading as a subject ("Jim" is not "im").
+const OWN_OR_OPEN = String.raw`(?:\b${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}|${CLAUSE_OPEN})`;
+
+// Someone else's words, not the principal's status: a reporting verb ahead of the match in the
+// clause ("Dana said I'm running late", "she told me I'm late").
+const REPORTED_SPEECH = /\b(?:said|says|saying|told|tells|telling|texted|wrote|writes|messaged|claims?|claimed|thinks|thought|mentioned|reported)\b/i;
+// A copula left hanging before a comma or dash, then the match: "Dana is, unfortunately, running
+// late". The sentence still has its own subject, so the comma does not open the principal's status.
+// Contracted copulas ("She's, unfortunately, running late") count too, except the principal's own
+// "I'm" / "I've" / "we're".
+const DANGLING_SUBJECT = /(?:\b(?:is|are|was|were|be|been|has|have|had)|\b(?!(?:i|we)['’])\w+['’](?:s|re|ve|d|ll(?:\s+be)?))\s*(?:,|[—–]|\s-\s)/i;
+// A reporting verb that introduces the words right after it, with no quote marks: "Dana texted,
+// running late", "Sam wrote — stuck in traffic", "Dana said, 'I'm running late'".
+const REPORT_INTRO = new RegExp(`${REPORTED_SPEECH.source}(?:\\s+(?:me|us|him|her|them))?\\s*(?:[,:]|[—–]|\\s-\\s)\\s*['‘"“]?\\s*$`, 'i');
+const SENTENCE_END = /[.;!?\n]/;
+
+/**
+ * Whether the sentence holding the match at `index` has a subject of its own cut off by a comma,
+ * or is introduced by a reporting verb ("Dana said, ...").
+ */
+function hasForeignSubject(text: string, index: number): boolean {
+  // Looks back at most 200 characters, so the cost per match does not grow with the message.
+  let start = index;
+  while (start > 0 && index - start < 200 && !SENTENCE_END.test(text[start - 1]!)) start--;
+  const before = text.slice(start, index);
+  return DANGLING_SUBJECT.test(before) || REPORT_INTRO.test(before);
+}
+
+// Words a person quotes: "Dana said \"I'm running late\"" is Dana's status, not the principal's.
+// Single quotes open only at a word start and close only before a non-word character, so the
+// apostrophe in "I'm" or "Dana's" neither opens nor ends a span: "Dana said, 'I'm running late.'".
+const QUOTED_SPAN = /"[^"\n]{0,200}"|“[^”\n]{0,200}”|(?<![\p{L}\p{N}_])['‘][^\n]{0,200}?['’](?![\p{L}\p{N}_])/gu;
+
+const RUNNING_LATE_PATTERNS: readonly RegExp[] = [
+  // "I'm late", "I'll be an hour late", "we're going to be late", "I'm running a little late"
+  new RegExp(String.raw`\b${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}(?:running\s+${LATENESS_FILLER})?(?:${TIME_GAP})?late\b`, 'i'),
+  // "I'm ten minutes behind", "I'm running behind" and "I'm running about ten minutes behind"
+  new RegExp(String.raw`\b${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}(?:running\s+${LATENESS_FILLER}(?:${TIME_GAP})?|${TIME_GAP})behind\b`, 'i'),
+  // "Running late, start without me", "Still running late, sorry". The bare forms.
+  new RegExp(String.raw`${CLAUSE_OPEN}${LATENESS_FILLER}running\s+${LATENESS_FILLER}(?:${TIME_GAP})?(?:late|behind)\b`, 'im'),
+  // "Will be 10 min late", "Gonna be a few minutes behind"
+  new RegExp(String.raw`${CLAUSE_OPEN}(?:will|gonna)\s+be\s+${LATENESS_FILLER}(?:${TIME_GAP})?(?:late|behind)\b`, 'im'),
+  // "Sorry, 10 minutes behind" — the fragment with no verb at all.
+  new RegExp(String.raw`${CLAUSE_OPEN}(?:${TIME_GAP})(?:late|behind)\b`, 'im'),
+  // "behind schedule" ("I'm behind schedule", "we're behind schedule", "Behind schedule, sorry")
+  new RegExp(String.raw`${OWN_OR_OPEN}behind\s+schedule\b`, 'im'),
+  // "stuck in traffic", "held up on my way", "tied up in a meeting"
+  new RegExp(String.raw`${OWN_OR_OPEN}(?:stuck|held\s+up|tied\s+up)\s+(?:in\s+(?:traffic|a\s+jam|a\s+meeting)|on\s+(?:my|the)\s+way|at\s+(?:the\s+office|work))\b`, 'im'),
+];
+
+/**
+ * Whether the principal's own words say they are running late ("I'm running about ten minutes
+ * behind", "Running late, start without me", "stuck in traffic"). The dispatcher passes the
+ * sender's own text on any channel (senderOwnTextAnyChannel), which has already cut an email's
+ * quoted mail and a quote pasted into Signal, Slack or SMS; the `>` filter below also covers a
+ * caller that hands over raw text. A denied status ("I'm not running late") is not a statement
+ * that they are.
+ */
+export function looksLikeRunningLate(text: string): boolean {
+  // The dispatcher passes the sender's own text, which leads with an email's own Subject
+  // (senderOwnText): "Subject: Running late" over a one-line body is the whole message.
+  const own = text
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('>'))
+    .join('\n')
+    .replace(/^Subject:\s*/i, '')
+    .replace(QUOTED_SPAN, ' ');
+  const disowned = clauseMarkerCheck(
+    own,
+    new RegExp(`${CLAUSE_NEGATION.source}|${REPORTED_SPEECH.source}`, 'i'),
+  );
+  return RUNNING_LATE_PATTERNS.some((p) => {
+    for (const match of own.matchAll(new RegExp(p.source, `${p.flags}g`))) {
+      if (!disowned(match.index) && !hasForeignSubject(own, match.index)) return true;
     }
     return false;
   });
@@ -384,6 +526,11 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
   // through"), so it is never a verdict on Curia's digest either (F1).
   const spotCheckVerdict = facts.liveTurn && facts.spotCheckReply && !facts.curiaCc;
   const principalForward = facts.liveTurn && facts.forward === true && facts.channelId === 'email' && !facts.curiaCc;
+  // "I'm running late" names no meeting, but it is not a reply: the meeting is on the calendar
+  // (#2612). It replaces the reply-shaped note on the same terms the note is added — a live
+  // principal turn with no outbound block — and never on a CC'd email, which is written to
+  // someone else and tells those people directly.
+  const runningLate = facts.liveTurn && facts.runningLate === true && !facts.curiaCc && entries.length === 0;
   if (!facts.liveTurn) {
     keys.push('non-principal-reply-shaped');
     if (facts.principalAcquaintance !== undefined) {
@@ -396,11 +543,13 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
     // says to ask what the principal is replying to, spot-check-reply says to act. They give
     // conflicting advice, so the verdict key replaces the note. With an outbound block the
     // block's keys stay and spot-check-reply is added alongside them (below). A forward is
-    // self-contained and principal-forward says to act, so it replaces the note too.
-    if (!spotCheckVerdict && !principalForward) keys.push('principal-reply-shaped');
+    // self-contained and principal-forward says to act, so it replaces the note too. A
+    // principal running late is self-contained in the same way.
+    if (!spotCheckVerdict && !principalForward && !runningLate) keys.push('principal-reply-shaped');
   }
   if (facts.liveTurn && facts.verificationCodeReceived === true) keys.push('verification-code-received');
   if (principalForward) keys.push('principal-forward');
+  if (runningLate) keys.push('running-late');
   if (facts.bookingLink === true) keys.push('booking-link');
   if (facts.liveTurn && facts.makeRoom === true) keys.push('make-room');
   if (facts.liveTurn && entries.length > 0) {
