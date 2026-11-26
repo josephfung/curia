@@ -43,7 +43,7 @@ export function handoffNote(summary: HistorySummary, backfilled: number, timezon
     (summary.coverage.truncated ? ', truncated' : '');
   return (
     `Deep-dive drafts ready: ${paths}. Contacts added: ${backfilled}. Coverage: ${coverage}. ` +
-    'Copy each to a Google Doc and book the review (onboarding skill, "Deep-dive review").'
+    'Publish each as a Google Doc and book the review (onboarding skill, "Deep-dive review").'
   );
 }
 

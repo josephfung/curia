@@ -648,8 +648,9 @@ the mailbox. Code in `src/onboarding/deep-dive/` (its README documents each heur
   conflicts with the current rules; they never replace them. Spend is stored and logged.
 - **Hand-off.** The Review session's topics are opened on the open onboarding task, or on a
   standalone coordinator task tagged `deep-dive` when onboarding is closed, then a note names the
-  drafts and the contacts count and the coordinator is woken. The coordinator makes a Google Doc
-  of each draft, shares it with the principal as writer, and books the review.
+  drafts and the contacts count and the coordinator is woken. The coordinator publishes each draft
+  as a formatted Google Doc (`doc-publish-google`), shares it with the principal as writer, and
+  books the review.
 - **The onboarding hold.** While the run is `scanning` or `drafting`, or delivered with its
   review topics still open, the onboarding task does not complete. A `failed` run releases it.
 - **Re-runs.** The `deep-dive-run` tool (the principal asks; coordinator-only, discovered rather

@@ -1,0 +1,28 @@
+{
+  "name": "doc-publish-google",
+  "description": "Publish a Curia document (OKF workspace path) as a formatted Google Doc: headings, lists, bold, links and tables render as rich text, never as Markdown syntax. The document's Markdown goes to Google directly, so you never retype it. The first publish creates the Doc in Curia's Drive and records it in the document's `google_doc` frontmatter. Publishing again updates that same Doc from the current document. That replaces the Doc's whole content, so it is refused when the Doc was edited or got new open comments since the last publish; the refusal says what to do. A new Doc goes to Curia's My Drive and is shared with no one.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "path": "string (absolute document path, e.g. '/projects/board-prep/brief.md')",
+    "title": "string? (the Doc's title. Defaults to the document's frontmatter title, then its file name. On a later publish, renames the Doc.)",
+    "doc_version": "string? (the doc_version a refusal named, after you read the Doc back and folded its changes into the document. The publish then goes through only if the Doc has not changed since.)",
+    "overwrite": "boolean? (replace the Doc even if it changed since the last publish, discarding those changes. Ask the principal first. Default false.)"
+  },
+  "outputs": {
+    "action": "string ('created' or 'updated')",
+    "document_id": "string (Google Doc ID)",
+    "url": "string (Google Doc link)",
+    "path": "string (the published document's path)",
+    "note": "string? (anything the caller should know, e.g. the document changed while publishing)"
+  },
+  "permissions": [],
+  "secrets": [
+    "google_oauth_client_id",
+    "google_oauth_client_secret",
+    "curia_google_email"
+  ],
+  "timeout": 90000,
+  "capabilities": ["workingDocs"]
+}

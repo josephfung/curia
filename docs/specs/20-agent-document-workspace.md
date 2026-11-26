@@ -157,6 +157,33 @@ remove the key, approved or not. The key is matched case-insensitively and any v
 (fail closed); `src/memory/console-only-docs.ts` holds the reader, and code that relies on a
 document being console-owned checks the mark with `isConsoleOnlyMarked`.
 
+**Publishing to Google Docs (#2758).** A document becomes a formatted Google Doc through
+`doc-publish-google` (a standalone tool, `action_risk: low`, reached through discovery rather than
+the auto-pin). The document stays the source of truth; the Doc is a formatted copy:
+
+- The body (never the frontmatter) is uploaded as `text/markdown` with the Google Docs mimeType,
+  so Google's own Markdown import formats it. Reading a Doc back uses the matching Markdown
+  export (`get_doc_as_markdown`), and the text returns to the document through `doc-write`.
+- The first publish records the Doc in frontmatter under `google_doc` (`id`, `url`,
+  `published_at`, `content_hash`; `src/google/published-doc.ts`). A `doc-write` replace that
+  leaves the key out keeps it; `google_doc: null` clears it, so the next publish starts a new Doc.
+- A later publish replaces the recorded Doc's whole content. It overwrites only a Doc whose Drive
+  `appProperties` bind it to this document, and, unless the caller passes `overwrite`, only when
+  a hash of the Doc's own Markdown export still matches the record and no unresolved, undeleted
+  comment was modified since the last publish: a new comment, or a reply or edit on an older one,
+  both advance the comment's own `modifiedTime`. (The file's `modifiedTime` can't serve for the
+  content: measured live, it moves on shares and lags edits, while the export ignores comments and
+  shares and changes at once on any text or style edit.) A refusal names a `doc_version` covering the Doc's current content and its open
+  comments; after reading the Doc back and folding its changes in, a publish with that
+  `doc_version` goes through while neither has changed. Content is read last, just before the
+  write; an edit in the second between them is still overwritten, since a Markdown upload takes
+  no revision precondition. A recorded Doc that is gone or out of reach is never replaced by a new one
+  silently: the record must be cleared first.
+- New Docs go to Curia's My Drive, shared with no one. There is no folder input: a folder another
+  account owns would give that account the Doc outside the sharing tools.
+- Recording the Doc is a write, so publishing passes `doc-write`'s guards: console-only documents,
+  `/shared/` documents the agent does not declare, and the send ledger are refused.
+
 ## 7. Harness injection & auto-pin
 
 The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot

@@ -457,6 +457,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-12T21:15:56.984Z"
     },
+    "google doc publish formatted": {
+      "unstubbed": null,
+      "reason": "New in #2758; not yet run (paid suite). The first run records coverage."
+    },
     "google file share named": {
       "unstubbed": 0,
       "runs": 5,

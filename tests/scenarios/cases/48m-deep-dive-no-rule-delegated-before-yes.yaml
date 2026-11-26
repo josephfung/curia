@@ -136,6 +136,9 @@ tool_stubs:
   get_doc_content:
     - match: {}
       error: Document not found.
+  get_doc_as_markdown:
+    - match: {}
+      error: Document not found.
   # The wrong paths, stubbed so the case tests the choice rather than a refusal.
   email-send:
     - match: {}

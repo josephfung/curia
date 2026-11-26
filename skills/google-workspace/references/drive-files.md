@@ -1,8 +1,38 @@
-# Drive files: move, rename, share, upload, attach, export
+# Drive files: write Docs, move, rename, share, upload, attach, export
 
 How to call the Google Drive tools for the jobs their own descriptions don't
 spell out. The tools come from the upstream workspace-mcp server, so these notes
 live here instead of in their descriptions.
+
+## Write a Google Doc
+
+Google Docs take rich text, not Markdown. `create_doc`, `modify_doc_text`,
+`batch_update_doc` and `find_and_replace_doc` insert text exactly as given, so
+Markdown passed to them shows up as literal `#`, `**` and `- `. Never put
+Markdown syntax in them.
+
+- **A Doc for the principal to read or review:** write it as a Curia document
+  with `doc-write`, then call `doc-publish-google` with its path. The Doc comes
+  out formatted, and the document stays the master copy. To update the Doc,
+  change the document and publish again. If the principal edited or commented
+  on the Doc since, the publish is refused: read the Doc back (below), fold the
+  changes into the document, then publish again with the `doc_version` the
+  refusal names. A new Doc lands in Curia's My Drive; move it into a folder
+  with `update_drive_file`. `doc-publish-google` is not pinned; find it with
+  `tool-registry` if it is not in your tool list.
+- **Throwaway Markdown with no Curia document:** `import_to_google_doc` with
+  `content` and `source_format: "md"`.
+- **A formatted section added to an existing Doc:** `manage_doc_tab` with
+  `action: "populate_from_markdown"`, `replace_existing: false`, and the tab ID
+  from `inspect_doc_structure`. It does not render tables; add one with
+  `create_table_with_data`.
+- **A small fix (a word or a sentence):** `modify_doc_text` or
+  `find_and_replace_doc`, plain text only.
+- **Reading a Doc back into Curia:** `get_doc_as_markdown`, never
+  `get_doc_content` or a plain-text export, which drop the formatting. Write
+  the text back with `doc-write`, keeping the document's frontmatter.
+
+Share the Doc afterwards as below; a new Doc is shared with no one.
 
 ## Move or rename a file
 
