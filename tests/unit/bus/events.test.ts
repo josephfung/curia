@@ -15,6 +15,8 @@ import {
   createDocumentConsoleAction,
   createKgNodesMerged,
   createActivitySummary,
+  createSkillActivated,
+  SKILL_ACTIVATION_BY,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -265,6 +267,29 @@ describe('Event Types', () => {
     expect(event.sourceLayer).toBe('system');
     expect(event.parentEventId).toBe('task-1');
     expect(event.payload).toEqual({ agentId: 'coordinator', conversationId: 'conv-1', taskEventId: 'task-1', summary: 'provided two essay ideas' });
+  });
+
+  it('creates a skill.activated event (#2764)', () => {
+    const event = createSkillActivated({
+      agentId: 'coordinator',
+      skill: 'tasks',
+      by: 'model',
+      taskEventId: 'task-1',
+      conversationId: 'conv-1',
+      parentEventId: 'task-1',
+    });
+    expect(event.type).toBe('skill.activated');
+    expect(event.sourceLayer).toBe('agent');
+    expect(event.parentEventId).toBe('task-1');
+    expect(event.payload).toEqual({
+      agentId: 'coordinator',
+      skill: 'tasks',
+      by: 'model',
+      taskEventId: 'task-1',
+      conversationId: 'conv-1',
+    });
+    expect(SKILL_ACTIVATION_BY).toContain('wake');
+    expect(SKILL_ACTIVATION_BY).toContain('onboarding');
   });
 
   it('type narrows via discriminated union', () => {

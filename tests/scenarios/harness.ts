@@ -480,13 +480,24 @@ export async function createScenarioHarness(
     new Promise((resolve) => {
       const timer = setTimeout(() => {
         rewriteTurns.delete(taskId);
-        resolve({ calls: [], reply: null, error: `Timeout waiting for ${agentId}'s rewrite of a bounced reply (${Math.round(RUN_TIMEOUT_MS / 1000)}s)`, errorKind: 'timeout' });
+        resolve({
+          calls: [],
+          skillActivations: [],
+          reply: null,
+          error: `Timeout waiting for ${agentId}'s rewrite of a bounced reply (${Math.round(RUN_TIMEOUT_MS / 1000)}s)`,
+          errorKind: 'timeout',
+        });
       }, RUN_TIMEOUT_MS);
       rewriteTurns.set(taskId, (reply, relayed, error) => {
         clearTimeout(timer);
         rewriteTurns.delete(taskId);
         if (error !== undefined || !relayed) {
-          resolve({ calls: [], reply, ...(error !== undefined ? { error } : {}) });
+          resolve({
+            calls: [],
+            skillActivations: [],
+            reply,
+            ...(error !== undefined ? { error } : {}),
+          });
           return;
         }
         // The dispatcher relays the reply after this response: it ends delivered or blocked.
@@ -494,7 +505,7 @@ export async function createScenarioHarness(
         const deadline = Date.now() + RUN_TIMEOUT_MS;
         const poll = (): void => {
           if (scope.relayOutcomes > before || Date.now() > deadline) {
-            resolve({ calls: [], reply });
+            resolve({ calls: [], skillActivations: [], reply });
             return;
           }
           setTimeout(poll, 250);
@@ -1472,6 +1483,7 @@ export async function createScenarioHarness(
         refs: Object.fromEntries(seeded.refs),
         clock,
         toolCalls: merged,
+        ...(outcome.skillActivations.length > 0 ? { skillActivations: outcome.skillActivations } : {}),
         reply: outcome.reply,
         ...(outcome.principalNote !== undefined ? { principalNote: outcome.principalNote } : {}),
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),

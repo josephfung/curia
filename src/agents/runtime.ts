@@ -6,7 +6,7 @@ import {
 } from './llm/streaming-turn.js';
 import { NO_SETUP_STEP, readSetupStep, SETUP_GUIDE_AGENT_ID, setupStepLine } from '../setup/setup-guide.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createSkillActivated, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint, type SkillActivationBy } from '../bus/events.js';
 import { holderFromAgentTask, isLanedTurnShape, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
 import {
   HANDOFF_RECOVERY_KEY,
@@ -584,10 +584,17 @@ export class AgentRuntime {
   /**
    * Activate skills for this turn: add each skill's tools to `workingToolDefs` (skipping names
    * already there) and return its instruction blocks for the system prompt. A skill the agent
-   * may not activate is logged with `skipMessage` and skipped.
+   * may not activate is logged with `skipMessage` and skipped. Each success publishes
+   * `skill.activated` with `by` (#2764).
    */
-  private activateSkillsForTurn(skillNames: string[], workingToolDefs: ToolDefinition[], skipMessage: string): string[] {
-    const { executionLayer, agentId, logger } = this.config;
+  private async activateSkillsForTurn(
+    skillNames: string[],
+    workingToolDefs: ToolDefinition[],
+    skipMessage: string,
+    by: SkillActivationBy,
+    ctx: { taskEventId: string; conversationId: string },
+  ): Promise<string[]> {
+    const { executionLayer, agentId, logger, bus } = this.config;
     if (!executionLayer) return [];
     const instructionBlocks: string[] = [];
     for (const skillName of skillNames) {
@@ -607,6 +614,22 @@ export class AgentRuntime {
         { references: resolved.references, assets: resolved.assets },
       );
       if (block) instructionBlocks.push(block);
+      // Telemetry only: a publish failure must not skip the activation (#2764).
+      try {
+        await bus.publish('agent', createSkillActivated({
+          agentId,
+          skill: resolved.skill,
+          by,
+          taskEventId: ctx.taskEventId,
+          conversationId: ctx.conversationId,
+          parentEventId: ctx.taskEventId,
+        }));
+      } catch (err) {
+        logger.error(
+          { err, agentId, skill: resolved.skill, by },
+          'Failed to publish skill.activated event — activation audit gap',
+        );
+      }
     }
     return instructionBlocks;
   }
@@ -1143,7 +1166,13 @@ export class AgentRuntime {
       });
       if (wakeSkills.length > 0) {
         if (!workingToolDefs) workingToolDefs = [];
-        const instructionBlocks = this.activateSkillsForTurn(wakeSkills, workingToolDefs, 'Wake active-skill re-load skipped');
+        const instructionBlocks = await this.activateSkillsForTurn(
+          wakeSkills,
+          workingToolDefs,
+          'Wake active-skill re-load skipped',
+          'wake',
+          { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId },
+        );
         for (const block of instructionBlocks) {
           effectiveSystemPrompt += `\n\n${block}`;
         }
@@ -1186,7 +1215,13 @@ export class AgentRuntime {
       let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME);
       if (!skillOn) {
         if (!workingToolDefs) workingToolDefs = [];
-        const blocks = this.activateSkillsForTurn([ONBOARDING_SKILL_NAME], workingToolDefs, 'Onboarding skill activation skipped');
+        const blocks = await this.activateSkillsForTurn(
+          [ONBOARDING_SKILL_NAME],
+          workingToolDefs,
+          'Onboarding skill activation skipped',
+          'onboarding',
+          { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId },
+        );
         for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
         skillOn = blocks.length > 0;
       }
@@ -2978,6 +3013,22 @@ export class AgentRuntime {
                     },
                     'Activated skill for task turn',
                   );
+                  // Telemetry only: a publish failure must not undo the activation (#2764).
+                  try {
+                    await bus.publish('agent', createSkillActivated({
+                      agentId,
+                      skill: activation.skill,
+                      by: 'model',
+                      taskEventId: taskEvent.id,
+                      conversationId,
+                      parentEventId: taskEvent.id,
+                    }));
+                  } catch (err) {
+                    logger.error(
+                      { err, agentId, skill: activation.skill },
+                      'Failed to publish skill.activated event — activation audit gap',
+                    );
+                  }
                   // Instructions + reference content are now in the turn as system
                   // messages; slim the tool_result to metadata so they aren't injected
                   // a second time via the generic JSON stringify below (#1505).
