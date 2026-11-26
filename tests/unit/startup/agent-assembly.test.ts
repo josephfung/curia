@@ -537,8 +537,9 @@ describe('rendered coordinator system string', () => {
       'You are the coordinator.',
       '## Available Specialists',
       '## Skills',
-      'Spot', // autonomy band label
+      // Date guardrail is stable (#2764); autonomy is per-turn after it.
       DATE_RESOLVE_GUARDRAIL.split('\n')[0]!,
+      'Spot', // autonomy band label
     ];
     let cursor = -1;
     for (const marker of order) {

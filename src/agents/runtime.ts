@@ -70,7 +70,12 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
 import { identityMismatchFromToolResult } from '../skills/_shared/calendar-identity-guard.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
-import { buildBaseSystemPrompt, formatTaskTailBlocks, resolveMaxTurns } from './system-prompt.js';
+import {
+  buildPerTurnSystemPromptSuffix,
+  buildStableSystemPromptPrefix,
+  formatTaskTailBlocks,
+  resolveMaxTurns,
+} from './system-prompt.js';
 import { TurnDateResolveTracker } from './delegate-brief-date-validation.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import {
@@ -1176,15 +1181,19 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Task-independent part of the system string: the preamble (identity, security,
-    // own contact details, Who you serve), YAML body, specialist roster, autonomy
-    // band, date guardrail, time and the turn budget. Shared with the render script and the smoke
-    // harness so they send exactly what production sends (#1966). Rebuilt every
-    // turn so identity / autonomy / principal-identity changes apply without restart.
-    let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
-    // The tool's availability is decided inside, before the note is rendered (#2588).
+    // Stable prefix first (#2764 PR 4): identity, security, contacts, Who you serve,
+    // YAML, roster, skill list, date guardrail, pinned context. Pre-activated skill
+    // bodies append next; autonomy / verifications / reach / time / turn budget
+    // follow so the provider cache can reuse the prefix across turns. Shared with
+    // the render script and smoke harness (#1966).
+    const promptNow = new Date();
+    let effectiveSystemPrompt = await buildStableSystemPromptPrefix(this.config, {
+      now: promptNow,
+      logger,
+    });
+    // Concurrent-turn note is appended after the per-turn suffix (below) so it
+    // does not sit inside the cached prefix (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
-    if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
 
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
@@ -1357,6 +1366,13 @@ export class AgentRuntime {
         logger.warn({ agentId }, 'Onboarding turn block left out: the onboarding skill could not be activated');
       }
     }
+
+    // Per-turn suffix after pre-activated skill bodies (#2764 PR 4).
+    effectiveSystemPrompt += await buildPerTurnSystemPromptSuffix(this.config, {
+      now: promptNow,
+      logger,
+    });
+    if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
 
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     let resumableNudgeCtx: { resumable: ResumableProgressBlock; circuit: ResumableCircuitState } | null = null;

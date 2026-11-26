@@ -8,20 +8,19 @@
 // differently from the runtime. Anything that needs "the prompt production sends"
 // must call these functions, not rebuild the string.
 //
-// Two pieces live here:
-//   - buildBaseSystemPrompt(): everything that does not depend on the task — the
-//     preamble (identity, security, own contact details, Who you serve), the YAML
-//     body, the specialist roster, the autonomy band, the date guardrail, the
-//     time block and the turn budget. For an ordinary principal turn this is the whole
-//     system string.
-//   - formatTaskTailBlocks(): the intent anchor and the scheduler fence, which
-//     depend only on the task event. They go last.
+// Pieces live here (#2764 PR 4 — stable prefix for provider cache):
+//   - buildStableSystemPromptPrefix(): identity, security, contacts, Who you serve,
+//     YAML, roster, skill list, date guardrail, pinned context. Changes rarely.
+//   - buildPerTurnSystemPromptSuffix(): autonomy, live verifications, reach, time,
+//     turn budget. Changes every turn; kept after the stable prefix (and after
+//     pre-activated skill bodies the runtime inserts between the two).
+//   - buildBaseSystemPrompt(): stable + per-turn, for render scripts / tests that
+//     want the full task-independent string in one call.
+//   - formatTaskTailBlocks(): intent anchor and scheduler fence (task-dependent; last).
 //
-// What sits between the two and is NOT here: the task-bound harness blocks (wake
-// re-load of active skills, resumable guidance, plan harness). Those read and
-// write the task row and mutate the per-turn tool list, so they stay inline in
-// runtime.ts. They only apply to scheduler wakes of a bound task, never to a
-// principal chat turn.
+// What sits between stable and per-turn in the runtime (not here): pre-activated
+// skill bodies. Task-bound harness blocks (resumable guidance, plan) stay inline
+// in runtime.ts after the per-turn suffix.
 
 import type { Logger } from '../logger.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -107,43 +106,37 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
   return errorBudget?.maxTurns ?? DEFAULT_ERROR_BUDGET.maxTurns;
 }
 
-/**
- * Build the task-independent part of the per-turn system string.
- *
- * Order (do not change without updating the tests that pin it):
- *   identity → security → ## Your Contact Details → ## Who you serve (with
- *   ### Principal Contact Details) → ## Reaching the principal (send-capable
- *   agents only) → YAML body → ## Available Specialists →
- *   ## Pinned context → autonomy → live sign-in verifications (coordinator, ceo-inbox) → date guardrail
- *   (coordinator) → time → turn budget
- *
- * Specialists get no identity or security block, so theirs starts at
- * ## Your Contact Details.
- *
- * Every block is rebuilt per call, so identity, autonomy and principal-identity
- * changes take effect on the next turn without a restart. By default a failure
- * loading one block is logged and the block omitted — it never aborts a live turn.
- * `onBlockError: 'throw'` makes it fatal instead, for renders (red-team, tests) where
- * a prompt missing a block would silently test less than production sends.
- */
-export async function buildBaseSystemPrompt(
-  sources: SystemPromptSources,
-  opts: { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' },
-): Promise<string> {
-  const { agentId, officeIdentityService, autonomyService } = sources;
-  const { now, logger } = opts;
-  const failBlock = (block: string, err: unknown): void => {
+type PromptBuildOpts = { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' };
+
+function makeFailBlock(
+  agentId: string,
+  opts: PromptBuildOpts,
+): (block: string, err: unknown) => void {
+  return (block, err) => {
     if (opts.onBlockError === 'throw') {
       throw new Error(`System prompt block '${block}' failed for agent '${agentId}'`, { cause: err });
     }
   };
+}
 
-  // Build the fixed preamble — constraints first, most salient. Identity then
-  // security are PREPENDED to the body (not substituted in-place), so the YAML
-  // carries no ${...} placeholders. Every agent gets the identity block (#2143): the
-  // coordinator as who it is, every other agent in writes-as mode, since its own YAML
-  // already says who it is (the same coordinator test the date guardrail uses). Security
-  // stays coordinator-only (see agent-assembly.ts).
+/**
+ * Stable system-prompt prefix (#2764): everything that should survive across
+ * turns for provider prompt cache. Order (tests pin it):
+ *   identity → security → ## Your Contact Details → ## Who you serve → YAML body
+ *   → ## Available Specialists → ## Skills → date guardrail (coordinator)
+ *   → ## Pinned context
+ *
+ * Specialists get no identity or security block, so theirs starts at
+ * ## Your Contact Details.
+ */
+export async function buildStableSystemPromptPrefix(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const { agentId, officeIdentityService } = sources;
+  const { logger } = opts;
+  const failBlock = makeFailBlock(agentId, opts);
+
   let prompt = sources.systemPrompt;
   const preambleParts: string[] = [];
   if (officeIdentityService) {
@@ -152,51 +145,27 @@ export async function buildBaseSystemPrompt(
         ? officeIdentityService.compileSystemPromptBlock()
         : officeIdentityService.compileWritesAsBlock());
     } catch (err) {
-      // A compile failure must not abort the task. Log at error (operator signal)
-      // and proceed without the identity block rather than emitting a literal
-      // placeholder or a structurally broken block.
       failBlock('identity', err);
       logger.error({ err, agentId }, 'Failed to compile identity block — identity preamble omitted this turn');
     }
   }
-  // Security context is a platform guarantee, not opt-in text. When provided it is
-  // always prepended directly after identity.
   if (sources.securityContextBlock) {
     preambleParts.push(sources.securityContextBlock);
   }
 
-  // Who the agent is and who it serves come next, ahead of the YAML body, so the
-  // body's references to them ("Your Contact Details", "the principal") point up
-  // at facts already stated. They change only when an identity is edited, so they
-  // sit in the prefix shared across tasks rather than after the per-minute clock,
-  // where they were cached only within one task's tool loop (trim plan PR 11).
-  //
-  // Curia's own contact details — a concrete "acting as" identity so the LLM doesn't
-  // guess or fall back to the principal's details when a tool needs an account.
-  // Injected into ALL agents (#387). Rendered when there is ANY identity to show —
-  // gating on channel accounts alone would drop the contact ID for a deployment with
-  // no email/phone (codeant review on #974).
   const { channelAccounts } = sources;
   const ownPhoneLines = formatOwnPhoneLines(channelAccounts?.signal, channelAccounts?.sms);
   if (channelAccounts?.email || ownPhoneLines.length > 0 || sources.agentContactId) {
     const lines: string[] = ['## Your Contact Details', ...OWN_CONTACT_DETAILS_INTRO, ''];
     if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
     lines.push(...ownPhoneLines);
-    // The agent's own contact ID — coordinator-only in practice.
     if (sources.agentContactId) lines.push(`- Contact ID: ${sources.agentContactId}`);
     preambleParts.push(lines.join('\n'));
   }
 
-  // The principal and their verified contact details. The list is closed: an address
-  // not rendered here is not the principal's (#1950). Injected into ALL agents. With
-  // no identities the whole section stays omitted — do not render a complete-set
-  // claim over nothing.
-  const { principalIdentities } = sources;
-  // The profile (name, pronouns, title) renders even with no identities: the
-  // pronoun rule matters whatever channels are set up (#2226).
   {
     const block = formatWhoYouServeBlock(
-      principalIdentities ?? [],
+      sources.principalIdentities ?? [],
       sources.principalPrimaryEmail?.current ?? null,
       sources.principalProfile?.current ?? null,
     );
@@ -207,30 +176,20 @@ export async function buildBaseSystemPrompt(
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;
   }
 
-  // Append the specialist roster as a fixed ## Available Specialists block — after
-  // the body, before the per-turn autonomy/date blocks (not strictly last).
-  // Coordinator-only in practice; gated on presence so specialists that don't
-  // route work never see it.
-  // @TODO: the roster comes from AgentRegistry.specialistSummary() over operator-authored
-  // agent manifests — trusted. If specialist names or roster lines (delegate_when,
-  // description) ever become user- or
-  // API-editable, strip newlines here (as the ### Principal Contact Details block does).
   if (sources.availableSpecialists) {
     prompt += '\n\n## Available Specialists\n' + sources.availableSpecialists;
   }
 
-  // On-demand skill list (#2764 / ADR-070): name + description only; bodies load on activation.
-  // After the roster so routing context precedes capability discovery.
   if (sources.skillList && sources.skillList.length > 0) {
     const skillsBlock = formatSkillsListBlock(sources.skillList);
     if (skillsBlock) prompt += '\n\n' + skillsBlock;
   }
 
-  // Declared `/shared/` documents and config keys (#2338), read fresh every turn so a
-  // console edit applies on the next turn. After the body, which refers to them, and
-  // ahead of the per-turn blocks: they change rarely, so they stay in the cached
-  // prefix. renderPinnedContextBlock never throws — a failed read renders as
-  // unavailable inside the block.
+  // Date guardrail is static text — keep it in the cached prefix (#2764 PR 4).
+  if (agentId === 'coordinator') {
+    prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
+  }
+
   if (sources.pinnedContext && sources.pinnedContext.length > 0) {
     const block = await renderPinnedContextBlock(
       sources.pinnedContext,
@@ -240,8 +199,23 @@ export async function buildBaseSystemPrompt(
     if (block) prompt += '\n\n' + block;
   }
 
-  // Load the current autonomy config and append its behavioral block. Per-task (not
-  // startup) so a principal score change mid-session takes effect on the next action.
+  return prompt;
+}
+
+/**
+ * Per-turn suffix (#2764): blocks that change often enough to bust the prompt
+ * cache if placed earlier. Order: autonomy → verifications → reach → time →
+ * turn budget. The runtime appends this after pre-activated skill bodies.
+ */
+export async function buildPerTurnSystemPromptSuffix(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const { agentId, autonomyService } = sources;
+  const { now, logger } = opts;
+  const failBlock = makeFailBlock(agentId, opts);
+  let prompt = '';
+
   if (autonomyService) {
     try {
       const autonomyConfig = await autonomyService.getConfig();
@@ -249,18 +223,11 @@ export async function buildBaseSystemPrompt(
         prompt += '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
       }
     } catch (err) {
-      // An unexpected DB error loading the autonomy config should not abort the task.
-      // Log at error level (operator signal) and proceed without the block.
       failBlock('autonomy', err);
       logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
     }
   }
 
-  // Live sign-in verifications (#2017): pending or recently closed, so a turn the principal
-  // did not start (their code reply, a task wake) knows what is waiting. Coordinator and
-  // ceo-inbox only, and absent when nothing is active. Not part of the always-on prompt
-  // budget — this is the injection rung of ADR-046. A failed lookup omits the block; it
-  // never fails the turn.
   if (sources.verification && (agentId === 'coordinator' || agentId === 'ceo-inbox')) {
     try {
       const alive = sources.browserSessionAlive ?? (() => false);
@@ -282,16 +249,6 @@ export async function buildBaseSystemPrompt(
     }
   }
 
-  // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). This module is
-  // the sole ### Date & time instruction for the coordinator — do not leave a
-  // pointer stub in agents/coordinator.yaml (that would leak repo paths into the
-  // model-visible prompt and duplicate the heading).
-  if (agentId === 'coordinator') {
-    prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
-  }
-
-  // Reach order changes when a browser opens or closes the chat, so it stays
-  // out of the cached prefix (#2341). Standing preferences are not parsed here.
   if (sources.principalReach) {
     try {
       const reach = await sources.principalReach();
@@ -303,27 +260,32 @@ export async function buildBaseSystemPrompt(
     }
   }
 
-  // Current date/time — refreshed every turn so the agent always has the correct
-  // date, even across midnight or DST transitions. Trim the timezone to guard
-  // against whitespace in env vars — Luxon treats "America/Toronto " as invalid.
   const timezone = sources.timezone?.trim();
   if (timezone) {
     try {
       prompt += '\n\n' + formatTimeContextBlock(timezone, now);
     } catch (err) {
-      // An invalid timezone produces "Invalid DateTime" strings, which is worse than
-      // omitting the block because it corrupts the agent's date reasoning.
       failBlock('time', err);
       logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
     }
   }
 
-  // Turn budget — tells the model the exact number of turns it has so it can plan
-  // tool use from turn 1. Injected for ALL agents. Comes before the task-bound
-  // blocks and the intent anchor so the anchor stays close to the end.
   prompt += '\n\n' + formatTurnBudgetBlock(resolveMaxTurns(sources.errorBudget));
-
   return prompt;
+}
+
+/**
+ * Full task-independent system string (stable prefix + per-turn suffix).
+ * Prefer the split helpers in the runtime so pre-activated skill bodies can
+ * sit between them for cache (#2764).
+ */
+export async function buildBaseSystemPrompt(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const stable = await buildStableSystemPromptPrefix(sources, opts);
+  const perTurn = await buildPerTurnSystemPromptSuffix(sources, opts);
+  return stable + perTurn;
 }
 
 /**
