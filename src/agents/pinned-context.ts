@@ -217,7 +217,7 @@ function fenceFor(text: string): string {
   return '`'.repeat(Math.max(3, longest + 1));
 }
 
-function fenced(text: string): string {
+export function fenced(text: string): string {
   const fence = fenceFor(text);
   return `${fence}\n${text.replace(/\n+$/, '')}\n${fence}`;
 }

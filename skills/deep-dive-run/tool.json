@@ -1,0 +1,16 @@
+{
+  "name": "deep-dive-run",
+  "description": "Run the deep dive again: re-read about 90 days of the principal's mail and calendar and redraft working rules, time and priorities, and writing voice for review. Runs in the background and can take a while. Use only when the principal asks for it.",
+  "version": "0.1.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "inputs": {},
+  "outputs": {
+    "started": "boolean (true: the re-run started; the drafts come back for review when it finishes)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["deepDiveService"],
+  "allowed_callers": ["coordinator"]
+}

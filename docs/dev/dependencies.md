@@ -77,8 +77,11 @@ same change.
 
 `.github/dependabot.yml` configures weekly Dependabot runs across four ecosystems:
 
-- **npm** — production dependencies get individual PRs; dev dependencies are
-  grouped into a single PR to reduce noise.
+- **npm** — minor and patch bumps arrive as two grouped PRs a week, one for
+  production dependencies and one for dev dependencies; majors get individual PRs.
+  `patchright` stays out of the production group, because every bump of it is held
+  for a human look. Grouping keeps a Dependabot batch to a few CI runs: `main`
+  requires a PR to be up to date, so each merge re-runs CI on every other open PR.
 - **GitHub Actions** — action versions (`checkout`, `setup-node`, etc.) are kept
   fresh and grouped.
 - **Docker** — the root `Dockerfile` base image (`node:26-slim`) and

@@ -7,7 +7,7 @@
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
 import type { Logger } from '../logger.js';
-import { ONBOARDING_CREATED_BY } from './constants.js';
+import { ONBOARDING_CREATED_BY, REVIEW_DOCUMENT_TOPICS, REVIEW_NEXT_STEP_TOPIC, REVIEW_SESSION } from './constants.js';
 
 const TOPIC_TAG_PREFIX = 'onboarding:topic:';
 const SESSION_TAG_PREFIX = 'onboarding:session:';
@@ -64,4 +64,22 @@ export function topicSubtasks(children: readonly TaskRow[], logger?: Pick<Logger
     out.push({ task, topicId, sessionId: tagValue(task.tags, SESSION_TAG_PREFIX) });
   }
   return out;
+}
+
+/**
+ * Whether the onboarding task's Review document topics are still to come: none opened, or one open.
+ * A playbook seeded before the document topics existed (walk-drafts) is judged on its other Review
+ * topics, as the onboarding-progress tool completes a standalone review task on them.
+ */
+export async function reviewStillAhead(
+  taskRepo: Pick<TaskRepo, 'listTasks'>,
+  onboardingTaskId: string,
+  logger?: Pick<Logger, 'warn'>,
+): Promise<boolean> {
+  const review = topicSubtasks(await listChildren(taskRepo, onboardingTaskId), logger).filter(
+    (t) => t.sessionId === REVIEW_SESSION,
+  );
+  let deciding = review.filter((t) => (REVIEW_DOCUMENT_TOPICS as readonly string[]).includes(t.topicId));
+  if (deciding.length === 0) deciding = review.filter((t) => t.topicId !== REVIEW_NEXT_STEP_TOPIC);
+  return deciding.length === 0 || deciding.some((t) => isOpenTask(t.task));
 }

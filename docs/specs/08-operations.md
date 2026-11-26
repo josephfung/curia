@@ -54,41 +54,14 @@ The merged config is validated against a TypeScript-derived JSON Schema at start
 
 Setting up a new Curia deployment requires configuring channels, skills, and their secrets (API keys, OAuth tokens, Nylas credentials).
 
-### `curia setup` CLI
+There is no `curia setup` CLI; an earlier draft of this spec described one. A new install is
+set up in two phases, specified in [spec 18 — Onboarding](18-onboarding.md):
 
-A guided CLI command walks through each configured channel and skill, prompting for credentials:
-
-```
-$ curia setup
-Curia Setup
-===========
-
-Coordinator persona:
-  Display name [Curia]: Alex
-  Tone [professional]: professional but warm
-
-Setting up email channel (via Nylas)...
-  Nylas API key: ********
-  Nylas grant ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-  Curia's email address: curia@yourdomain.com
-  Testing connection... ✓ Connected (14 unread messages)
-  Stored in the vault as channel.email.nylas_api_key and channel.email.curia.nylas_grant_id.
-
-Setting up Google Calendar skill...
-  This requires OAuth. Opening browser...
-  ✓ Authorized. Token stored as GOOGLE_OAUTH_REFRESH_TOKEN.
-
-Summary:
-  ✓ Email channel ready
-  ✗ Signal channel not configured (skipped)
-  ✓ Google Calendar skill ready
-
-Run 'docker compose up' to start Curia.
-```
-
-**How it works:** The CLI reads all channel adapter configs and skill manifests, identifies which secrets are required, checks which are already set, and prompts for the missing ones. It validates connectivity for each service before storing the secret. Adding a new integration = declaring `secrets` in a skill manifest, and `curia setup` automatically picks it up.
-
-**Future:** A web-based onboarding wizard (via the HTTP API dashboard) with OAuth redirect flows and a visual status page.
+- **Setup** (the operator): `install.sh` (or `pnpm run setup` from source) brings up the stack,
+  then the console's Setup page (`/setup`) takes the principal, Curia's identity, channels and
+  business apps, stores credentials in the vault, and ends at Start onboarding. The
+  `setup-status` skill and `GET /api/setup/checklist` report what is left.
+- **Onboarding** (the principal): Curia invites the principal to a first conversation.
 
 ---
 
@@ -116,7 +89,9 @@ toolchain on the host — Docker (with the Compose plugin) and `curl` are the on
   source-free and unified with dev/prod.
 
 Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign**
-(keyless, via GitHub OIDC — no long-lived signing key). Tagging:
+(keyless, via GitHub OIDC — no long-lived signing key). Each platform builds on a
+runner of its own architecture and is pushed untagged; the tags are written once every
+platform of the image is in, so a tag never names an image missing one. Tagging:
 
 - **Push to `main`** → `:edge` on both images (for dogfood use).
 - **Release published** → app gets `vX.Y.Z`, `vX.Y`, and `latest`; the DB image gets
@@ -182,7 +157,12 @@ interactive `read` prompts, so `curl … | bash` does not work). The script:
    (`DB_PASSWORD`, `SECRET_ENCRYPTION_KEY`; an existing real DB password or encryption
    key is preserved, never rotated). `api_token` and the web-app bootstrap secret are
    generated too but passed only as transient env vars — never written to `.env`.
-4. Prompts for an Anthropic API key (format-validated, 3 retries; passed transiently).
+4. Asks which **model provider** to use: Anthropic (the default), OpenRouter or AWS
+   Bedrock (#2749). Prompts for its credentials (format-validated, 3 retries; passed
+   transiently) and, for OpenRouter or Bedrock, the tier and judge models, which it
+   writes to `config/local.yaml` (mounted into the container). Bedrock's region goes
+   in `.env`, and a Bedrock install leaves voice off. Vault-seed checks the provider's
+   keys landed (`SEED_VAULT_REQUIRE`).
 5. Prompts for **deployment topology**: local/eval (HTTP on `:3000`), public domain +
    HTTPS (Caddy + Let's Encrypt), or public IP / own upstream proxy. The HTTPS choice
    requires a `DOMAIN` and sets `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`

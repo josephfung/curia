@@ -1,6 +1,6 @@
 // watcher.ts — the onboarding watcher: a re-wake when no greeting was recorded, capped greeting
-// follow-ups, one idle nudge, and the expired-invitation notice (#2360). A tick with no open
-// onboarding task is one cheap query.
+// follow-ups, one idle nudge, and the expired-invitation notice (#2360); it also resumes a stalled
+// deep dive (#2362). A tick with no open onboarding task is two cheap reads.
 
 import { TaskTerminalStateError, type TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
@@ -16,6 +16,7 @@ import {
 import { decideNext, type WatcherFacts, type WatcherInvitation } from './followup-policy.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import type { OperatorNotifier } from './notify-operator.js';
+import type { DeepDiveService } from './deep-dive/service.js';
 import {
   findOpenOnboardingTask,
   type OnboardingState,
@@ -43,6 +44,8 @@ export interface OnboardingWatcherOptions {
    */
   nextSessionBooked?: (taskId: string, now: Date) => Promise<boolean>;
   intervalMinutes?: number;
+  /** The deep dive (#2362): each tick resumes a stalled run, with or without an onboarding task. */
+  deepDive?: Pick<DeepDiveService, 'resumeIfStalled'>;
 }
 
 /** Wake note when no greeting was recorded a gap after it was due. */
@@ -76,6 +79,14 @@ export class OnboardingWatcher {
 
   /** One sweep. Errors are logged, never thrown. */
   async tick(now: Date): Promise<void> {
+    // Before the no-open-task return: a deep dive re-run after onboarding still needs resuming.
+    if (this.o.deepDive) {
+      try {
+        await this.o.deepDive.resumeIfStalled(now);
+      } catch (err) {
+        this.o.logger.error({ err }, 'onboarding: deep-dive stall check failed');
+      }
+    }
     try {
       const task = await findOpenOnboardingTask(this.o.taskRepo);
       if (!task) return;

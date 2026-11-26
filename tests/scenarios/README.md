@@ -714,11 +714,11 @@ pnpm scenarios --tags finesse --model deepseek/deepseek-v4.1-flash
 
 **Versions.** It is a benchmark, not a gate: product fixes are measured against a recorded
 baseline, so the cases and their criteria hold still between baselines. The current version
-is v0.1, with its baseline in
+is v1: the cases as of the judge choice, judged by `anthropic/claude-opus-5.5`. Its baseline,
+v0.1 (gpt-4o) and the grading round that picked the judge are in
 [docs/wip/2026-11-21-finesse-benchmark-baseline.md](../../docs/wip/2026-11-21-finesse-benchmark-baseline.md).
-It is provisional until the finesse judge is chosen, which makes it v1. After that, a change to
-a case's setup or criteria is a new version with a new baseline. `pnpm rejudge --from-cases`
-only re-scores runs whose setup is unchanged, and the results' setup hashes show which runs those are.
+A change to a case's setup or criteria, or to the judge, is a new version with a new
+baseline. `pnpm rejudge --from-cases` only re-scores runs whose setup is unchanged, and the results' setup hashes show which runs those are.
 
 All of them run under the `finesse` identity fixture (the principal's standing preferences, in
 a neutral tone that does not coach the behavior under test), so they run as a group, like the
@@ -762,8 +762,8 @@ perfectly worded message that should never have been sent shows as a decision fa
 (`judge-models.ts`), picks its judge; every other case keeps the suite default
 (`JUDGE_MODEL`, gpt-4o). Each judge is created at boot, so a model with no priced entry in the
 model registry fails the run before any paid call. Results list the cases off the default
-under `caseJudges`. The finesse judge is chosen by agreement with human grades on the v0.1
-baseline (#2556); until then the tag has no entry.
+under `caseJudges`. The `finesse` tag uses `anthropic/claude-opus-5.5`, chosen by agreement
+with human grades on the v0.1 baseline (#2556).
 
 **Human grades.** `pnpm grading` measures a judge against people, not against another judge:
 

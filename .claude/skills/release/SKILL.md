@@ -250,6 +250,10 @@ gh api "users/<owner>/packages/container/curia/versions?per_page=10" \
   --jq '.[] | "\(.updated_at)\t\(.metadata.container.tags | join(", "))"'
 # expect the new release to carry: vX.Y, vX.Y.Z, latest
 # `edge` should sit on main's own build, not on the release
+# (untagged rows are expected: each platform is pushed by digest, then joined)
+
+docker buildx imagetools inspect ghcr.io/<owner>/curia:vX.Y.Z
+# expect both linux/amd64 and linux/arm64 under Manifests
 ```
 
 Then close out the release:

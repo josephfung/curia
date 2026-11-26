@@ -7,6 +7,7 @@ import {
   inboundTurnGuidance,
   looksLikeForward,
   looksLikeMakeRoom,
+  looksLikeRunningLate,
   looksLikeSpotCheckReply,
   ownEmailSubject,
   ownTextBoundaryUnknown,
@@ -244,6 +245,209 @@ describe('make-room (#2227)', () => {
 
   it('is never added on a non-principal turn', () => {
     expect(inboundTurnGuidance(facts({ liveTurn: false, makeRoom: true }))).not.toContain('make-room');
+  });
+});
+
+describe('running-late (#2612)', () => {
+  it('replaces the reply-shaped note on a live principal turn with no outbound block', () => {
+    expect(inboundTurnGuidance(facts({ runningLate: true }))).toEqual(['running-late']);
+  });
+
+  it('is added beside a verdict, and follows an outbound block instead of replacing it', () => {
+    // A verdict ("1 bad, ten minutes behind") still scores, and the lateness still needs acting on.
+    expect(inboundTurnGuidance(facts({ runningLate: true, spotCheckReply: true }))).toEqual([
+      'running-late',
+      'spot-check-reply',
+    ]);
+    // A late reply to something Curia sent is the outbound block's to place.
+    expect(inboundTurnGuidance(facts({ runningLate: true, injectedEntryMetadata: [null] }))).toEqual([
+      'outbound-context',
+    ]);
+  });
+
+  it("is never added on a CC'd email, where the reply-shaped note stays", () => {
+    const keys = inboundTurnGuidance(facts({ channelId: 'email', curiaCc: true, runningLate: true }));
+    expect(keys).not.toContain('running-late');
+    expect(keys).toContain('principal-reply-shaped');
+  });
+
+  it('is never added on a non-principal turn', () => {
+    expect(inboundTurnGuidance(facts({ liveTurn: false, runningLate: true }))).not.toContain('running-late');
+  });
+
+  it('leaves genuinely reply-shaped messages on the reply-shaped note', () => {
+    for (const text of ['Yes', 'The second one', 'Go ahead', 'Sounds good.']) {
+      expect(looksLikeRunningLate(text)).toBe(false);
+      expect(inboundTurnGuidance(facts({ runningLate: looksLikeRunningLate(text) })))
+        .toEqual(['principal-reply-shaped']);
+    }
+  });
+});
+
+describe('looksLikeRunningLate', () => {
+  it.each([
+    "I'm running about ten minutes behind",
+    "I'm running a little late",
+    "I'm already late",
+    'Running late, sorry.',
+    'Sorry — running late.',
+    'Still running late, sorry',
+    'Will be 10 min late',
+    'Gonna be a few minutes behind',
+    'running late — start without me',
+    "I'm about ten minutes behind",
+    "I'm 15 mins late",
+    "I'll be an hour late",
+    "I'll be five minutes late",
+    'Sorry, 10 minutes behind',
+    "we're going to be late",
+    'I am going to be late',
+    'We are going to be late',
+    'I’m running late',
+    'I am running behind',
+    "I'm behind schedule",
+    "we're behind schedule",
+    'Behind schedule, sorry',
+    'Running behind schedule',
+    'Stuck in traffic — go ahead without me',
+    "I'm stuck in traffic",
+    'held up on my way',
+    'I am tied up in a meeting for another 20 minutes',
+    // The dispatcher passes an email's own Subject with the body.
+    'Subject: Running late\n\nThanks',
+  ])('is true for %s', (text) => {
+    expect(looksLikeRunningLate(text)).toBe(true);
+  });
+
+  it.each([
+    'Yes',
+    'The second one',
+    'Go ahead',
+    "I'm not running late",
+    'I’m never late',
+    'Not behind schedule — just slow',
+    'We were late to the dinner',
+    'We were 10 minutes behind schedule',
+    // Someone else's delay, or a thing that is late: not the principal's own status.
+    'The report is running late',
+    'The board deck is behind schedule, I will need tonight',
+    'Dana is stuck in traffic, start without her',
+    'The plumber is stuck in traffic',
+    "I'm behind on the deck for tomorrow",
+    'Can you run the report late?',
+    'Let me know if the build is delayed',
+    "I'm on my way",
+  ])('is false for %s', (text) => {
+    expect(looksLikeRunningLate(text)).toBe(false);
+  });
+
+  it('ignores lateness quoted from someone else', () => {
+    expect(looksLikeRunningLate("> I'm running late\nNo, I'm on time.")).toBe(false);
+  });
+
+  it('still matches a statement outside a denial, whichever punctuation ends it', () => {
+    expect(looksLikeRunningLate("I'm not sure what you mean. Running late, sorry")).toBe(true);
+    expect(looksLikeRunningLate("I'm not sure what's going on — running late, sorry")).toBe(true);
+  });
+
+  it('treats an ASCII hyphen as a clause break only when it is spaced', () => {
+    expect(looksLikeRunningLate("I'm not sure what's going on - running late, sorry")).toBe(true);
+    expect(looksLikeRunningLate('- running late, start without me')).toBe(true);
+    // In a word or a range the hyphen opens no clause.
+    expect(looksLikeRunningLate('The flight is 30-45 minutes late')).toBe(false);
+    expect(looksLikeRunningLate('The check-in is 10-15 minutes behind')).toBe(false);
+  });
+
+  it('does not read the end of a name as a first-person subject', () => {
+    expect(looksLikeRunningLate('Jim stuck in traffic, start without him')).toBe(false);
+    expect(looksLikeRunningLate('Slim held up on my way in')).toBe(false);
+    expect(looksLikeRunningLate("I'm stuck in traffic")).toBe(true);
+    expect(looksLikeRunningLate('im stuck in traffic')).toBe(true);
+  });
+
+  it('does not take reported or quoted lateness as the principal\'s', () => {
+    expect(looksLikeRunningLate('Dana said "I\'m running late"')).toBe(false);
+    expect(looksLikeRunningLate('Dana said “running late, sorry”')).toBe(false);
+    expect(looksLikeRunningLate("Dana said I'm running late")).toBe(false);
+    expect(looksLikeRunningLate("She told me she's late. Running late, sorry")).toBe(true);
+    expect(looksLikeRunningLate("I'm running late")).toBe(true);
+  });
+
+  it('keeps a third-party subject across a parenthetical', () => {
+    expect(looksLikeRunningLate('Dana is, unfortunately, running late')).toBe(false);
+    expect(looksLikeRunningLate('Dana was - sadly - running behind')).toBe(false);
+    expect(looksLikeRunningLate('Running late, sorry')).toBe(true);
+    expect(looksLikeRunningLate('Sorry, running late')).toBe(true);
+  });
+
+  it('does not take unquoted direct speech after a reporting verb as the principal\'s', () => {
+    expect(looksLikeRunningLate('Dana texted, running late, start without her')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, I'm running late")).toBe(false);
+    expect(looksLikeRunningLate('Sam wrote — stuck in traffic')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, 'I'm running late'")).toBe(false);
+    expect(looksLikeRunningLate('Dana told me: running late')).toBe(false);
+    // Single-quoted reported speech, straight and curly, with an apostrophe inside the quote.
+    expect(looksLikeRunningLate("Dana said, ‘I'm running late.’")).toBe(false);
+    expect(looksLikeRunningLate('Dana said, ‘I’m running late.’')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, 'I'm running late.'")).toBe(false);
+    expect(looksLikeRunningLate("Sam wrote: 'stuck in traffic'")).toBe(false);
+    expect(looksLikeRunningLate("Dana's flight is delayed. I'm running late")).toBe(true);
+    expect(looksLikeRunningLate("Don't wait, I'm running late")).toBe(true);
+    expect(looksLikeRunningLate("She told me she's late. Running late, sorry")).toBe(true);
+  });
+
+  it('keeps a third-party subject when the copula is contracted', () => {
+    expect(looksLikeRunningLate("She's, unfortunately, running late")).toBe(false);
+    expect(looksLikeRunningLate("They're - sadly - running behind")).toBe(false);
+    expect(looksLikeRunningLate("Dana's — sadly — running behind")).toBe(false);
+    expect(looksLikeRunningLate("He'll be, sadly, 10 minutes late")).toBe(false);
+    expect(looksLikeRunningLate("I'm, sadly, running late")).toBe(true);
+    expect(looksLikeRunningLate("We're sorry, running late")).toBe(true);
+  });
+
+  it('does not let a multi-word refusal swallow the negation of the next line', () => {
+    expect(looksLikeMakeRoom("I do\nnot want to make room")).toBe(false);
+    expect(looksLikeMakeRoom('do\nnot. I can make room')).toBe(true);
+    expect(looksLikeMakeRoom('Please do\nnot move my meetings')).toBe(false);
+    expect(looksLikeRunningLate("I do\nnot mean I'm late")).toBe(false);
+  });
+
+  it('scans long whitespace runs in linear time', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate(' '.repeat(100_000))).toBe(false);
+    expect(looksLikeRunningLate(`x${'\n '.repeat(50_000)}`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('scans long filler runs in linear time, across lines or on one', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate('about\n'.repeat(16_000))).toBe(false);
+    expect(looksLikeRunningLate(`${'so '.repeat(30_000)}x`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+    // Filler on one line still reads.
+    expect(looksLikeRunningLate("I'm still running about ten minutes behind")).toBe(true);
+    expect(looksLikeRunningLate('Really very sorry, still running late')).toBe(true);
+  });
+
+  it('scans a long clause without a break in linear time', () => {
+    const text = `not ${"I'm late ".repeat(8000)}`;
+    const start = Date.now();
+    expect(looksLikeRunningLate(text)).toBe(false);
+    expect(looksLikeMakeRoom(`don't ${'make room '.repeat(8000)}`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('scans many unclosed quote openers on one line in linear time', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate('x ' + "'a ".repeat(33_000))).toBe(false);
+    expect(looksLikeRunningLate('x ' + '“a '.repeat(33_000))).toBe(false);
+    expect(looksLikeRunningLate('x ' + "‘a ".repeat(33_000))).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('keeps a refusal ahead of a hyphenated word in the same clause', () => {
+    expect(looksLikeMakeRoom("I won't cancel the check-in to make room")).toBe(false);
+    expect(looksLikeMakeRoom("I won't move the follow-up, I can make room")).toBe(true);
   });
 });
 

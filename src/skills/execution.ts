@@ -437,6 +437,8 @@ export class ExecutionLayer {
   /** Onboarding (#2360) — injected post-construction via setOnboardingService() because it
    *  depends on registryService, which is built after the ExecutionLayer. */
   private onboardingService?: import('../onboarding/onboarding-service.js').OnboardingService;
+  /** Deep dive (#2362) — injected post-construction via setDeepDiveService(), built with onboarding. */
+  private deepDiveService?: Pick<import('../onboarding/deep-dive/service.js').DeepDiveService, 'startOnce'>;
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
@@ -684,6 +686,7 @@ export class ExecutionLayer {
       executiveProfileService: this.executiveProfileService,
       officeIdentityService: this.officeIdentityService,
       onboardingService: this.onboardingService,
+      deepDiveService: this.deepDiveService,
       actionLogRepo: this.actionLogRepo,
       approvalDelivery: this.approvalDelivery,
       auditLogRepo: this.auditLogRepo,
@@ -925,6 +928,11 @@ export class ExecutionLayer {
    */
   setOnboardingService(svc: import('../onboarding/onboarding-service.js').OnboardingService): void {
     this.onboardingService = svc;
+  }
+
+  /** Inject the deep-dive service after construction (#2362), alongside the onboarding service. */
+  setDeepDiveService(svc: Pick<import('../onboarding/deep-dive/service.js').DeepDiveService, 'startOnce'>): void {
+    this.deepDiveService = svc;
   }
 
   /**
@@ -2339,7 +2347,7 @@ export class ExecutionLayer {
       // them makes the sample gradable ("Archive an email" alone is not). Only triage tools
       // are read this way, so another tool's `subject` output is never mistaken for an email's.
       const email = TRIAGE_SKILLS.has(toolName) ? sampleEmailFromResult(resultData) : undefined;
-      const base = buildDescription(toolName, input);
+      const base = buildDescription(toolName, input, resultData);
       await this.actionLogRepo.insertSampled({
         taskId: options?.taskEventId ?? options?.parentEventId ?? 'system',
         ...(options?.conversationId ? { conversationId: options.conversationId } : {}),

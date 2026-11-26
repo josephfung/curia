@@ -85,6 +85,8 @@ interface DescriberShared {
   done?(call: ToolCall, ctx: DescribeContext): string | null;
   /** Infinitive for the failure line, rendered as "couldn't <attempt>". */
   attempt?(call: ToolCall, ctx: DescribeContext): string;
+  /** Another describer for a call whose result says it did something else. */
+  forCall?(call: ToolCall): Describer | undefined;
 }
 
 /**
@@ -233,6 +235,21 @@ function emailCount(verb: string, attempt: string, minutes: number): Describer {
     attempt: () => attempt,
   };
 }
+
+const MARKED_READ_TALLY: Tally = { verb: 'marked', one: 'an email read', many: 'emails read' };
+
+// ceo-inbox-archive under a mailbox's leave_in_inbox filing mode marks the mail read instead
+// (#2699), so its feed line and tally say so.
+const ARCHIVE_LEFT_IN_INBOX: Describer = {
+  prominence: 'count',
+  minutes: 0.5,
+  tally: MARKED_READ_TALLY,
+  done: (call) => {
+    const subject = str(call.data?.subject);
+    return subject ? `marked ${quote(subject)} read` : 'marked an email read';
+  },
+  attempt: () => 'mark an email read',
+};
 
 function draftRecipients(call: ToolCall): string[] {
   const fromData = emailRefs(call.data?.to);
@@ -409,7 +426,10 @@ const DESCRIBERS: Record<string, Describer> = {
   },
 
   // ── Mailbox housekeeping (folded into counts) ────────────────────────────
-  'ceo-inbox-archive': emailCount('archived', 'archive an email', 0.5),
+  'ceo-inbox-archive': {
+    ...emailCount('archived', 'archive an email', 0.5),
+    forCall: (call) => (call.data?.left_in_inbox === true ? ARCHIVE_LEFT_IN_INBOX : undefined),
+  },
   'email-archive': emailCount('archived', 'archive an email', 0.5),
   'ceo-inbox-label': emailCount('labelled', 'label an email', 0.5),
   'email-label': emailCount('labelled', 'label an email', 0.5),
@@ -725,6 +745,12 @@ function lookup(toolName: string): Describer | undefined {
   return Object.hasOwn(DESCRIBERS, toolName) ? DESCRIBERS[toolName] : undefined;
 }
 
+/** The tool's describer, or the one its result calls for (`forCall`). */
+function describerFor(call: ToolCall): Describer | undefined {
+  const d = lookup(call.toolName);
+  return d?.forCall?.(call) ?? d;
+}
+
 /** True when the registry has an entry for this tool (hidden entries count). */
 export function hasDescriber(toolName: string): boolean {
   return lookup(toolName) !== undefined;
@@ -782,7 +808,7 @@ export function minutesForCall(call: ToolCall): number {
   }
   const shown = describeToolCall(call, MINUTES_CTX);
   if (!shown || shown.prominence === 'hidden') return 0;
-  const describer = lookup(call.toolName);
+  const describer = describerFor(call);
   if (!describer || describer.prominence === 'hidden') return 0;
   const raw = typeof describer.minutes === 'function' ? describer.minutes(call) : describer.minutes;
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
@@ -828,7 +854,7 @@ export function describerRefs(call: ToolCall): string[] {
  * then treats it as hidden.
  */
 export function describeToolCall(call: ToolCall, ctx: DescribeContext): ToolDescription | null {
-  const d = lookup(call.toolName);
+  const d = describerFor(call);
   if (!d) return null;
   const base = { tally: d.tally, research: d.research };
   if (d.prominence === 'hidden') return { prominence: 'hidden', text: '', ...base };

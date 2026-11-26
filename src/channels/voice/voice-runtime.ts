@@ -49,6 +49,7 @@ import {
 import { persistableCallerContactId } from './caller-contact-id.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
+import { DEFAULT_PINNED_CONTEXT_WARN_CHARS, fenced } from '../../agents/pinned-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
 import {
@@ -311,6 +312,20 @@ export const VOICE_DELEGATION_GUIDANCE =
   'how it gets done.';
 
 /**
+ * The principal's priorities document (#2363) as a voice prompt block, or null
+ * when it is blank so the prompt stays as it would be without one. Voice builds
+ * its own prompt, so it never sees the coordinator's `pinned_context`.
+ */
+export function formatPrioritiesPromptBlock(content: string): string | null {
+  if (content.trim() === '') return null;
+  return [
+    '## Principal priorities',
+    "The principal's current priorities, as of the start of this call. Keep them in mind when weighing requests. Bring one up only when the principal asks what to focus on, or when a request clearly clashes with one; otherwise leave them unmentioned. If the principal changes a priority on this call, go with what they said. Speak about the priorities themselves, never about this list or where it came from.",
+    fenced(content),
+  ].join('\n\n');
+}
+
+/**
  * Assemble the per-turn system prompt for a spoken turn. Static sections come
  * first and the (per-minute changing) time block last, so provider prompt
  * caching keeps a stable prefix across turns. Pure — callers resolve/guard the
@@ -329,7 +344,8 @@ export const VOICE_DELEGATION_GUIDANCE =
  * makes no sense spoken). Active outbound-context entries are included for
  * principal (liveTurn) callers only (#1594 / #1598) so voice can acknowledge
  * recent proactive sends on other channels without leaking them to a
- * non-principal audience. See ADR-037 Consequences and ADR-038.
+ * non-principal audience. The principal's priorities document is likewise
+ * principal-only, read once per call (#2363). See ADR-037 Consequences and ADR-038.
  */
 export function buildVoiceSystemPrompt(parts: {
   /** Compiled office identity/persona block; omitted when null/empty. */
@@ -345,6 +361,12 @@ export function buildVoiceSystemPrompt(parts: {
   outboundContextBlock?: string | null;
   /** Pre-formatted "## Current Date & Time" block; omitted when null/empty. */
   timeContextBlock?: string | null;
+  /**
+   * The principal's priorities (#2363), read once per session. Fixed for the
+   * call, so it sits ahead of the per-turn blocks. Callers must already have
+   * gated this on liveTurn, and leave it out of the greeting.
+   */
+  prioritiesBlock?: string | null;
   /**
    * Loaded and queued agendas for this call (#2322). Omitted or null keeps the
    * prompt byte-identical to a call with no agendas. Sits immediately before
@@ -373,6 +395,7 @@ export function buildVoiceSystemPrompt(parts: {
       VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + parts.specialistRoster,
     );
   }
+  if (parts.prioritiesBlock) sections.push(parts.prioritiesBlock);
   // Dynamic suffix: outbound context then time. Time stays last so the static
   // prefix (+ identity/roster) remains provider-cacheable across turns.
   if (parts.outboundContextBlock) sections.push(parts.outboundContextBlock);
@@ -483,6 +506,12 @@ export interface VoiceRuntimeConfig {
    * never hear "messages you've sent" (cross-channel audience leak).
    */
   outboundContextService?: OutboundContextService;
+  /**
+   * Reads the principal's priorities document (#2363): its text, or null when
+   * there is none. Called once per principal session, at session start, under
+   * the historyReadTimeoutMs deadline. Absent → no priorities block.
+   */
+  readPriorities?: () => Promise<string | null>;
 }
 
 /**
@@ -628,6 +657,8 @@ interface ActiveSession {
   loadedAgendas: AgendaSnapshot[];
   /** Pending agendas offered but not yet loaded. */
   agendaIndex: AgendaIndexEntry[];
+  /** Priorities block for this call (#2363), read once at session start; resolves null without one. Never rejects. */
+  priorities: Promise<string | null>;
   /** Notes the caller asked for (#2347), from meeting-notes-start's result; restated in every later turn's prompt. */
   notes: { recap: boolean } | null;
   /**
@@ -766,6 +797,9 @@ export class VoiceRuntime {
     const inboundSampleRate = transport.inboundSampleRate ?? DEFAULT_INBOUND_SAMPLE_RATE;
     const publishSampleRate = transport.publishSampleRate ?? DEFAULT_PUBLISH_SAMPLE_RATE;
 
+    // Read once, alongside connect and STT startup, so a turn never waits on it twice.
+    const priorities = this.loadPriorities(params.sessionId, params.caller);
+
     let stt: SttSession | undefined;
     // Registered before connect so a mute during connect or STT startup is
     // not dropped. The session object does not exist yet, so the first events
@@ -834,6 +868,7 @@ export class VoiceRuntime {
         externalTransport: params.transport !== undefined,
         loadedAgendas: [...(params.agendas?.loaded ?? [])],
         agendaIndex: [...(params.agendas?.index ?? [])],
+        priorities,
         notes: null,
         pendingLastWordAt: null,
         queuedTiming: null,
@@ -1460,7 +1495,7 @@ export class VoiceRuntime {
         },
       });
 
-      const systemPrompt = await this.buildTurnSystemPrompt(session);
+      const systemPrompt = await this.buildTurnSystemPrompt(session, opts.turnKind);
       if (session.ending || controller.signal.aborted) return;
 
       const messages = opts.assembleMessages({ systemPrompt, priorHistory, contactRecent });
@@ -1820,12 +1855,59 @@ export class VoiceRuntime {
   }
 
   /**
+   * Read the principal's priorities for a new session (#2363). Principal
+   * callers only: a non-principal caller never gets them. Settles within the
+   * voice read deadline and never rejects — a failed or slow read logs a
+   * warning and the call carries on without the priorities.
+   */
+  private async loadPriorities(sessionId: string, caller: VoiceCallerContext): Promise<string | null> {
+    const read = this.config.readPriorities;
+    if (!read || !caller.liveTurn) return null;
+    const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
+    // Through a promise so a reader that throws synchronously still lands in the catch below.
+    const pending = Promise.resolve().then(read);
+    // A read that loses the deadline race settles later with no awaiter — absorb
+    // its eventual rejection so it cannot become an unhandled rejection.
+    pending.catch(err => {
+      this.log.debug({ err, sessionId }, 'priorities read rejected (warned above if before the deadline)');
+    });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        pending,
+        new Promise<'timeout'>(resolve => {
+          timer = setTimeout(() => resolve('timeout'), timeoutMs);
+        }),
+      ]);
+      if (outcome === 'timeout') {
+        this.log.warn({ sessionId, timeoutMs }, 'priorities read exceeded the voice deadline; call proceeds without priorities');
+        return null;
+      }
+      if (outcome === null) return null;
+      // Same threshold as the coordinator's pinned context: injected in full, but
+      // a document this large adds to every turn's prompt.
+      if (outcome.length > DEFAULT_PINNED_CONTEXT_WARN_CHARS) {
+        this.log.warn(
+          { sessionId, chars: outcome.length, warnChars: DEFAULT_PINNED_CONTEXT_WARN_CHARS },
+          'priorities document exceeds the size warning threshold — injected in full',
+        );
+      }
+      return formatPrioritiesPromptBlock(outcome);
+    } catch (err) {
+      this.log.warn({ err, sessionId }, 'priorities read failed; call proceeds without priorities');
+      return null;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Resolve the dynamic prompt parts (guarding each — a compile failure, bad
    * timezone, or outbound-context read failure must degrade to a slimmer prompt,
    * never abort the spoken turn) and assemble the per-turn system prompt.
    * Mirrors AgentRuntime.processTask's guard-and-omit pattern for the same blocks.
    */
-  private async buildTurnSystemPrompt(session: ActiveSession): Promise<string> {
+  private async buildTurnSystemPrompt(session: ActiveSession, turnKind: 'greeting' | 'user'): Promise<string> {
     let identityBlock: string | null = null;
     if (this.toolBridge?.identityBlock) {
       try {
@@ -1922,6 +2004,9 @@ export class VoiceRuntime {
       specialistRoster,
       outboundContextBlock,
       timeContextBlock,
+      // Not in the greeting (#2363): a call must not open on the priorities, and
+      // the greeting then never waits on the read.
+      prioritiesBlock: turnKind === 'greeting' ? null : await session.priorities,
       agendaBlock: formatAgendaPromptBlock({
         loaded: session.loadedAgendas,
         index: session.agendaIndex,

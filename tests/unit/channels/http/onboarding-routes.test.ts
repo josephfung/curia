@@ -6,6 +6,7 @@ import { hashToken, type SessionStore } from '../../../../src/channels/http/sess
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { StartResult } from '../../../../src/onboarding/onboarding-service.js';
+import type { StartResult as DeepDiveStartResult } from '../../../../src/onboarding/deep-dive/service.js';
 
 const SECRET = 'test-bootstrap-secret';
 const OPERATOR_COOKIE = 'operator-session-cookie-value';
@@ -31,6 +32,7 @@ async function appWith(opts: { publish?: () => Promise<void> } = {}) {
     releaseTriageHold: vi.fn(async () => {}),
     stopInvitation: vi.fn(async () => true),
   };
+  const deepDive = { startOnce: vi.fn(async (): Promise<DeepDiveStartResult> => ({ started: true })) };
   const publish = vi.fn(opts.publish ?? (async () => {}));
   const app = Fastify();
   await app.register(cookie);
@@ -40,8 +42,9 @@ async function appWith(opts: { publish?: () => Promise<void> } = {}) {
     bus: { publish } as unknown as EventBus,
     logger: createSilentLogger(),
     onboarding: onboarding as unknown as OnboardingRouteOptions['onboarding'],
+    deepDive,
   });
-  return { app, onboarding, publish };
+  return { app, onboarding, deepDive, publish };
 }
 
 const SESSION_HEADERS = { cookie: `curia_session=${OPERATOR_COOKIE}` };
@@ -126,6 +129,56 @@ describe('GET /api/onboarding/status', () => {
     const res = await app.inject({ method: 'GET', url: '/api/onboarding/status', headers: SESSION_HEADERS });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ started: true, triageHeld: true });
+    await app.close();
+  });
+});
+
+describe('POST /api/onboarding/deep-dive', () => {
+  it('POST starts a re-run and audits it', async () => {
+    const { app, deepDive, publish } = await appWith();
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/deep-dive', headers: SESSION_HEADERS });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ started: true });
+    expect(deepDive.startOnce).toHaveBeenCalledWith({ force: true });
+    const event = (publish.mock.calls[0] as unknown[])[1] as { type: string; payload: Record<string, unknown> };
+    expect(event).toMatchObject({ type: 'config.change', payload: { config_type: 'onboarding_deep_dive', note: `console session ${OPERATOR_SESSION_ID}` } });
+    // Recorded before the change.
+    expect(publish.mock.invocationCallOrder[0]!).toBeLessThan(deepDive.startOnce.mock.invocationCallOrder[0]!);
+    await app.close();
+  });
+
+  it('409 while running', async () => {
+    const { app, deepDive } = await appWith();
+    deepDive.startOnce.mockResolvedValue({ started: false, reason: 'running' });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/deep-dive', headers: SESSION_HEADERS });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ started: false, reason: 'running' });
+    await app.close();
+  });
+
+  it('409 with no mailbox connected', async () => {
+    const { app, deepDive } = await appWith();
+    deepDive.startOnce.mockResolvedValue({ started: false, reason: 'no_mailbox' });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/deep-dive', headers: SESSION_HEADERS });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ started: false, reason: 'no_mailbox' });
+    await app.close();
+  });
+
+  it('401 without auth', async () => {
+    const { app, deepDive, publish } = await appWith();
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/deep-dive' });
+    expect(res.statusCode).toBe(401);
+    expect(deepDive.startOnce).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('starts nothing when the request cannot be recorded', async () => {
+    const { app, deepDive } = await appWith({ publish: async () => { throw new Error('bus down'); } });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/deep-dive', headers: SESSION_HEADERS });
+    expect(res.statusCode).toBe(500);
+    expect(deepDive.startOnce).not.toHaveBeenCalled();
     await app.close();
   });
 });

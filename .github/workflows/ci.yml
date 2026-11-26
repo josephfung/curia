@@ -18,8 +18,93 @@ permissions:
   contents: read
 
 jobs:
-  ci:
+  # The work that used to be one serial `ci` job (~8.5 min: tests 4 min, typecheck 1.5,
+  # Chromium 1.5, then lint and builds) runs as parallel jobs, and `ci` below is the one
+  # check the ruleset requires. The `main` ruleset is strict (up to date before merge), so
+  # every merge sends every other open PR, Dependabot's included, through this workflow
+  # again: its wall-clock time is the cost of each merge in a batch.
+
+  # Covers src/, skills/, tests/ and every workspace package (apps/*, packages/*)
+  # via `pnpm -r run typecheck` — see #1726. There is deliberately no separate
+  # console step: a hand-maintained per-package list here is how apps/console
+  # came to be missing from the root script.
+  typecheck:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          # Track .nvmrc so CI, engines (>=26), and the node:26 Docker image stay in lockstep
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Rebuild esbuild
+        run: pnpm rebuild esbuild
+
+      - name: Type check
+        run: pnpm run typecheck
+
+  build-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          # Track .nvmrc so CI, engines (>=26), and the node:26 Docker image stay in lockstep
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Rebuild esbuild
+        run: pnpm rebuild esbuild
+
+      - name: Build console
+        run: pnpm --filter @curia/console run build
+
+      # Typecheck and vitest never load the built bundle, and vitest's CommonJS
+      # interop accepts named imports that Node's own ESM loader rejects. #2393
+      # passed CI and then crash-looped production on `import { generateVAPIDKeys }
+      # from 'web-push'` (#2410). Build the bundle the image runs and load every
+      # package it imports with plain Node.
+      # The same command as the Dockerfile, so this checks the bundle the image ships.
+      - name: Build backend bundle
+        run: pnpm exec tsup src/index.ts --format esm --no-dts
+
+      - name: Check bundle imports under Node ESM
+        run: pnpm run check:dist-imports
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Shell setup/install tests
+        run: pnpm run test:shell
+
+  # Vitest's own sharding: each shard runs a fixed third of the test files, against its
+  # own Postgres, so the shards share nothing. A file lands in the same shard every run.
+  test:
+    name: test (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      # One red shard is enough to fail `ci`; the others still finish, so a run reports
+      # every failing file, not just the first shard's.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
 
     services:
       postgres:
@@ -69,36 +154,26 @@ jobs:
         env:
           DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
 
-      # Covers src/, skills/, tests/ and every workspace package (apps/*, packages/*)
-      # via `pnpm -r run typecheck` — see #1726. There is deliberately no separate
-      # console step: a hand-maintained per-package list here is how apps/console
-      # came to be missing from the root script.
-      - name: Type check
-        run: pnpm run typecheck
-
-      - name: Build console
-        run: pnpm --filter @curia/console run build
-
-      # Typecheck and vitest never load the built bundle, and vitest's CommonJS
-      # interop accepts named imports that Node's own ESM loader rejects. #2393
-      # passed CI and then crash-looped production on `import { generateVAPIDKeys }
-      # from 'web-push'` (#2410). Build the bundle the image runs and load every
-      # package it imports with plain Node.
-      # The same command as the Dockerfile, so this checks the bundle the image ships.
-      - name: Build backend bundle
-        run: pnpm exec tsup src/index.ts --format esm --no-dts
-
-      - name: Check bundle imports under Node ESM
-        run: pnpm run check:dist-imports
-
-      - name: Lint
-        run: pnpm run lint
-
       # The saved-card fill test (tests/integration/web-browser-card-fill.test.ts) drives a real
       # headless Chromium through Patchright and fails, not skips, without one. Dependencies
-      # install with --ignore-scripts, so the browser is fetched here.
+      # install with --ignore-scripts, so the browser is fetched here. Any shard can hold a
+      # browser test, so every shard installs it. The browser download is cached on the
+      # lockfile (a Patchright bump is the only thing that moves its Chromium build); the
+      # system libraries it needs still come from apt every run.
+      - name: Cache Patchright's Chromium
+        id: chromium-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: patchright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Chromium for Patchright
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
         run: pnpm exec patchright install --with-deps chromium
+
+      - name: Install Chromium's system libraries
+        if: steps.chromium-cache.outputs.cache-hit == 'true'
+        run: pnpm exec patchright install-deps chromium
 
       # Bundled embedder weights (#2023): pinned in models/embedding/manifest.json and
       # downloaded only by `pnpm fetch:embedder`, which verifies size + sha256. Cached on
@@ -116,13 +191,31 @@ jobs:
         run: pnpm fetch:embedder
 
       - name: Run tests
-        run: pnpm test
+        run: pnpm test --shard=${{ matrix.shard }}/3
         env:
           DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
           LOG_LEVEL: error
 
-      - name: Shell setup/install tests
-        run: pnpm run test:shell
+  # The required status check (ruleset on main; scripts/dependabot policy in curia-deploy;
+  # ci-docs-skip.yml reports the same name for docs-only PRs). Green only when every job
+  # above succeeded. `!cancelled()`, not the default, so it still runs when one of them
+  # fails and fails itself, rather than being skipped: a skipped required check never goes
+  # green or red, and the PR waits forever. A superseded PR run is cancelled whole, and
+  # then this is cancelled too instead of reporting red on the old commit.
+  ci:
+    runs-on: ubuntu-latest
+    needs: [typecheck, build-lint, test]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Every CI job passed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "typecheck, build-lint, test shards: $RESULTS"
+          [ "$(echo "$RESULTS" | jq -r 'map(select(. != "success")) | length')" = "0" ] || {
+            echo "::error::a CI job did not succeed: $RESULTS"
+            exit 1
+          }
 
   postgres-image:
     # Builds the real curia-postgres image and boots it on fresh volumes to guard

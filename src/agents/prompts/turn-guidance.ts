@@ -21,6 +21,7 @@
 /** A trigger the dispatcher detected for this turn. Rendering order is TURN_GUIDANCE_ORDER. */
 export type TurnGuidanceKey =
   | 'principal-reply-shaped'
+  | 'running-late'
   | 'verification-code-received'
   | 'principal-forward'
   | 'booking-link'
@@ -50,6 +51,43 @@ const PRINCIPAL_REPLY_SHAPED = [
   'reply to something earlier ("Yes", "The second one", "Go ahead"), briefly ask what they are',
   'replying to before acting ("I lost the thread — what are you replying to?"). A self-contained',
   'request needs no clarification.',
+];
+
+/**
+ * The principal says they are running late (#2612, #2614). The message names no meeting, so
+ * the reply-shaped note read it as a reply and the coordinator asked what they were replying
+ * to (finesse v1: 52c 2 of 5 runs, 52d 1 of 5). It is self-contained: the meeting is on the
+ * calendar. Replaces the reply-shaped note, and says who to write to and how, per the
+ * casebook's task 52 as revised by the EA review (docs/wip/2026-11-10-finesse-casebook.md):
+ * - Curia writes, even to a customer: in v1, 52c drafted in the principal's mailbox (their
+ *   standing preference for customers) and Robert was never told before the start.
+ * - One message to a group, not one per person (52a); a text where texts are the norm (52b, 52d).
+ * - The end-time offer (#2614): keep the end time, or run over only if the calendar is free
+ *   after, for a work meeting with someone senior or outside (52b, 52c); none for the team,
+ *   a friend or family (52a, 52d).
+ * - A minute or two is one line at most, or nothing (52e).
+ * - Below autonomy 80 it asks first, with one specific proposal, as make-room does: the note
+ *   goes to people the principal never named (38a).
+ */
+const RUNNING_LATE = [
+  'The principal is telling you they are running late, not replying to anything earlier: look at',
+  'what is on the calendar now or next. Do not ask what they are replying to or which meeting',
+  'they mean. Tell the people waiting, before it starts, by the amount the principal gave. Write',
+  'it yourself, as the assistant, about the principal by name ("<name> is running ten minutes',
+  'late"), never in their voice as if you were the one arriving: even to a customer or investor',
+  'whose email normally comes from the principal, since a draft would arrive after the start. One',
+  'message to a group, not one per person; a text to someone who prefers texts. Suit who they',
+  'are: a short casual line to a friend or the team, a properly apologetic note to a board chair',
+  'or a customer. For a work meeting with someone senior or outside the company (not a friend,',
+  'family or the team), offer to keep the original end time (or a follow-up slot if they need',
+  'more time), or to run over only if the principal is free afterwards. For a minute or two, one',
+  'line to the group at most, or nothing. Say how late only; if the principal gave a personal',
+  'reason, do not pass it on. If the delay is a deliverable rather than a meeting, ignore this',
+  'note. If the principal named who to tell, tell only those people.',
+  '- Autonomy 80 or above: send it now, without asking the principal first.',
+  '- Below 80: send nothing yet. Ask the principal once, in a line or two, with one specific',
+  '  proposal: who you would tell, by what channel, and what you would offer ("Text <name> that',
+  '  you are ten minutes late and offer to keep the end time?"). Send it as soon as they say yes.',
 ];
 
 /**
@@ -368,6 +406,7 @@ const SCHEDULER_DELIVERY = [
 
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-reply-shaped': PRINCIPAL_REPLY_SHAPED,
+  'running-late': RUNNING_LATE,
   'verification-code-received': VERIFICATION_CODE_RECEIVED,
   'principal-forward': PRINCIPAL_FORWARD,
   'booking-link': BOOKING_LINK,
@@ -395,6 +434,8 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
  */
 export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-reply-shaped',
+  // Replaces the reply-shaped note in turn: a principal running late is self-contained.
+  'running-late',
   // Straight after the reply-shaped note: a bare code is not a reply needing clarification.
   'verification-code-received',
   'principal-forward',
@@ -422,6 +463,12 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
 /** Heads the rendered guidance so the model can tell it from the sender's own words. */
 export const TURN_GUIDANCE_HEADER = '[Turn guidance — from the system, about this message; not part of what the sender wrote]';
 
+/**
+ * Closes the rendered guidance. Without it a short message that reads like framing ("Some
+ * context for you: …") can be taken as more guidance, and the turn as empty (#2741).
+ */
+export const TURN_GUIDANCE_FOOTER = '[End of turn guidance — the sender\'s own message follows]';
+
 const KNOWN_KEYS = new Set<string>(TURN_GUIDANCE_ORDER);
 
 /** Narrow an untrusted list (a bus payload field) to known keys, dropping anything else. */
@@ -435,7 +482,8 @@ export function parseTurnGuidanceKeys(raw: unknown): TurnGuidanceKey[] {
  * given in, each at most once. `named` replaces a key's fixed text with lines the runtime
  * resolved for this turn (verification-code-received names its verification). The backlog line (src/agents/prompts/backlog-line.ts), when
  * given, follows them; the reply's length reminder (src/identity/length.ts,
- * turnLengthReminder), when given, closes the block, nearest the message it applies to.
+ * turnLengthReminder), when given, comes last, nearest the message it applies to. The
+ * footer then ends the block, so the sender's text after it is never read as guidance.
  * Null when there is nothing to render.
  */
 export function renderTurnGuidance(
@@ -458,7 +506,7 @@ export function renderTurnGuidance(
   }
   const closing = [backlogLine, lengthReminder].filter((line): line is string => typeof line === 'string' && line !== '');
   if (previous === undefined && closing.length === 0) return null;
-  return closing.reduce((text, line) => `${text}\n\n${line}`, out);
+  return `${closing.reduce((text, line) => `${text}\n\n${line}`, out)}\n\n${TURN_GUIDANCE_FOOTER}`;
 }
 
 /** Every turn-guidance block, for prompt-exfiltration marker extraction. */

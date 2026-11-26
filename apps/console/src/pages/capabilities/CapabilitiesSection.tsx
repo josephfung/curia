@@ -230,7 +230,66 @@ export function CapabilitiesSection(props: {
           {message.text}
         </p>
       )}
+      {place === 'settings' && <DeepDiveRerun principal={principal} confirm={confirm} />}
     </div>
+  );
+}
+
+/** Why POST /api/onboarding/deep-dive answered 409, in plain words. */
+const DEEP_DIVE_REFUSALS: Record<string, (principal: string) => string> = {
+  running: () => 'A deep dive is already running.',
+  no_mailbox: (principal) => `Connect ${principal}’s mailbox first.`,
+};
+
+/**
+ * Run the deep dive again (#2362): Curia re-reads the principal's mail and calendar history and
+ * redrafts the documents for review. One explicit button, asked first, disabled while it posts.
+ */
+function DeepDiveRerun(props: { principal: string; confirm: (text: string) => boolean }): JSX.Element {
+  const { principal, confirm } = props;
+  const [posting, setPosting] = useState(false);
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+
+  async function rerun(): Promise<void> {
+    if (!confirm(`Run the deep dive again? Curia re-reads about 90 days of ${principal}’s mail and calendar and redrafts the documents for review.`)) return;
+    setPosting(true);
+    setMessage(null);
+    try {
+      const res = await apiFetch('/api/onboarding/deep-dive', { method: 'POST' });
+      if (res.status === 409) {
+        const body = await res.json() as { reason?: string };
+        const why = body.reason ? DEEP_DIVE_REFUSALS[body.reason] : undefined;
+        setMessage({ kind: 'error', text: why ? why(principal) : `The deep dive didn’t start (${body.reason ?? 'unknown reason'}).` });
+      } else if (!res.ok) {
+        setMessage({ kind: 'error', text: `Couldn’t start the deep dive: ${await errorMessage(res)}` });
+      } else {
+        setMessage({ kind: 'ok', text: 'The deep dive started. Its drafts come back for review when it finishes.' });
+      }
+    } catch (err) {
+      console.error('[CapabilitiesSection] deep-dive re-run failed:', err);
+      setMessage({ kind: 'error', text: `Couldn’t start the deep dive: ${err instanceof Error ? err.message : 'unknown error'}` });
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="cap">
+        <div>
+          <b>Deep dive</b>
+          <span className="cap-desc">Re-read {principal}’s mail and calendar history and redraft the documents for review.</span>
+        </div>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={posting} onClick={() => { void rerun(); }}>
+          Run the deep dive again
+        </button>
+      </div>
+      {message && (
+        <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
+          {message.text}
+        </p>
+      )}
+    </>
   );
 }
 
