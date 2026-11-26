@@ -347,6 +347,8 @@ Effective standing is also what handlers see: `ctx.taskMetadata` carries the pos
 
 Principal-directed sends (a live principal turn, or a replay of what the principal approved) are not stakes-gated: the principal decided.
 
+The band text injected into the prompt says the same at every band that asks first (Full, Spot-check, Approval; #2607): a direct or standing instruction from the principal is their approval, so Curia fills in what it leaves open (which slot) and says what it chose. "Asks first" in the table covers what Curia takes on itself. A standing instruction never covers payments, pricing, contracts or legal positions: it may be a memory fact, and memory can be extracted from an outsider's mail.
+
 At every band an outsider steering Curia means the action is held, the integrity rules block, and the fact check runs whenever Curia speaks as the principal. For sends to other people, Gates A and B are unchanged and apply on top. A send to the principal alone skips them at every band (see [Principal-only send bypass](#principal-only-send-bypass)), though Gate C can still hold it.
 
 ### Gate C under band (`runBandGateC`, `src/skills/execution.ts`)
