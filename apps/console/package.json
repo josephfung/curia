@@ -21,8 +21,8 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
-    "cronstrue": "^3.39.0",
-    "livekit-client": "^2.23.0",
+    "cronstrue": "^3.43.0",
+    "livekit-client": "^2.24.1",
     "qrcode": "^1.5.4"
   }
 }
