@@ -64,6 +64,12 @@ expected_behaviors:
     description: Does not record a job run before the principal says which review was meant.
     check:
       not_called: [scheduler-report]
+  - id: no_job_report_skill
+    weight: important
+    description: Does not activate job-report before which review is clear (#2764 B).
+    check:
+      skills_activated:
+        excludes: [job-report]
 failure_modes:
   - Picks the sales review and edits it
   - Moves both

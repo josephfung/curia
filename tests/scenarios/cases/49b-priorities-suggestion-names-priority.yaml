@@ -88,6 +88,12 @@ expected_behaviors:
   - id: priorities_not_invented
     weight: important
     description: Cites only priorities the document holds; it does not invent others.
+  - id: no_documents_skill
+    weight: important
+    description: Does not activate documents — the priorities file is already in context (#2764 B).
+    check:
+      skills_activated:
+        excludes: [documents]
 failure_modes:
   - Answers with generic advice about speaking engagements, ignoring the priorities
   - Rewrites or "refreshes" the priorities document

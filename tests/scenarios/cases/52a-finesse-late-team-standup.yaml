@@ -106,6 +106,13 @@ expected_behaviors:
       The message is one or two lines: Avery is running about ten minutes behind, please
       start without them (or "please go ahead and start"). No lengthy apology and no
       explanation.
+  - id: no_web_skill
+    weight: important
+    layer: decision
+    description: Does not activate web — the leadership team needs no web-search (#2764 B).
+    check:
+      skills_activated:
+        excludes: [web]
 contrast:
   group: finesse-52-running-late
   recipient: The executive's own leadership team, a group of their direct reports.
