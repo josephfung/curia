@@ -3676,12 +3676,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('browser', 'coordinator');
     const tools = chatCalls[0]!.tools?.map((t) => t.name) ?? [];
     expect(tools).toContain('web-browser');
-    const sys = chatCalls[0]!.messages.find(
-      (m) => m.role === 'system'
-        && typeof m.content === 'string'
-        && m.content.includes('[Activated skill: browser]'),
-    );
-    expect(sys).toBeDefined();
+    // Pre-activated bodies live in turn context on the latest user message (#2774).
+    const user = lastUserContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>);
+    expect(user).toContain('[Activated skill: browser]');
+    expect(systemContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>))
+      .not.toContain('[Activated skill: browser]');
   });
 
   describe('code pre-activation paths (#2764 §5)', () => {
@@ -3777,6 +3776,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         resolveSkillActivationForAgent,
         tools: call.tools?.map((t) => t.name) ?? [],
         system,
+        user: lastUserContent(call.messages),
       };
     }
 
@@ -3798,7 +3798,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       });
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('bullpen', 'coordinator');
       expect(r.tools).toContain('bullpen-post');
-      expect(r.system).toContain('[Activated skill: bullpen]');
+      // Bodies ride turn context on the latest user message (#2774).
+      expect(r.user).toContain('[Activated skill: bullpen]');
+      expect(r.system).not.toContain('[Activated skill: bullpen]');
     });
 
     it('pre-activates job-report plus declared and learned job skills on scheduler turns', async () => {
@@ -3837,9 +3839,10 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         'list-principal-reports',
         'email-list',
       ]));
-      expect(r.system).toContain('[Activated skill: job-report]');
-      expect(r.system).toContain('[Activated skill: digest]');
-      expect(r.system).toContain('[Activated skill: mailbox]');
+      expect(r.user).toContain('[Activated skill: job-report]');
+      expect(r.user).toContain('[Activated skill: digest]');
+      expect(r.user).toContain('[Activated skill: mailbox]');
+      expect(r.system).not.toContain('[Activated skill: job-report]');
     });
 
     it('pre-activates digest when turn guidance is spot-check-reply', async () => {
@@ -3856,7 +3859,8 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       });
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
       expect(r.tools).toContain('record-spot-check');
-      expect(r.system).toContain('[Activated skill: digest]');
+      expect(r.user).toContain('[Activated skill: digest]');
+      expect(r.system).not.toContain('[Activated skill: digest]');
     });
   });
 
