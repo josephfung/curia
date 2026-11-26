@@ -78,7 +78,7 @@
     "cytoscape": "^3.35.0",
     "cytoscape-fcose": "^2.2.0",
     "fastify": "^5.12.8",
-    "googleapis": "^189.0.0",
+    "googleapis": "^190.0.0",
     "js-yaml": "^5.5.0",
     "layout-base": "^2.0.1",
     "libphonenumber-js": "^1.13.16",
