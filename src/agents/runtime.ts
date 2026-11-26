@@ -1463,6 +1463,12 @@ export class AgentRuntime {
     const MAX_DISTINCT_FAILED_SKILLS = 10;
     const failedSkills: Array<{ name: string; error: string }> = [];
     let failedSkillsOmitted = 0;
+    /** Model-activated skills this turn — scheduler persists for job-learned (#2764). */
+    const modelActivatedSkills: string[] = [];
+    const recordModelActivatedSkill = (skill: string): void => {
+      if (!skill || modelActivatedSkills.includes(skill)) return;
+      modelActivatedSkills.push(skill);
+    };
     /**
      * Calendar (or similar) identity mismatch (#1854). Soft skill failure alone
      * leaves last_run_outcome=completed (#1830); this hard-fails the task after
@@ -3119,6 +3125,7 @@ export class AgentRuntime {
                       },
                       'Activated skill for task turn',
                     );
+                    recordModelActivatedSkill(activation.skill);
                     // Telemetry only: a publish failure must not undo the activation (#2764).
                     try {
                       await bus.publish('agent', createSkillActivated({
@@ -3792,6 +3799,7 @@ export class AgentRuntime {
       channelId: turnChannelId,
       ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
+      ...(modelActivatedSkills.length > 0 && { activatedSkills: [...modelActivatedSkills] }),
       parentEventId: taskEvent.id,
     });
     try {
