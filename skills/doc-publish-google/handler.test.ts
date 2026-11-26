@@ -248,7 +248,7 @@ describe('doc-publish-google — first publish', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
 
     expect(result).toEqual({ success: false, error: expect.stringContaining('did not convert') });
-    expect(drive.delete).toHaveBeenCalledWith({ fileId: 'gdoc-new' });
+    expect(drive.delete).toHaveBeenCalledWith({ fileId: 'gdoc-new' }, { timeout: 20_000 });
     expect((result as { error: string }).error).not.toContain('still in');
     expect(repo.updates).toHaveLength(0);
   });
@@ -263,7 +263,9 @@ describe('doc-publish-google — first publish', () => {
   it('hashes the Doc\'s own Markdown export, read back after the write', async () => {
     createOk();
     await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH }));
-    expect(drive.export).toHaveBeenCalledWith({ fileId: 'gdoc-new', mimeType: 'text/markdown' }, { responseType: 'text' });
+    expect(drive.export).toHaveBeenCalledWith({ fileId: 'gdoc-new', mimeType: 'text/markdown' }, { timeout: 20_000, responseType: 'text' });
+    // Every Drive call carries the per-request bound.
+    expect(drive.create.mock.calls[0]![1]).toEqual({ timeout: 20_000 });
   });
 
   it('records an unknown hash when the export fails, and says so', async () => {
@@ -282,6 +284,17 @@ describe('doc-publish-google — first publish', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('quota exceeded') });
     expect(repo.updates).toHaveLength(0);
+  });
+
+  it('reports an unconfirmed create as unknown, never as a plain failure to retry', async () => {
+    for (const err of [new Error('timeout of 20000ms exceeded'), Object.assign(new Error('Backend Error'), { code: 503 })]) {
+      drive.create.mockRejectedValueOnce(err);
+      const repo = makeRepo(makeDoc());
+      const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+      expect(result).toEqual({ success: false, error: expect.stringContaining('may or may not have been created') });
+      expect((result as { error: string }).error).toContain('"Board brief"');
+      expect(repo.updates).toHaveLength(0);
+    }
   });
 
   it('names a full Drive or a rate limit as such', async () => {
@@ -427,10 +440,19 @@ describe('doc-publish-google — publishing again', () => {
 
   it('reports an update Drive refuses, without touching the record', async () => {
     docUnchanged();
-    drive.update.mockRejectedValueOnce(new Error('internal error'));
+    drive.update.mockRejectedValueOnce(Object.assign(new Error('Invalid media'), { code: 400 }));
     const repo = recordedRepo();
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('internal error') });
+    expect(result).toEqual({ success: false, error: expect.stringContaining('refused to update the Doc') });
+    expect(repo.updates).toHaveLength(0);
+  });
+
+  it('reports an unconfirmed update as unknown, without touching the record', async () => {
+    docUnchanged();
+    drive.update.mockRejectedValueOnce(new Error('socket hang up'));
+    const repo = recordedRepo();
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('may or may not show the new text') });
     expect(repo.updates).toHaveLength(0);
   });
 

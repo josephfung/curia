@@ -46,6 +46,9 @@ const MARKDOWN_MIME = 'text/markdown';
 const APP_PROPERTY_DOC_ID = 'curiaDocumentId';
 /** Comment pages read before giving up on the new-comments check (100 per page). */
 const MAX_COMMENT_PAGES = 10;
+/** Per-request bound on every Drive call; the manifest's 60 s tool timeout covers the sum. */
+const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST = { timeout: REQUEST_TIMEOUT_MS } as const;
 /** Drive 403 reasons that are quota or rate limits, not missing access. */
 const QUOTA_REASONS = new Set(['storageQuotaExceeded', 'userRateLimitExceeded', 'rateLimitExceeded', 'dailyLimitExceeded']);
 
@@ -94,6 +97,15 @@ function driveReason(err: unknown): string | undefined {
   return typeof reason === 'string' ? reason : undefined;
 }
 
+/**
+ * True when a failed write may still have been applied: no HTTP answer (a timeout or a dropped
+ * connection) or a server error. A 4xx is a refusal, so nothing was written.
+ */
+function outcomeUnknown(err: unknown): boolean {
+  const status = httpStatus(err);
+  return status === undefined || status >= 500;
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -129,7 +141,7 @@ async function hasNewOpenComments(drive: Drive, fileId: string, since: string): 
       fields: 'nextPageToken,comments(resolved,deleted,modifiedTime)',
       pageSize: 100,
       ...(pageToken ? { pageToken } : {}),
-    });
+    }, REQUEST);
     const isNew = (c: drive_v3.Schema$Comment) => {
       const at = c.modifiedTime ? Date.parse(c.modifiedTime) : NaN;
       // No usable time on either side: count it (fail closed).
@@ -145,7 +157,7 @@ async function hasNewOpenComments(drive: Drive, fileId: string, since: string): 
 
 /** Short sha256 of the Doc's Markdown export: what the edit check compares. */
 async function exportHash(drive: Drive, fileId: string): Promise<string> {
-  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { responseType: 'text' });
+  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { ...REQUEST, responseType: 'text' });
   return createHash('sha256').update(String(res.data)).digest('hex').slice(0, HASH_LENGTH);
 }
 
@@ -218,10 +230,15 @@ export class DocPublishGoogleHandler implements ToolHandler {
         },
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
         fields: 'id,webViewLink,mimeType',
-      });
+      }, REQUEST);
       file = res.data;
     } catch (err) {
       ctx.log.error({ err, path: doc.path, status: httpStatus(err), reason: driveReason(err) }, `${TOOL}: Doc create failed`);
+      if (outcomeUnknown(err)) {
+        // The create may have landed before the error: never invite a blind retry, which
+        // would make a second Doc.
+        return { success: false, error: `Google Drive did not confirm the Doc (${describeDriveError(err)}), so it may or may not have been created; nothing was recorded. Look in Curia's Drive for "${title}" before publishing again, or publishing again may create a second Doc.` };
+      }
       return { success: false, error: `Google Drive refused to create the Doc: ${describeDriveError(err)}` };
     }
 
@@ -235,7 +252,8 @@ export class DocPublishGoogleHandler implements ToolHandler {
       ctx.log.error({ path: doc.path, mimeType: file.mimeType }, `${TOOL}: Drive did not convert the upload`);
       let leftover = '';
       try {
-        await drive.files.delete({ fileId: file.id });
+        // Best-effort: a leftover is named in the error below rather than failing differently.
+        await drive.files.delete({ fileId: file.id }, REQUEST);
       } catch (err) {
         ctx.log.error({ err, fileId: file.id }, `${TOOL}: could not delete the unconverted upload`);
         leftover = ` An unconverted copy (file ID ${file.id}) is still in Curia's Drive and should be deleted.`;
@@ -283,7 +301,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
         fileId: record.id,
         fields: 'id,mimeType,trashed,appProperties,webViewLink',
         supportsAllDrives: true,
-      });
+      }, REQUEST);
       current = res.data;
     } catch (err) {
       const status = httpStatus(err);
@@ -323,10 +341,13 @@ export class DocPublishGoogleHandler implements ToolHandler {
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
         fields: 'id,webViewLink,mimeType',
         supportsAllDrives: true,
-      });
+      }, REQUEST);
       updated = res.data;
     } catch (err) {
       ctx.log.error({ err, fileId: record.id, reason: driveReason(err) }, `${TOOL}: Doc update failed`);
+      if (outcomeUnknown(err)) {
+        return { success: false, error: `Google Drive did not confirm the update (${describeDriveError(err)}), so the Doc (${record.url}) may or may not show the new text; the record was not updated. Publish again to retry: the next publish will report the Doc as edited if the update landed, so check it with get_doc_as_markdown before using the doc_version that refusal names.` };
+      }
       return { success: false, error: `Google Drive refused to update the Doc (${record.url}): ${describeDriveError(err)}` };
     }
     if (updated.mimeType !== GOOGLE_DOC_MIME) {
@@ -404,7 +425,10 @@ export class DocPublishGoogleHandler implements ToolHandler {
     };
   }
 
-  /** The Doc's export hash after a write, or null (logged) when the export fails. */
+  /**
+   * The Doc's export hash after a write, or null (logged) when the export fails. Best-effort: the
+   * write already succeeded, and an unknown hash only makes the next publish ask for a read-back.
+   */
   private async contentHashAfterWrite(ctx: ToolContext, drive: Drive, fileId: string): Promise<string | null> {
     try {
       return await exportHash(drive, fileId);
