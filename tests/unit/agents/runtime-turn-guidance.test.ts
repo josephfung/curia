@@ -30,7 +30,8 @@ function expectUserPrompt(content: unknown, expectedTail: string): void {
   const text = content as string;
   expect(text === expectedTail || text.endsWith(expectedTail)).toBe(true);
   if (text !== expectedTail) {
-    expect(text.startsWith('## Current turn context')).toBe(true);
+    expect(text.startsWith('[Current turn context — from the system, not part of what the sender wrote]')).toBe(true);
+    expect(text).toContain('[End of turn context]');
   }
 }
 

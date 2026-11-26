@@ -159,7 +159,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     const latestUser = [...messages].reverse().find(m => m.role === 'user');
     expect(typeof latestUser?.content === 'string' && (
       latestUser.content === 'following up on a new thread'
-      || (latestUser.content.startsWith('## Current turn context')
+      || (latestUser.content.startsWith('[Current turn context — from the system, not part of what the sender wrote]')
         && latestUser.content.endsWith('following up on a new thread'))
     )).toBe(true);
     const blockAt = messages.findIndex(m => typeof m.content === 'string' && m.content.includes(CONTACT_RECENT_HISTORY_HEADER));

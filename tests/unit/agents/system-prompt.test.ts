@@ -95,7 +95,9 @@ describe('stable vs per-turn system prompt split (#2764)', () => {
     expect(formatTurnContextBlock([])).toBe('');
     expect(formatTurnContextBlock(['', '  '])).toBe('');
     expect(formatTurnContextBlock(['## Autonomy Level\nscore 1', '', '## Turn budget\nN'])).toBe(
-      '## Current turn context\n\n## Autonomy Level\nscore 1\n\n## Turn budget\nN',
+      '[Current turn context — from the system, not part of what the sender wrote]\n\n'
+      + '## Autonomy Level\nscore 1\n\n## Turn budget\nN\n\n'
+      + '[End of turn context]',
     );
   });
 });

@@ -1308,6 +1308,9 @@ export class AgentRuntime {
           const listed = new Set((this.config.skillList ?? []).map((s) => s.name));
           carried = carried.filter((n) => listed.has(n));
         }
+        // Stable tool order for provider cache: listActive is recency-DESC; a flip
+        // between two carried skills reorders tool defs and busts the cache (#2774).
+        carried = [...carried].sort((a, b) => a.localeCompare(b));
         if (carried.length > 0) {
           await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
         }

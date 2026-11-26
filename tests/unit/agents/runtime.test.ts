@@ -43,7 +43,10 @@ function expectUserPrompt(content: unknown, expectedTail: string): void {
   const text = content as string;
   expect(text === expectedTail || text.endsWith(expectedTail)).toBe(true);
   if (text !== expectedTail) {
-    expect(text.startsWith('## Current turn context')).toBe(true);
+    expect(text.startsWith(
+      '[Current turn context — from the system, not part of what the sender wrote]',
+    )).toBe(true);
+    expect(text).toContain('[End of turn context]');
   }
 }
 
@@ -612,7 +615,8 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.role).toBe('system');
     expect(systemMsg?.content).toContain('Base prompt.');
     expect(systemMsg?.content).not.toContain('Autonomy Level');
-    expect(user).toContain('## Current turn context');
+    expect(user).toContain('[Current turn context — from the system, not part of what the sender wrote]');
+    expect(user).toContain('[End of turn context]');
     expect(user).toContain('Autonomy Level');
   });
 
@@ -3650,7 +3654,10 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const block = r.user.indexOf(BLOCK);
       // Turn context may precede guidance (#2774); guidance still heads the promptContent segment.
       expect(header).toBeGreaterThanOrEqual(0);
-      expect(r.user.startsWith('## Current turn context') || header === 0).toBe(true);
+      expect(
+        r.user.startsWith('[Current turn context — from the system, not part of what the sender wrote]')
+        || header === 0,
+      ).toBe(true);
       expect(block).toBeGreaterThan(header);
       // The re-rendered guidance keeps its closing marker, after the block (#2741).
       expect(r.user.endsWith(`${TURN_GUIDANCE_FOOTER}\n\nWhat is on my calendar today?`)).toBe(true);
@@ -3787,6 +3794,82 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         skillList: [{ name: 'memory', description: 'Store and recall memories' }],
       });
       expect(touch).toHaveBeenCalledWith('conv-carry-pin', 'ceo-inbox', 'memory');
+    });
+
+    it('sorts carried skills by name before pre-activation so tool order is stable (#2774)', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+      const chatCalls: Array<{ tools?: Array<{ name: string }> }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: async (params) => {
+          chatCalls.push({ tools: params.tools?.map((t) => ({ name: t.name })) });
+          return {
+            type: 'text' as const,
+            content: 'ok',
+            usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        },
+      };
+      const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+      const skillRegistry = new SkillRegistry();
+      for (const name of ['mailbox', 'calendar'] as const) {
+        skillRegistry.register(
+          {
+            name,
+            description: name,
+            tools: [`${name}-tool`],
+            instructions: `## ${name}`,
+          },
+          `/tmp/${name}`,
+        );
+      }
+      const tool = (name: string) => ({
+        name,
+        description: name,
+        input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+      });
+      const mockExecution = {
+        invoke: vi.fn(),
+        getToolDefinitions: vi.fn((names: string[]) =>
+          [tool('mailbox-tool'), tool('calendar-tool')].filter((d) => names.includes(d.name)),
+        ),
+        resolveSkillActivationForAgent: vi.fn().mockImplementation((skill: string) => ({
+          skill,
+          tools: [`${skill}-tool`],
+          skippedTools: [],
+          instructions: `## ${skill}`,
+        })),
+      } as unknown as ExecutionLayer;
+      // Recency-DESC order from listActive — without the sort, mailbox tools land first.
+      const listActive = vi.fn(async () => ['mailbox', 'calendar']);
+      new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [skillActivateToolDef],
+        skillRegistry,
+        conversationActiveSkills: { listActive, touch: vi.fn() },
+      }).register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-carry-sort',
+        channelId: 'web',
+        senderId: 'ceo',
+        content: 'continue',
+        parentEventId: 'p-sort',
+        senderContext: CONFIRMED_SENDER_CONTEXT,
+      }));
+      const names = chatCalls[0]!.tools?.map((t) => t.name) ?? [];
+      expect(names.indexOf('calendar-tool')).toBeGreaterThanOrEqual(0);
+      expect(names.indexOf('mailbox-tool')).toBeGreaterThanOrEqual(0);
+      expect(names.indexOf('calendar-tool')).toBeLessThan(names.indexOf('mailbox-tool'));
     });
   });
 });

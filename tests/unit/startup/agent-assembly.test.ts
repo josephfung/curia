@@ -557,7 +557,8 @@ describe('rendered coordinator system string', () => {
 
     const user = call.messages[call.messages.length - 1]!;
     expect(user.role).toBe('user');
-    expect(user.content as string).toContain('## Current turn context');
+    expect(user.content as string).toContain('[Current turn context — from the system, not part of what the sender wrote]');
+    expect(user.content as string).toContain('[End of turn context]');
     expect(user.content as string).toContain('Spot'); // autonomy band
     expect(user.content as string).toContain('## Current Date & Time');
     expect(user.content as string).toContain('What is on my plate today?');

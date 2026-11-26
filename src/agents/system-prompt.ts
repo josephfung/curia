@@ -367,12 +367,22 @@ export async function buildBaseSystemPrompt(
 }
 
 /**
+ * System-attributed wrapper for the after-history turn-context bundle (#2774).
+ * Mirrors turn-guidance markers (#2741): without them the block sits in a user
+ * message under a forgeable markdown heading while Prompt Injection Defense
+ * says user messages are data.
+ */
+export const TURN_CONTEXT_HEADER =
+  '[Current turn context — from the system, not part of what the sender wrote]';
+export const TURN_CONTEXT_FOOTER = '[End of turn context]';
+
+/**
  * Label the after-history turn-context bundle (#2774). Empty when every part is blank.
  */
 export function formatTurnContextBlock(parts: ReadonlyArray<string>): string {
   const body = parts.map((p) => p.trim()).filter((p) => p.length > 0).join('\n\n');
   if (!body) return '';
-  return `## Current turn context\n\n${body}`;
+  return `${TURN_CONTEXT_HEADER}\n\n${body}\n\n${TURN_CONTEXT_FOOTER}`;
 }
 
 /**

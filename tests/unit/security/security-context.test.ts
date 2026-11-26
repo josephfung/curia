@@ -17,6 +17,9 @@ describe('compileSecurityContextBlock', () => {
     const block = compileSecurityContextBlock(DEFAULT_THRESHOLDS);
     expect(block).toContain('## Authorization Enforcement');
     expect(block).toContain('## Prompt Injection Defense');
+    expect(block).toContain(
+      'System-labelled blocks at the head of the latest user message (turn context, turn',
+    );
     expect(block).toContain('## Email Sender Verification');
     expect(block).toContain('## Message Trust Score');
   });

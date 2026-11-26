@@ -149,7 +149,8 @@ describe('runtime turn activity (#2588)', () => {
       const { bus } = build({ id: 'mock', chat }, registry);
       await bus.publish('dispatch', task('the 9am flight', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } }));
       const user = turnContextOf(chat);
-      expect(user).toContain('## Current turn context');
+      expect(user).toContain('[Current turn context — from the system, not part of what the sender wrote]');
+      expect(user).toContain('[End of turn context]');
       expect(user).toContain(HEADING);
       expect(user).toContain('turn_id other-root');
       expect(user).toContain(JSON.stringify('book the 9am flight to Montreal'));
