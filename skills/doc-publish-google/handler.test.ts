@@ -100,6 +100,8 @@ function makeCtx(repo: ReturnType<typeof makeRepo> | null, input: Record<string,
 
 /** What the handler records for a Doc whose Markdown export is `text`. */
 const hashOf = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+/** The doc_version a refusal names for that export and those open comment ids. */
+const versionOf = (text: string, ids: string[] = []) => hashOf(`${text}\n\u0000open-comments:${[...ids].sort().join(',')}`);
 const PUBLISHED_EXPORT = '# Brief\n\nSome **bold** text.\n';
 const EDITED_EXPORT = '# Brief\n\nSome **bold** text, edited by the principal.\n';
 
@@ -376,7 +378,7 @@ describe('doc-publish-google — publishing again', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('it was edited') });
     expect((result as { error: string }).error).toContain('get_doc_as_markdown');
-    expect((result as { error: string }).error).toContain(`doc_version: "${hashOf(EDITED_EXPORT)}"`);
+    expect((result as { error: string }).error).toContain(`doc_version: "${versionOf(EDITED_EXPORT)}"`);
     expect(drive.update).not.toHaveBeenCalled();
   });
 
@@ -384,17 +386,28 @@ describe('doc-publish-google — publishing again', () => {
     docUnchanged();
     updateOk();
     drive.export.mockResolvedValueOnce({ data: EDITED_EXPORT });
-    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: hashOf(EDITED_EXPORT) }));
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: versionOf(EDITED_EXPORT) }));
     expect(result.success).toBe(true);
-    expect(drive.commentsList).not.toHaveBeenCalled();
+    // The version covers the open comments too, so they are read.
+    expect(drive.commentsList).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a doc_version the Doc has moved past', async () => {
     docUnchanged();
     drive.export.mockResolvedValueOnce({ data: `${EDITED_EXPORT}More.\n` });
-    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: hashOf(EDITED_EXPORT) }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('changed again') });
-    expect((result as { error: string }).error).toContain(`doc_version: "${hashOf(`${EDITED_EXPORT}More.\n`)}"`);
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: versionOf(EDITED_EXPORT) }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('changed after it was read back') });
+    expect((result as { error: string }).error).toContain(`doc_version: "${versionOf(`${EDITED_EXPORT}More.\n`)}"`);
+    expect(drive.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a doc_version when a comment was opened after the read-back, though the text is the same', async () => {
+    docUnchanged();
+    drive.export.mockResolvedValueOnce({ data: EDITED_EXPORT });
+    drive.commentsList.mockResolvedValueOnce({ data: { comments: [{ id: 'c-new', resolved: false, modifiedTime: '2026-11-25T12:00:00.000Z' }] } });
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH, doc_version: versionOf(EDITED_EXPORT) }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('open comments changed') });
+    expect((result as { error: string }).error).toContain(`doc_version: "${versionOf(EDITED_EXPORT, ['c-new'])}"`);
     expect(drive.update).not.toHaveBeenCalled();
   });
 
@@ -434,8 +447,9 @@ describe('doc-publish-google — publishing again', () => {
     docUnchanged();
     drive.commentsList.mockResolvedValue({ data: { comments: [{ resolved: true }], nextPageToken: 'more' } });
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('open comments') });
+    expect(result).toEqual({ success: false, error: expect.stringContaining('more open comments than Curia can check') });
     expect(drive.commentsList).toHaveBeenCalledTimes(10);
+    expect(drive.update).not.toHaveBeenCalled();
   });
 
   it('reports an update Drive refuses, without touching the record', async () => {
@@ -534,5 +548,63 @@ describe('doc-publish-google — publishing again', () => {
     const result = await new DocPublishGoogleHandler().execute(makeCtx(recordedRepo(), { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('backend error') });
     expect(drive.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a doc_version when no Doc is recorded, rather than creating one', async () => {
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH, doc_version: 'abc123' }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('doc_version does not apply') });
+    expect(drive.create).not.toHaveBeenCalled();
+  });
+
+  it('records the comment cutoff from before the write, not after it', async () => {
+    docUnchanged();
+    let writeAt = '';
+    drive.update.mockImplementationOnce(async () => {
+      writeAt = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      return { data: { id: 'gdoc-1', webViewLink: RECORD.url, mimeType: GDOC } };
+    });
+    const repo = recordedRepo();
+    await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    const publishedAt = (repo.current!.frontmatter.google_doc as { published_at: string }).published_at;
+    expect(Date.parse(publishedAt)).toBeLessThanOrEqual(Date.parse(writeAt));
+  });
+
+  it('stops before writing when the call is short of time, changing nothing', async () => {
+    docUnchanged();
+    const ctx = makeCtx(recordedRepo(), { path: PATH }, { deadline: Date.now() + 5_000 } as Partial<ToolContext>);
+    const result = await new DocPublishGoogleHandler().execute(ctx);
+    expect(result).toEqual({ success: false, error: expect.stringContaining('nothing was changed') });
+    expect(drive.update).not.toHaveBeenCalled();
+
+    const created = await new DocPublishGoogleHandler().execute(makeCtx(makeRepo(makeDoc()), { path: PATH }, { deadline: Date.now() + 5_000 } as Partial<ToolContext>));
+    expect(created.success).toBe(false);
+    expect(drive.create).not.toHaveBeenCalled();
+  });
+
+  it('passes the call\'s abort signal and remaining time to Drive', async () => {
+    docUnchanged();
+    updateOk();
+    const controller = new AbortController();
+    const ctx = makeCtx(recordedRepo(), { path: PATH }, { signal: controller.signal, deadline: Date.now() + 45_000 } as Partial<ToolContext>);
+    await new DocPublishGoogleHandler().execute(ctx);
+    const opts = drive.update.mock.calls[0]![1] as { timeout: number; signal: AbortSignal };
+    expect(opts.signal).toBe(controller.signal);
+    expect(opts.timeout).toBeLessThanOrEqual(20_000);
+  });
+
+  it('leaves a google_doc record cleared during the publish as it is', async () => {
+    docUnchanged();
+    updateOk();
+    const repo = recordedRepo();
+    repo.update.mockImplementationOnce(async (_p: string, params: UpdateWorkingDocParams) => {
+      repo.updates.push(params);
+      repo.current = { ...repo.current!, version: repo.current!.version + 1, frontmatter: { title: 'Board brief', google_doc: null } };
+      return { ok: false, conflict: true, document: repo.current };
+    });
+    const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('was changed while publishing') });
+    expect(repo.current!.frontmatter.google_doc).toBeNull();
+    expect(repo.updates).toHaveLength(1);
   });
 });

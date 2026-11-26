@@ -172,9 +172,11 @@ the auto-pin). The document stays the source of truth; the Doc is a formatted co
   a hash of the Doc's own Markdown export still matches the record and no comment was opened
   since the last publish. (Drive's `modifiedTime` can't serve: measured live, it moves on shares
   and lags edits, while the export ignores comments and shares and changes at once on any text or
-  style edit.) A refusal names the current export hash as `doc_version`; after reading the Doc
-  back and folding its changes in, a publish with that `doc_version` goes through while the Doc
-  is still at it. A recorded Doc that is gone or out of reach is never replaced by a new one
+  style edit.) A refusal names a `doc_version` covering the Doc's current content and its open
+  comments; after reading the Doc back and folding its changes in, a publish with that
+  `doc_version` goes through while neither has changed. Content is read last, just before the
+  write; an edit in the second between them is still overwritten, since a Markdown upload takes
+  no revision precondition. A recorded Doc that is gone or out of reach is never replaced by a new one
   silently: the record must be cleared first.
 - New Docs go to Curia's My Drive, shared with no one. There is no folder input: a folder another
   account owns would give that account the Doc outside the sharing tools.

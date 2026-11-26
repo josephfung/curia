@@ -97,12 +97,18 @@ expected_behaviors:
     description: Never sends the brief's Markdown to create_doc, which would show it as literal syntax.
     check:
       not_called: [create_doc]
+  # Bound to the Doc and the writer role, as in 13a. The recipient is not: the principal's
+  # address comes from the run's database, not the case, so a check here cannot name it.
   - id: shares_with_principal
     weight: important
-    description: Shares the published Doc with the principal.
+    description: Gives the principal edit (writer) access to the published Doc.
     check:
-      called: manage_drive_access
-      with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er }
+      any_of:
+        - called: manage_drive_access
+          with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er, role: writer }
+        - called: manage_drive_access
+          with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er }
+          contains: { recipients: writer }
   - id: sends_the_link
     weight: important
     description: Gives the principal the Doc's link and says it is ready to edit.

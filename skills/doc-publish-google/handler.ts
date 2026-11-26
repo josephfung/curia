@@ -17,8 +17,8 @@
 //     "Unchanged" compares a hash of the Doc's Markdown export with the one taken after the last
 //     write; Drive's modifiedTime moves on shares and lags edits (#2758 spike), so it can't be
 //     used. After a refusal the caller reads the Doc back, folds the changes into the document
-//     and publishes with the `doc_version` (that hash) the refusal named: that goes through only
-//     while the Doc still exports to it. `overwrite` skips the check altogether.
+//     and publishes with the `doc_version` the refusal named (a hash of the content and the open
+//     comments): that goes through only while neither has changed. `overwrite` skips the check.
 
 import { createHash } from 'node:crypto';
 import { google, type drive_v3 } from 'googleapis';
@@ -32,6 +32,7 @@ import {
   type PublishedDocRecord,
 } from '../../src/google/published-doc.js';
 import { normalizeDocPath } from '../../src/memory/okf.js';
+import { remainingMs, type CallBudget } from '../../src/util/call-budget.js';
 import { requireWorkingDocs } from '../_shared/doc-workspace.js';
 import {
   consoleOnlyWriteError,
@@ -44,11 +45,16 @@ const GOOGLE_DOC_MIME = 'application/vnd.google-apps.document';
 const MARKDOWN_MIME = 'text/markdown';
 /** appProperties key binding a Doc to the store document it was published from. */
 const APP_PROPERTY_DOC_ID = 'curiaDocumentId';
-/** Comment pages read before giving up on the new-comments check (100 per page). */
+/** Comment pages read before giving up on the comment check (100 per page). */
 const MAX_COMMENT_PAGES = 10;
-/** Per-request bound on every Drive call; the manifest's 60 s tool timeout covers the sum. */
+/** Per-request bound on every Drive call, cut further to what is left of the call's budget. */
 const REQUEST_TIMEOUT_MS = 20_000;
-const REQUEST = { timeout: REQUEST_TIMEOUT_MS } as const;
+/**
+ * Budget a write must have left when it starts: the write, the export after it and the record.
+ * A publish short of it stops before writing, so it never times out between changing the Doc
+ * and recording that it did.
+ */
+const WRITE_RESERVE_MS = 30_000;
 /** Drive 403 reasons that are quota or rate limits, not missing access. */
 const QUOTA_REASONS = new Set(['storageQuotaExceeded', 'userRateLimitExceeded', 'rateLimitExceeded', 'dailyLimitExceeded']);
 
@@ -106,6 +112,12 @@ function outcomeUnknown(err: unknown): boolean {
   return status === undefined || status >= 500;
 }
 
+/** Request options for one Drive call: cancelled with the tool call, and never past its deadline. */
+function requestOptions(budget: CallBudget): { timeout: number; signal?: AbortSignal } {
+  const timeout = Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remainingMs(budget)));
+  return { timeout, ...(budget.signal ? { signal: budget.signal } : {}) };
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -127,38 +139,54 @@ function defaultTitle(doc: WorkingDocRow): string {
   return leaf.replace(/\.md$/i, '') || leaf;
 }
 
+interface OpenComments {
+  /** Open (unresolved, undeleted) comment ids, sorted. */
+  ids: string[];
+  /** Their last-modified times (epoch ms; NaN when Drive gave none). */
+  times: number[];
+}
+
 /**
- * True when the Doc has a comment opened or answered since `since` that is neither resolved
- * nor deleted. Comments already open at the last publish were there to be read back then, so
- * they do not block every later publish.
+ * The Doc's open comments, or null when there are more pages than MAX_COMMENT_PAGES (the
+ * caller then treats the comment state as unknown and fails closed).
  */
-async function hasNewOpenComments(drive: Drive, fileId: string, since: string): Promise<boolean> {
-  const sinceMs = Date.parse(since);
+async function openComments(drive: Drive, fileId: string, budget: CallBudget): Promise<OpenComments | null> {
+  const ids: string[] = [];
+  const times: number[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
     const res = await drive.comments.list({
       fileId,
-      fields: 'nextPageToken,comments(resolved,deleted,modifiedTime)',
+      fields: 'nextPageToken,comments(id,resolved,deleted,modifiedTime)',
       pageSize: 100,
       ...(pageToken ? { pageToken } : {}),
-    }, REQUEST);
-    const isNew = (c: drive_v3.Schema$Comment) => {
-      const at = c.modifiedTime ? Date.parse(c.modifiedTime) : NaN;
-      // No usable time on either side: count it (fail closed).
-      return Number.isNaN(at) || Number.isNaN(sinceMs) || at > sinceMs;
-    };
-    if ((res.data.comments ?? []).some((c) => !c.resolved && !c.deleted && isNew(c))) return true;
+    }, requestOptions(budget));
+    for (const c of res.data.comments ?? []) {
+      if (c.resolved || c.deleted) continue;
+      ids.push(c.id ?? '');
+      times.push(c.modifiedTime ? Date.parse(c.modifiedTime) : NaN);
+    }
     pageToken = res.data.nextPageToken ?? undefined;
-    if (!pageToken) return false;
+    if (!pageToken) return { ids: [...ids].sort(), times };
   }
-  // More pages than we read, none blocking so far: the unread pages could hold one (fail closed).
-  return true;
+  return null;
 }
 
-/** Short sha256 of the Doc's Markdown export: what the edit check compares. */
-async function exportHash(drive: Drive, fileId: string): Promise<string> {
-  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { ...REQUEST, responseType: 'text' });
-  return createHash('sha256').update(String(res.data)).digest('hex').slice(0, HASH_LENGTH);
+async function exportMarkdown(drive: Drive, fileId: string, budget: CallBudget): Promise<string> {
+  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { ...requestOptions(budget), responseType: 'text' });
+  return String(res.data);
+}
+
+function shortHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex').slice(0, HASH_LENGTH);
+}
+
+/**
+ * The doc_version a refusal names: the Doc's content and the set of comments open on it, so a
+ * publish with it goes through only while neither has changed since the caller read it back.
+ */
+function docVersionOf(markdown: string, comments: OpenComments): string {
+  return shortHash(`${markdown}\n\u0000open-comments:${comments.ids.join(',')}`);
 }
 
 export class DocPublishGoogleHandler implements ToolHandler {
@@ -213,6 +241,11 @@ export class DocPublishGoogleHandler implements ToolHandler {
     }
 
     const title = parsed.title ?? defaultTitle(doc);
+    if (!existing.record && parsed.docVersion !== undefined) {
+      // doc_version answers a refusal about a recorded Doc. With none recorded (cleared since),
+      // publishing would start a new Doc the caller never asked for.
+      return { success: false, error: `${path} has no recorded Doc, so doc_version does not apply. Publish without it to create a new Doc.` };
+    }
     if (existing.record) {
       return this.republish(ctx, drive, doc, existing.record, parsed, title);
     }
@@ -220,6 +253,10 @@ export class DocPublishGoogleHandler implements ToolHandler {
   }
 
   private async create(ctx: ToolContext, drive: Drive, doc: WorkingDocRow, title: string): Promise<ToolResult> {
+    const short = this.shortOfTime(ctx, 'create the Doc');
+    if (short) return short;
+    // The comment cutoff is taken before the write: a comment opened during or after it is new.
+    const writeStartedAt = new Date().toISOString();
     let file: drive_v3.Schema$File;
     try {
       const res = await drive.files.create({
@@ -230,7 +267,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
         },
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
         fields: 'id,webViewLink,mimeType',
-      }, REQUEST);
+      }, requestOptions(ctx));
       file = res.data;
     } catch (err) {
       ctx.log.error({ err, path: doc.path, status: httpStatus(err), reason: driveReason(err) }, `${TOOL}: Doc create failed`);
@@ -253,7 +290,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
       let leftover = '';
       try {
         // Best-effort: a leftover is named in the error below rather than failing differently.
-        await drive.files.delete({ fileId: file.id }, REQUEST);
+        await drive.files.delete({ fileId: file.id }, requestOptions(ctx));
       } catch (err) {
         ctx.log.error({ err, fileId: file.id }, `${TOOL}: could not delete the unconverted upload`);
         leftover = ` An unconverted copy (file ID ${file.id}) is still in Curia's Drive and should be deleted.`;
@@ -269,7 +306,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
     const recorded = await this.record(ctx, doc, {
       id: file.id,
       url,
-      published_at: new Date().toISOString(),
+      published_at: writeStartedAt,
       content_hash: contentHash ?? UNKNOWN_CONTENT_HASH,
     });
     if (!recorded.ok) {
@@ -301,7 +338,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
         fileId: record.id,
         fields: 'id,mimeType,trashed,appProperties,webViewLink',
         supportsAllDrives: true,
-      }, REQUEST);
+      }, requestOptions(ctx));
       current = res.data;
     } catch (err) {
       const status = httpStatus(err);
@@ -332,6 +369,10 @@ export class DocPublishGoogleHandler implements ToolHandler {
 
     const refusal = input.overwrite ? null : await this.changeCheck(ctx, drive, doc, record, input.docVersion);
     if (refusal) return refusal;
+    const short = this.shortOfTime(ctx, 'update the Doc');
+    if (short) return short;
+    // Taken before the write, as in create.
+    const writeStartedAt = new Date().toISOString();
 
     let updated: drive_v3.Schema$File;
     try {
@@ -341,12 +382,12 @@ export class DocPublishGoogleHandler implements ToolHandler {
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
         fields: 'id,webViewLink,mimeType',
         supportsAllDrives: true,
-      }, REQUEST);
+      }, requestOptions(ctx));
       updated = res.data;
     } catch (err) {
       ctx.log.error({ err, fileId: record.id, reason: driveReason(err) }, `${TOOL}: Doc update failed`);
       if (outcomeUnknown(err)) {
-        return { success: false, error: `Google Drive did not confirm the update (${describeDriveError(err)}), so the Doc (${record.url}) may or may not show the new text; the record was not updated. Publish again to retry: the next publish will report the Doc as edited if the update landed, so check it with get_doc_as_markdown before using the doc_version that refusal names.` };
+        return { success: false, error: `Google Drive did not confirm the update (${describeDriveError(err)}), so the Doc (${record.url}) may or may not show the new text; the record was not updated. Check the Doc with get_doc_as_markdown before publishing again. Do not retry with overwrite: true until the Doc holds the text you expect, because that retry skips the edit check; a retry without overwrite runs it.` };
       }
       return { success: false, error: `Google Drive refused to update the Doc (${record.url}): ${describeDriveError(err)}` };
     }
@@ -360,7 +401,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
     const recorded = await this.record(ctx, doc, {
       id: record.id,
       url,
-      published_at: new Date().toISOString(),
+      published_at: writeStartedAt,
       content_hash: contentHash ?? UNKNOWN_CONTENT_HASH,
     });
     if (!recorded.ok) {
@@ -379,9 +420,15 @@ export class DocPublishGoogleHandler implements ToolHandler {
   }
 
   /**
-   * The refusal for a Doc changed since the last publish, or null to go ahead. With
-   * `docVersion` (from an earlier refusal, after the caller read the Doc back and folded its
-   * changes in) the Doc only has to still export to that version.
+   * The refusal for a Doc changed since the last publish, or null to go ahead.
+   *
+   * Comments are read first and the content last, right before the caller's update, to keep the
+   * window between check and write as short as Drive allows. It is not closed: a Markdown upload
+   * takes no revision precondition (Docs' requiredRevisionId applies only to documents.batchUpdate),
+   * so an edit made in the second between the export and the update is overwritten.
+   *
+   * With `docVersion` (from an earlier refusal, after the caller read the Doc back and folded its
+   * changes in) the Doc's content and open comments only have to be as they were then.
    */
   private async changeCheck(
     ctx: ToolContext,
@@ -390,39 +437,51 @@ export class DocPublishGoogleHandler implements ToolHandler {
     record: PublishedDocRecord,
     docVersion: string | undefined,
   ): Promise<ToolResult | null> {
-    let now: string;
+    let comments: OpenComments | null;
+    let markdown: string;
     try {
-      now = await exportHash(drive, record.id);
+      comments = await openComments(drive, record.id, ctx);
+      markdown = await exportMarkdown(drive, record.id, ctx);
     } catch (err) {
-      ctx.log.error({ err, fileId: record.id }, `${TOOL}: could not export the Doc to check it for edits`);
-      return { success: false, error: `Could not read the Doc to check it for edits before overwriting it: ${describeDriveError(err)}` };
+      ctx.log.error({ err, fileId: record.id }, `${TOOL}: could not read the Doc to check it for changes`);
+      return { success: false, error: `Could not read the Doc to check it for edits and comments before overwriting it: ${describeDriveError(err)}` };
     }
+    if (comments === null) {
+      ctx.log.info({ path: doc.path, fileId: record.id }, `${TOOL}: refused, too many comments to check`);
+      return { success: false, error: `Not published: the Doc (${record.url}) has more open comments than Curia can check. Ask the principal to resolve the ones that are done, or whether to publish with overwrite: true.` };
+    }
+    const version = docVersionOf(markdown, comments);
+
     if (docVersion !== undefined) {
-      if (now === docVersion) return null;
-      ctx.log.info({ path: doc.path, fileId: record.id, docVersion, now }, `${TOOL}: refused, Doc changed after read-back`);
+      if (version === docVersion) return null;
+      ctx.log.info({ path: doc.path, fileId: record.id }, `${TOOL}: refused, Doc changed after read-back`);
       return {
         success: false,
-        error: `Not published: the Doc changed again after it was read back (${record.url}). Read it back again with get_doc_as_markdown, fold the new changes into the document, then publish with doc_version: "${now}".`,
+        error: `Not published: the Doc's text or open comments changed after it was read back (${record.url}). Read it back again with get_doc_as_markdown, fold the new changes into the document, then publish with doc_version: "${version}".`,
       };
     }
 
+    const cutoff = Date.parse(record.published_at);
     const changes: string[] = [];
     if (record.content_hash === UNKNOWN_CONTENT_HASH) changes.push('Curia could not tell whether it was edited');
-    else if (now !== record.content_hash) changes.push('it was edited');
-    try {
-      if (await hasNewOpenComments(drive, record.id, record.published_at)) changes.push('it has new open comments');
-    } catch (err) {
-      ctx.log.error({ err, fileId: record.id }, `${TOOL}: comment check failed`);
-      return { success: false, error: `Could not check the Doc's comments before overwriting it: ${describeDriveError(err)}` };
-    }
+    else if (shortHash(markdown) !== record.content_hash) changes.push('it was edited');
+    // A comment with no usable time on either side counts as new (fail closed).
+    if (comments.times.some((at) => Number.isNaN(at) || Number.isNaN(cutoff) || at > cutoff)) changes.push('it has new open comments');
     if (changes.length === 0) return null;
     ctx.log.info({ path: doc.path, fileId: record.id, changes }, `${TOOL}: refused, Doc changed since last publish`);
     return {
       success: false,
       error: `Not published: since the last publish ${changes.join(' and ')} (${record.url}), and publishing replaces the whole Doc. ` +
         'Read it back with get_doc_as_markdown (it shows the comments), fold the changes into the document with doc-write, ' +
-        `then publish again with doc_version: "${now}". Publishing with overwrite: true discards the changes instead; ask the principal first.`,
+        `then publish again with doc_version: "${version}". Publishing with overwrite: true discards the changes instead; ask the principal first.`,
     };
+  }
+
+  /** A refusal when too little of the call's budget is left to write and record, else null. */
+  private shortOfTime(ctx: ToolContext, what: string): ToolResult | null {
+    if (remainingMs(ctx) >= WRITE_RESERVE_MS) return null;
+    ctx.log.warn({ remainingMs: remainingMs(ctx) }, `${TOOL}: too little time left to write`);
+    return { success: false, error: `Ran out of time before it could ${what}; nothing was changed. Publish again.` };
   }
 
   /**
@@ -431,7 +490,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
    */
   private async contentHashAfterWrite(ctx: ToolContext, drive: Drive, fileId: string): Promise<string | null> {
     try {
-      return await exportHash(drive, fileId);
+      return shortHash(await exportMarkdown(drive, fileId, ctx));
     } catch (err) {
       ctx.log.warn({ err, fileId }, `${TOOL}: could not export the Doc after the write; the next publish will ask for doc_version`);
       return null;
@@ -465,6 +524,11 @@ export class DocPublishGoogleHandler implements ToolHandler {
         }
         if (result.document.id !== published.id) {
           return { ok: false, error: 'the document was replaced by a new one at the same path while publishing.' };
+        }
+        // Someone cleared or replaced the record meanwhile (a doc-write setting google_doc):
+        // that newer choice stands, and is not overwritten by a retry.
+        if (JSON.stringify(result.document.frontmatter[GOOGLE_DOC_KEY]) !== JSON.stringify(published.frontmatter[GOOGLE_DOC_KEY])) {
+          return { ok: false, error: `its \`${GOOGLE_DOC_KEY}\` record was changed while publishing, so it was left as it now is.` };
         }
         target = result.document;
       }

@@ -23,6 +23,6 @@
     "google_oauth_client_secret",
     "curia_google_email"
   ],
-  "timeout": 60000,
+  "timeout": 90000,
   "capabilities": ["workingDocs"]
 }
