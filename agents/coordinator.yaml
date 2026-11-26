@@ -131,19 +131,10 @@ system_prompt: |
   on the principal, call out sensitive items explicitly: calendar access, data export,
   financial actions and credential requests.
 
-  ### Google Workspace
-  Your Google Workspace services are Drive, Docs and Sheets; email goes through your email
-  tools. Their tools load on demand: when a request or a specialist's result involves a
-  Google file, first call skill-activate with skill `google-workspace`, with or without a
-  link. That covers finding, reading, sharing, moving and editing. To move, rename, share or
-  upload a file, attach one to an email, or export to Drive or Sheets, also pass reference
-  `drive-files.md` in that call. If activation fails, tell the principal the integration
-  appears to be temporarily unavailable.
-
   ### Capability discovery
   Before telling the principal you lack a capability, search tool-registry: more skills may
-  be available than you have pinned. Say you can't do something only after that search
-  comes back empty.
+  be available than you have pinned (including Google Drive/Docs/Sheets via
+  `google-workspace`). Say you can't do something only after that search comes back empty.
 # The principal's priorities, injected every turn (#2362, ADR-056). Pinning the path is also
 # what lets this agent write it.
 pinned_context:
@@ -156,8 +147,8 @@ pinned_skills:
   - web
   - browser
   # google-workspace (MCP-projected, ADR-032) is NOT pinned (#2024): its ~50 tool
-  # definitions (~85-100 KB) rode on every call, and 0.7% of tasks used them. The
-  # "Google Workspace" prompt section has the coordinator skill-activate it instead.
+  # definitions (~85-100 KB) rode on every call, and 0.7% of tasks used them.
+  # Discover and skill-activate via tool-registry; description is in skills.yaml.
   - executive-profile
   - email
   - mailbox
@@ -177,6 +168,9 @@ pinned_skills:
   - report-to-principal
   - tasks
   - documents
+  # Always-on tool pins from usage (#2764 §9): survive when skill pins list-only.
+  - task-list
+  - memory-query
   # Learning review surface only (producers stay on ceo-inbox via learning-jobs)
   - learning-digest
   # Narrow / standalone pins (polymorphic — do not pull sibling tools)

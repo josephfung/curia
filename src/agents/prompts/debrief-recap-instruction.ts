@@ -15,7 +15,7 @@ function recapLines(window: string): string[] {
     `1. Call \`activity-log\` with \`since\` set to ${window}. Optionally pass`,
     '   `tool_name: "calendar-respond-to-invite"` to focus on auto-RSVPs.',
     '2. Call `list-pending-actions` for anything still awaiting the principal\'s approval.',
-    '3. Call `list-spot-checks` (reports is pre-activated on this job). If it returns a',
+    '3. Call `list-spot-checks` (digest is pre-activated on this job). If it returns a',
     '   block, end the recap with it exactly as given; the principal answers it by number.',
     '4. Compose a concise recap. Lead with autonomous actions (RSVPs sent, emails drafted or',
     '   sent, calendar changes) from activity-log\'s `target`, `outcome` and `detail` fields,',
