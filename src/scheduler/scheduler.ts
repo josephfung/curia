@@ -274,6 +274,8 @@ function contextForPriorRunPrompt(context: unknown): unknown {
   const rest: Record<string, unknown> = { ...(context as Record<string, unknown>) };
   delete rest['failedSkills'];
   delete rest['failedSkillsOmitted'];
+  // Skill names for job-learned pre-activation (#2764) — not prompt material.
+  delete rest['activatedSkillsRuns'];
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
@@ -466,6 +468,8 @@ interface PendingRunMeta {
   autoSummary?: string;
   failedSkills?: Array<{ name: string; error: string }>;
   failedSkillsOmitted?: number;
+  /** Model-activated skills from the original wake (#2764 job-learned). */
+  activatedSkills?: string[];
 }
 
 type FireOutcome = 'dispatched' | 'skipped' | 'saturated';
@@ -580,6 +584,9 @@ export class Scheduler {
       // itself is untouched: other subscribers, the delegate among them, need it verbatim.
       const failedSkills = this.scrubStored(responseEvent.payload.failedSkills);
       const failedSkillsOmitted = responseEvent.payload.failedSkillsOmitted;
+      const activatedSkills = Array.isArray(responseEvent.payload.activatedSkills)
+        ? responseEvent.payload.activatedSkills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : undefined;
       const content = this.scrubStored(responseEvent.payload.content);
 
       if (responseEvent.payload.isError) {
@@ -608,6 +615,7 @@ export class Scheduler {
           failedSkills,
           failedSkillsOmitted,
           errorType,
+          activatedSkills,
         ).catch((err) => {
           this.logger.error({ err, parentEventId }, 'Unhandled error in handleCompletion (error-response path)');
         });
@@ -625,6 +633,8 @@ export class Scheduler {
         autoSummary,
         failedSkills,
         failedSkillsOmitted,
+        undefined,
+        activatedSkills,
       ).catch((err) => {
         this.logger.error({ err, parentEventId }, 'Unhandled error in handleCompletion (success path)');
       });
@@ -1691,6 +1701,7 @@ export class Scheduler {
     autoSummary: string | undefined,
     failedSkills: Array<{ name: string; error: string }> | undefined,
     failedSkillsOmitted: number | undefined,
+    activatedSkills?: string[],
   ): Promise<boolean> {
     if (!meta.taskId) return false;
     const state = await this.loadDispositionState(jobId);
@@ -1747,6 +1758,7 @@ export class Scheduler {
         autoSummary,
         failedSkills,
         failedSkillsOmitted,
+        activatedSkills,
       });
       await this.bus.publish('system', dispositionEvent);
       this.logger.info(
@@ -1896,6 +1908,8 @@ export class Scheduler {
     failedSkillsOmitted?: number,
     /** Class of `error`, for the operator's suspension notice (#2710). */
     errorType?: ErrorType,
+    /** Model-activated skills this run (#2764 job-learned). */
+    activatedSkills?: string[],
   ): Promise<void> {
     const jobId = this.pendingJobs.get(parentEventId);
     if (!jobId) {
@@ -2046,6 +2060,7 @@ export class Scheduler {
       let completionSummary = autoSummary;
       let completionFailedSkills = failedSkills;
       let completionOmitted = failedSkillsOmitted;
+      let completionActivatedSkills = activatedSkills;
 
       if (
         completionSuccess
@@ -2061,6 +2076,7 @@ export class Scheduler {
           completionSummary,
           completionFailedSkills,
           completionOmitted,
+          completionActivatedSkills,
         );
         if (held) return;
       }
@@ -2074,6 +2090,7 @@ export class Scheduler {
         completionSummary = runMeta.autoSummary;
         completionFailedSkills = runMeta.failedSkills;
         completionOmitted = runMeta.failedSkillsOmitted;
+        completionActivatedSkills = runMeta.activatedSkills;
       }
 
       const result = await this.schedulerService.completeJobRun(
@@ -2083,6 +2100,7 @@ export class Scheduler {
         completionSummary,
         completionFailedSkills,
         completionOmitted,
+        completionActivatedSkills,
       );
 
       if (result.suspended) {

@@ -227,6 +227,12 @@ interface AgentResponsePayload {
   /** Count of tool failures not represented in `failedSkills` (cap overflow / duplicates). */
   failedSkillsOmitted?: number;
   /**
+   * Skills the model activated during this turn (`by: model`, #2764). The scheduler
+   * appends them to `last_run_context.activatedSkillsRuns` so later fires can
+   * pre-activate what recent runs used (`by: job-learned`). Absent when none.
+   */
+  activatedSkills?: string[];
+  /**
    * Set by the agent runtime when it detects a no-reply sentinel (or a near-miss)
    * in the model output. Dispatch honours this the same way it honours the
    * in-band `NO_REPLY` token. Other `agent.response` subscribers (scheduler,
