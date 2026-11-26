@@ -88,7 +88,7 @@
     "node-html-parser": "^9.0.7",
     "node-pg-migrate": "^9.0.0",
     "nylas": "^8.5.0",
-    "onnxruntime-node": "1.30.0",
+    "onnxruntime-node": "1.31.1",
     "openai": "^7.47.0",
     "openredaction": "^1.1.5",
     "patchright": "1.64.2",

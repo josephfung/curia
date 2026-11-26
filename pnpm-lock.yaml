@@ -132,8 +132,8 @@ importers:
         specifier: ^8.5.0
         version: 8.5.0
       onnxruntime-node:
-        specifier: 1.30.0
-        version: 1.30.0
+        specifier: 1.31.1
+        version: 1.31.1
       openai:
         specifier: ^7.47.0
         version: 7.47.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
@@ -4626,8 +4626,15 @@ packages:
   onnxruntime-common@1.31.0-dev.20260911-2a43ec07e:
     resolution: {integrity: sha512-gBuF6U32YErKIAt+yD7DeGBpjRxhJ1uJwako6ygjokSZULDU6Pd+KWComX8Tumk1hYVHRxjPj7mdMnD0ryAPOw==}
 
+  onnxruntime-common@1.31.1:
+    resolution: {integrity: sha512-F+nnYNiQtmNJ95V6R/isBJqiVpdANCrsMEg1OaF+Bkbl3GAtzWLR7Ng17Ld0QtYtYJyotOHPJzOQn1Y6PLZjpg==}
+
   onnxruntime-node@1.30.0:
     resolution: {integrity: sha512-twhs1C2C/BFkz1yc5OY0KIU2GUq6DURO7hD4bx5Q2Qy3nAMJwRXW8xU3NVczE29VA9lolLOYepoD8fjTGOfIqw==}
+    os: [win32, darwin, linux]
+
+  onnxruntime-node@1.31.1:
+    resolution: {integrity: sha512-ijnSghbDHVWaQ2nDPmVccPlCHI8kH1Mx1aJ4a/qzRP16bBcVs4E3EqZQKZCkhWnbqN1tuQWxagimFtDpbPYYQw==}
     os: [win32, darwin, linux]
 
   onnxruntime-web@1.31.0-dev.20260914-8d85527a0:
@@ -10550,16 +10557,26 @@ snapshots:
     dependencies:
       mimic-function: 5.0.1
 
-  onnxruntime-common@1.30.0: {}
+  onnxruntime-common@1.30.0:
+    optional: true
 
   onnxruntime-common@1.31.0-dev.20260911-2a43ec07e:
     optional: true
+
+  onnxruntime-common@1.31.1: {}
 
   onnxruntime-node@1.30.0:
     dependencies:
       adm-zip: 0.6.1
       global-agent: 4.1.7
       onnxruntime-common: 1.30.0
+    optional: true
+
+  onnxruntime-node@1.31.1:
+    dependencies:
+      adm-zip: 0.6.1
+      global-agent: 4.1.7
+      onnxruntime-common: 1.31.1
 
   onnxruntime-web@1.31.0-dev.20260914-8d85527a0:
     dependencies:
