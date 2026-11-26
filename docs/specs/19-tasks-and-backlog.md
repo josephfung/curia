@@ -215,33 +215,35 @@ pinned_skills:
 
 These replace the former `enable_task_management` flag (two capabilities welded together).
 
-**`tasks`** (`skills/tasks/SKILL.md`):
+**`tasks`** (`skills/tasks/SKILL.md`) — skill pin lists name + description only
+([ADR-070](../adr/070-skills-load-on-demand.md)):
 
-1. **Expands** to `task-create`, `task-list`, `task-update`, `task-complete`.
-2. **Injects** the Task Management guidance block from the SKILL.md body.
-3. **Marks the agent heartbeat-eligible** — only agents that pin a skill with
+1. **Lists** the skill; member tools (`task-create`, `task-list`, `task-update`,
+   `task-complete`, plus `plan` / `checkpoint`) and the SKILL.md body load on
+   `skill-activate` or code pre-activation.
+2. **Marks the agent heartbeat-eligible** — only agents that pin a skill with
    `heartbeat: true` appear in the heartbeat's `source_agent_id` allow-list (§5).
 
-**`documents`** (`skills/documents/SKILL.md`):
+**`documents`** (`skills/documents/SKILL.md`) — same pin model:
 
-1. **Expands** to `doc-read`, `doc-list`, `doc-write`, `doc-search`, `doc-place`.
-2. **Injects** the Document Workspace guidance block.
-3. **Enables** the document-workspace runtime surface (`documentWorkspaceEnabled`).
+1. **Lists** the skill; `doc-*` tools and the Document Workspace body load on
+   activation.
+2. **Enables** the document-workspace runtime surface (`documentWorkspaceEnabled`).
 
 `taskRepo` is wired whenever **either** skill is pinned (task-wake scheduler refresh and
 document project-root resolution both need it). `workingDocsRepo` stays documents-only.
 
 Shipped on **`coordinator`**, **`ceo-inbox`**, and **`contacts`** (both pins). An agent
-may still list individual `task-*` tool names in `pinned_skills` *without* the bundle for
+may still tool-pin individual `task-*` names in `pinned_skills` *without* the bundle for
 a bespoke need (e.g. read-only `task-list`) — that agent is not heartbeat-eligible and
-gets no injected block. If a task's `source_agent_id` points at a non-eligible or null
+gets no skill body. If a task's `source_agent_id` points at a non-eligible or null
 agent, the heartbeat routes the wake to the coordinator.
 
-The SKILL.md bodies hold what applies on every turn. Text only a task wake needs rides on
-the wake instead (prompt trim PR 9): how to resume and how to end the run are in
-`WAKE_DISPOSITION_INSTRUCTION` (`src/scheduler/wake-disposition.ts`), which every ordinary
-task-wake body carries, and the projects catalog, placement policy and workspace manifest
-are appended to the wake's task message by the runtime (§ placement, spec 20).
+Guidance that applies only on a task wake rides the wake (prompt trim PR 9): how to
+resume and how to end the run are in `WAKE_DISPOSITION_INSTRUCTION`
+(`src/scheduler/wake-disposition.ts`), which every ordinary task-wake body carries, and
+the projects catalog, placement policy and workspace manifest are appended to the wake's
+task message by the runtime (§ placement, spec 20).
 
 ---
 

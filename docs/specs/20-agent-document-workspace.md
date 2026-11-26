@@ -186,10 +186,11 @@ the auto-pin). The document stays the source of truth; the Doc is a formatted co
 
 ## 7. Harness injection & auto-pin
 
-The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot
-guidance block plus dynamically-pinned tools. Pin the **`documents`** skill
-(`skills/documents/SKILL.md`) — bootstrap expands it to `doc-*` tools and injects the
-SKILL.md body via `resolvePinnedSkills` (call site in `src/index.ts`). There is no
+The workspace is exposed the same way the resumable and plan harnesses are: a listed
+skill plus tools that load on activation. Pin the **`documents`** skill
+(`skills/documents/SKILL.md`) — the pin lists name + description and enables
+`documentWorkspaceEnabled`; `doc-*` tools and the SKILL.md body load on `skill-activate`
+or code pre-activation ([ADR-070](../adr/070-skills-load-on-demand.md)). There is no
 separate document-workspace YAML flag. Agents that historically had
 `enable_task_management` now pin both `tasks` and `documents`.
 

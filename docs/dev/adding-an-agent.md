@@ -61,10 +61,10 @@ system_prompt: |
 # Skills (optional but almost always needed)
 # ------------------------------------------------------------------
 
-pinned_skills:                 # skill bundles always available (expanded to member tools)
+pinned_skills:                 # skill pins list name+description; body/tools on activation (ADR-070)
   - web-fetch                  # singleton skills still use the tool name
-  - tasks                      # heartbeat + task-* + Task Management instructions
-  - documents                  # doc-* + Document Workspace instructions
+  - tasks                      # heartbeat + listed tasks skill
+  - documents                  # documentWorkspaceEnabled + listed documents skill
   - scheduler-create
 
 pinned_context:                # documents and settings shown on every turn (see below)
@@ -167,14 +167,18 @@ When a human-facing sentence genuinely needs the principal's job title, read `co
 
 ### `pinned_skills` (optional)
 
-List of **skill (bundle) names** always included for this agent. Bootstrap expands each pin to its member tools and injects any SKILL.md instruction body.
+List of **skill (bundle) names** (and optional **tool pins**) for this agent.
+Skill pins put only the name and description in context; the SKILL.md body and member
+tools load on `skill-activate` or code pre-activation ([ADR-070](../adr/070-skills-load-on-demand.md)).
+Tool pins (single tool names / ADR-032) stay always-on. Side effects such as
+`heartbeat: true` and `documentWorkspaceEnabled` still apply from the skill pin.
 
 **Choosing what to pin:**
 
 Browse `skills/*/SKILL.md` (bundles) and flat `skills/<tool>/` (singleton skills). As a heuristic:
-- Pin skills the agent needs on *every* task (e.g., `web-fetch` for a research agent, `tasks` for heartbeat-eligible work)
-- Don't pin skills that are rarely needed — use `allow_discovery: true` instead
-- The Coordinator should pin a broad set since it handles all inbound routing
+- List skills the agent should know about and may activate (e.g. `tasks` for heartbeat-eligible work)
+- Tool-pin only what is needed on *most* turns (usage-driven; see #2764)
+- Prefer discovery (`allow_discovery: true` / `skill-activate`) over listing rarely used skills
 
 Unresolved pins are skipped at bootstrap (warn). For **scheduled** agents, unresolved pins are also logged at **error** so monitoring can catch a reduced toolset (#1501) — schedules still load and the agent may try to run; the error is the signal to investigate.
 
@@ -184,15 +188,15 @@ Current built-in skills/tools include (see `skills/` for the full list):
 
 | Category | Pin |
 |---|---|
-| **Email** | `email-send`, `email-reply` (atoms / singleton skills); `drive-download-file` |
-| **Tasks** | `tasks` — expands to `task-*`, injects discipline block, heartbeat-eligible; see [spec 19](../specs/19-tasks-and-backlog.md) |
-| **Documents** | `documents` — expands to `doc-*`, injects workspace block |
-| **Calendar** | `calendar` — expands to all `calendar-*` tools (per-tool `action_risk` preserved) |
-| **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, … |
-| **Web** | `web-fetch`, `web-search`, `web-browser` |
-| **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-get`, `scheduler-cancel` |
-| **Delegation** | `delegate` |
-| **Autonomy** | `get-autonomy`, `set-autonomy` |
+| **Email** | `email` / `mailbox` skills; tool-pin individual send tools when always-on |
+| **Tasks** | `tasks` — listed; activates to `task-*` + discipline block; heartbeat-eligible; see [spec 19](../specs/19-tasks-and-backlog.md) |
+| **Documents** | `documents` — listed; activates to `doc-*` + workspace block |
+| **Calendar** | `calendar` — typically tool-pins domain tools on the calendar specialist |
+| **Contacts** | `contacts` / `contact-trust` / `contact-upkeep` skills |
+| **Web** | `web` / `browser` skills |
+| **Scheduling** | `scheduler` / `job-report` skills |
+| **Delegation** | `delegate` (tool pin on coordinator) |
+| **Autonomy** | `autonomy` / `approvals` skills |
 | **Context** | `entity-context` |
 | **Config** | `config-store` |
 
@@ -314,18 +318,17 @@ pinned_skills:
   - documents
 ```
 
-- **`tasks`** expands to `task-create` / `task-list` / `task-update` / `task-complete`
-  plus the sibling tools `plan` and `checkpoint`,
-  injects the discipline block from `skills/tasks/SKILL.md`, and marks the agent
-  heartbeat-eligible for `BacklogHeartbeat`.
-- **`documents`** expands to `doc-*`, injects the workspace block from
-  `skills/documents/SKILL.md`, and enables the document-workspace runtime surface.
+- **`tasks`** lists the skill (name + description), marks the agent heartbeat-eligible
+  for `BacklogHeartbeat`, and loads `task-*` / `plan` / `checkpoint` plus the
+  discipline block from `skills/tasks/SKILL.md` on activation.
+- **`documents`** lists the skill, enables the document-workspace runtime surface, and
+  loads `doc-*` plus the workspace block from `skills/documents/SKILL.md` on activation.
 
 Pin both on agents that uncover deferrable, multi-step work (the Coordinator,
 `ceo-inbox`, and `contacts` ship with both). Pure act-and-return specialists omit them.
-An agent that needs only read-only `task-list` can pin that **tool** name directly
+An agent that needs only read-only `task-list` can tool-pin that **tool** name directly
 (polymorphic pins, [ADR-032](../adr/032-polymorphic-pins-and-mcp-as-skill.md)) without
-the bundle — it won't be heartbeat-eligible or get the injected block, and it will
+the bundle — it won't be heartbeat-eligible or get the skill body, and it will
 not receive sibling tools like `plan`/`checkpoint`. See [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md).
 
 `task-create` accepts an optional `target_agent_id` input that assigns the task (and its
@@ -456,7 +459,7 @@ Pass `--since` / `--until` for a window other than the 30 days ending now. What 
 - **Pinned tools with zero calls** — expanded pins plus MCP tools offered in the window, minus that agent's `tool.invoke` / `skill.invoke` rows.
 - **Modal tool count** — the most common tool-list size; later calls in a task grow when `skill-activate` adds tools.
 
-To see what a budgeted agent's fixed context is made of before it reaches production, run `pnpm report:budget --agent <name>` in a checkout. It lists the always-on prompt by section (system_prompt headings, then each pinned SKILL.md), every local tool definition, and the specialist roster, each with its size and share. A failing `prompt-budget.test.ts` prints the same numbers for its five largest contributors, with the overage, and points here.
+To see what a budgeted agent's fixed context is made of before it reaches production, run `pnpm report:budget --agent <name>` in a checkout. It lists the always-on prompt by section (system_prompt headings), the skill-list row, every local tool-pin definition, and the specialist roster, each with its size and share. A failing `prompt-budget.test.ts` prints the same numbers for its five largest contributors, with the overage, and points here.
 
 ---
 

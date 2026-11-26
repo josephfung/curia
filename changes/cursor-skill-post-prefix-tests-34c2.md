@@ -9,3 +9,4 @@
 ### Changed
 
 - **Skill docs** — specs describe on-demand pins, pre-activation, and append-only bodies. (#2764)
+- **Specs 19/20 + agent guide** — skill pins list only; body and tools load on activation. (#2764)
