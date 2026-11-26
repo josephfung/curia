@@ -531,6 +531,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     skillToolDefs: toolDefs,
     pinnedSkillNames: pinResolution.resolvedSkills,
     skillLoading,
+    allowDiscovery: agentConfig.allow_discovery === true,
     skillList: pinResolution.listedSkills,
     skillRegistry,
     conversationActiveSkills: ctx.conversationActiveSkills,

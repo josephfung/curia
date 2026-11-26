@@ -305,6 +305,13 @@ export interface ToolContext {
   /** Atom tool catalog — injected alongside skillRegistry for activation resolution.
    *  Not a separate capability; accompanies skillRegistry. */
   toolRegistry?: import('./registry.js').ToolRegistry;
+  /**
+   * When set, skill-activate may only load these skills (#2764). Set for agents with
+   * `allow_discovery: false` (their listed pin set). Absent when discovery is on, so the
+   * model can activate anything resolveSkillActivation accepts. Code pre-activation never
+   * goes through this field.
+   */
+  activatableSkills?: ReadonlySet<string>;
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;

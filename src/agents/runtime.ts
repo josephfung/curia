@@ -293,6 +293,11 @@ export interface AgentConfig {
    */
   skillLoading?: 'eager' | 'on_demand';
   /**
+   * From agent YAML `allow_discovery` (#2764). When false, model skill-activate is
+   * limited to `skillList` names via InvokeOptions.activatableSkills.
+   */
+  allowDiscovery?: boolean;
+  /**
    * Skills listed for the model under on_demand (name + description). Empty when eager.
    * Rendered as `## Skills` in the system prompt.
    */
@@ -1230,24 +1235,32 @@ export class AgentRuntime {
     // Pre-activation at turn start through one entry point (#2764 / ADR-070).
     const pinnedSkillNames = new Set(this.config.pinnedSkillNames ?? []);
     const preActCtx = { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId };
+    // One set across every appendPreActivated call this turn — a skill named by two
+    // paths (wake + carry, declared + learned) must not append its body twice.
+    const preActivatedThisTurn = new Set<string>();
+    const onDemand = this.config.skillLoading === 'on_demand';
     const appendPreActivated = async (
       names: string[],
       by: SkillActivationBy,
       skipMessage: string,
     ): Promise<void> => {
       if (names.length === 0 || !executionLayer) return;
+      const fresh = names.filter((n) => !preActivatedThisTurn.has(n));
+      if (fresh.length === 0) return;
+      for (const n of fresh) preActivatedThisTurn.add(n);
       if (!workingToolDefs) workingToolDefs = [];
       // Best-effort: unit mocks often omit resolveSkillActivationForAgent; a miss must
       // not abort the turn (scheduler/bullpen/spot-check still need to run).
       try {
-        const blocks = await this.preActivateSkills(names, workingToolDefs, skipMessage, by, preActCtx);
+        const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
         for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
       } catch (err) {
-        logger.warn({ err, agentId, skills: names, by }, skipMessage);
+        logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
       }
     };
 
     // Task wake: every skill activated on the task (no relevance filter; cap 8) plus `tasks`.
+    // Under eager, skip skills already pinned (their tools/bodies are in the fixed set).
     if (boundTaskCtx && this.config.skillRegistry && executionLayer) {
       const wakeSkills = selectActiveSkillsForWake({
         progress: boundTaskCtx.progress,
@@ -1255,7 +1268,12 @@ export class AgentRuntime {
         skillRegistry: this.config.skillRegistry,
         relevanceText: '',
       });
-      const wakePlusTasks = wakeSkills.includes('tasks') ? wakeSkills : [...wakeSkills, 'tasks'];
+      const wakeForLoad = onDemand
+        ? wakeSkills
+        : wakeSkills.filter((n) => !pinnedSkillNames.has(n));
+      const wakePlusTasks = onDemand
+        ? (wakeForLoad.includes('tasks') ? wakeForLoad : [...wakeForLoad, 'tasks'])
+        : wakeForLoad;
       if (wakePlusTasks.length > 0) {
         await appendPreActivated(wakePlusTasks, 'wake', 'Wake active-skill re-load skipped');
         // Persist only when the re-selected set actually changed — a no-op write
@@ -1285,46 +1303,51 @@ export class AgentRuntime {
       }
     }
 
-    // Conversation carry: skills used recently in this conversation (#2764).
-    if (this.config.conversationActiveSkills && executionLayer) {
-      try {
-        const carried = await this.config.conversationActiveSkills.listActive(
-          taskEvent.payload.conversationId,
-          agentId,
-        );
-        if (carried.length > 0) {
-          await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
+    // Conversation / bullpen / job / spot-check paths are on_demand-only so an
+    // eager deploy of this PR alone cannot widen Tier 0 (scheduler bundle etc.).
+    if (onDemand) {
+      // Conversation carry: skills used recently in this conversation (#2764).
+      if (this.config.conversationActiveSkills && executionLayer) {
+        try {
+          const carried = await this.config.conversationActiveSkills.listActive(
+            taskEvent.payload.conversationId,
+            agentId,
+          );
+          if (carried.length > 0) {
+            await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
+          }
+        } catch (err) {
+          logger.warn({ err, agentId, conversationId: taskEvent.payload.conversationId }, 'Conversation skill carry failed');
         }
-      } catch (err) {
-        logger.warn({ err, agentId, conversationId: taskEvent.payload.conversationId }, 'Conversation skill carry failed');
       }
-    }
 
-    // Bullpen turns always need the bullpen skill (#2764).
-    if (taskEvent.payload.channelId === 'bullpen') {
-      await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
-    }
-
-    // Every scheduler-fired turn gets scheduler (holds scheduler-report / future job-report).
-    if (taskEvent.payload.channelId === 'scheduler') {
-      await appendPreActivated(['scheduler'], 'job', 'Scheduler skill pre-activation skipped');
-      // Declared job skills + last-run learned activations live on the payload / metadata.
-      const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
-      const declared = collectJobSkillNames(
-        taskEvent.payload as unknown as Record<string, unknown>,
-        meta,
-      );
-      if (declared.job.length > 0) {
-        await appendPreActivated(declared.job, 'job', 'Declared job skill pre-activation skipped');
+      // Bullpen turns always need the bullpen skill (#2764).
+      if (taskEvent.payload.channelId === 'bullpen') {
+        await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
       }
-      if (declared.learned.length > 0) {
-        await appendPreActivated(declared.learned, 'job-learned', 'Learned job skill pre-activation skipped');
-      }
-    }
 
-    // Spot-check replies: pre-activate reports (digest after PR 3 split) instead of instructing the model.
-    if (turnGuidanceKeys.includes('spot-check-reply')) {
-      await appendPreActivated(['reports'], 'conversation', 'Spot-check reports skill pre-activation skipped');
+      // Every scheduler-fired turn gets scheduler (holds scheduler-report / future job-report).
+      if (taskEvent.payload.channelId === 'scheduler') {
+        await appendPreActivated(['scheduler'], 'job', 'Scheduler skill pre-activation skipped');
+        // Declared job skills + last-run learned activations live on the payload / metadata.
+        const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
+        const declared = collectJobSkillNames(
+          taskEvent.payload as unknown as Record<string, unknown>,
+          meta,
+        );
+        if (declared.job.length > 0) {
+          await appendPreActivated(declared.job, 'job', 'Declared job skill pre-activation skipped');
+        }
+        if (declared.learned.length > 0) {
+          await appendPreActivated(declared.learned, 'job-learned', 'Learned job skill pre-activation skipped');
+        }
+      }
+
+      // Spot-check replies: pre-activate reports (digest after PR 3 split).
+      // `by: trigger` — distinct from conversation carry for Layer-3 by-path counts.
+      if (turnGuidanceKeys.includes('spot-check-reply')) {
+        await appendPreActivated(['reports'], 'trigger', 'Spot-check reports skill pre-activation skipped');
+      }
     }
 
     // Onboarding on a live principal turn (#2360, design §6): an ordinary principal message
@@ -1475,6 +1498,8 @@ export class AgentRuntime {
       if (!skill || modelActivatedSkills.includes(skill)) return;
       modelActivatedSkills.push(skill);
     };
+    /** Conversation carry touches this turn — at most once per skill (#2764). */
+    const conversationSkillsTouchedThisTurn = new Set<string>();
     /**
      * Calendar (or similar) identity mismatch (#1854). Soft skill failure alone
      * leaves last_run_outcome=completed (#1830); this hard-fails the task after
@@ -2826,6 +2851,14 @@ export class AgentRuntime {
             turnDateResolveResults: turnDateResolveTracker.snapshot(),
             senderId: taskEvent.payload.senderId,
             identifierSources,
+            // allow_discovery:false → model may only activate listed skills (#2764).
+            ...(this.config.allowDiscovery
+              ? {}
+              : {
+                  activatableSkills: new Set(
+                    (this.config.skillList ?? []).map((s) => s.name),
+                  ),
+                }),
             // After acquire, and only on delegate. A signal taken before this
             // task holds the lane never aborts. Late delivery off keeps today's
             // wait: no signal is passed.
@@ -3021,6 +3054,31 @@ export class AgentRuntime {
             budget.consecutiveErrors = 0;
             if (isMessageSend(toolCall.name, skillInput)) sends.push(toolCall.name);
 
+            // Conversation carry (#2764): using a skill = calling any of its member tools
+            // (or activating it again — handled on skill-activate below). Once per skill/turn.
+            if (
+              this.config.conversationActiveSkills
+              && this.config.skillRegistry
+              && toolCall.name !== SKILL_ACTIVATE_TOOL_NAME
+            ) {
+              const owner = this.config.skillRegistry.toolOwner(toolCall.name);
+              if (owner && !conversationSkillsTouchedThisTurn.has(owner.manifest.name)) {
+                conversationSkillsTouchedThisTurn.add(owner.manifest.name);
+                try {
+                  await this.config.conversationActiveSkills.touch(
+                    conversationId,
+                    agentId,
+                    owner.manifest.name,
+                  );
+                } catch (err) {
+                  logger.warn(
+                    { err, agentId, skill: owner.manifest.name, conversationId, tool: toolCall.name },
+                    'Failed to touch conversation active skill after tool use',
+                  );
+                }
+              }
+            }
+
             // Delegate soft-failures (`success: true, data.failed`) still carry
             // IDENTITY_MISMATCH from @calendar — hard-fail the coordinating turn
             // so the scheduled morning-brief job is not marked completed (#1854).
@@ -3096,22 +3154,32 @@ export class AgentRuntime {
                   ? JSON.parse(result.data) as unknown
                   : result.data;
                 const activations: SkillActivationResult[] = [];
+                let partialErrors: string[] = [];
+                const readPartialErrors = (obj: Record<string, unknown>): string[] =>
+                  Array.isArray(obj.partialErrors)
+                    ? obj.partialErrors.filter((e): e is string => typeof e === 'string')
+                    : [];
                 const single = parseSkillActivationProtocol(data);
                 if (single) {
                   activations.push(single);
+                  if (data && typeof data === 'object' && !Array.isArray(data)) {
+                    partialErrors = readPartialErrors(data as Record<string, unknown>);
+                  }
                 } else if (
                   data
                   && typeof data === 'object'
                   && !Array.isArray(data)
                   && (data as Record<string, unknown>)._curia_protocol === SKILL_ACTIVATION_BATCH_PROTOCOL
                 ) {
-                  const rawList = (data as Record<string, unknown>).activations;
+                  const batch = data as Record<string, unknown>;
+                  const rawList = batch.activations;
                   if (Array.isArray(rawList)) {
                     for (const entry of rawList) {
                       const parsed = parseSkillActivationProtocol(entry);
                       if (parsed) activations.push(parsed);
                     }
                   }
+                  partialErrors = readPartialErrors(batch);
                 }
                 if (activations.length > 0) {
                   const resultParts: string[] = [];
@@ -3156,6 +3224,7 @@ export class AgentRuntime {
                           agentId,
                           activation.skill,
                         );
+                        conversationSkillsTouchedThisTurn.add(activation.skill);
                       } catch (err) {
                         logger.warn(
                           { err, agentId, skill: activation.skill, conversationId },
@@ -3163,6 +3232,9 @@ export class AgentRuntime {
                         );
                       }
                     }
+                  }
+                  for (const errLine of partialErrors) {
+                    resultParts.push(`Not activated: ${errLine}`);
                   }
                   // Append-only: bodies live in the tool result, not spliced system messages.
                   toolResultOverride = resultParts.join('\n\n');

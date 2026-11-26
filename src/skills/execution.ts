@@ -348,6 +348,11 @@ export interface InvokeOptions {
    * The delegate handler ends its wait; it does not cancel the specialist.
    */
   inputSignal?: AbortSignal;
+  /**
+   * When set, skill-activate may only load these skills (#2764). Forwarded onto
+   * ToolContext for agents with `allow_discovery: false`.
+   */
+  activatableSkills?: ReadonlySet<string>;
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -3405,6 +3410,9 @@ export class ExecutionLayer {
       // Forwarded with liveTurn by `delegate`, so a lapsed grant also bounds the specialist (#2495).
       ...(options?.liveTurnGrantId !== undefined ? { liveTurnGrantId: options.liveTurnGrantId } : {}),
       ...(options?.inputSignal !== undefined ? { inputSignal: options.inputSignal } : {}),
+      ...(options?.activatableSkills !== undefined
+        ? { activatableSkills: options.activatableSkills }
+        : {}),
       delegationGuard: options?.delegationGuard,
       turnDateResolveResults: options?.turnDateResolveResults,
       identifierSources: options?.identifierSources,

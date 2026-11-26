@@ -112,8 +112,17 @@ export class SkillActivateHandler implements ToolHandler {
     const agentId = ctx.agentId ?? 'system';
     const activations: SkillActivationResult[] = [];
     const errors: string[] = [];
+    // allow_discovery:false agents may only activate their listed skills (#2764).
+    // Code pre-activation uses resolveSkillActivationForAgent and skips this gate.
+    const allowlist = ctx.activatableSkills;
 
     for (const skillName of skillNames) {
+      if (allowlist && !allowlist.has(skillName)) {
+        errors.push(
+          `${skillName}: not in this agent's listed skills — activate only skills listed in your system prompt`,
+        );
+        continue;
+      }
       const resolved = resolveSkillActivation({
         skillName,
         skillRegistry: ctx.skillRegistry,
