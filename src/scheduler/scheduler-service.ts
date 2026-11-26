@@ -623,9 +623,21 @@ export class SchedulerService {
   async upsertDeclarativeJob(
     sourceAgentId: string,
     agentId: string,
-    schedule: { cron: string; task: string; expectedDurationSeconds?: number; intent_anchor?: string },
+    schedule: {
+      cron: string;
+      task: string;
+      expectedDurationSeconds?: number;
+      intent_anchor?: string;
+      /** Skills to pre-activate when this job fires (#2764). */
+      skills?: string[];
+    },
   ): Promise<string> {
-    const taskPayload = { task: schedule.task };
+    const skills = Array.isArray(schedule.skills)
+      ? schedule.skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      : [];
+    const taskPayload: Record<string, unknown> = skills.length > 0
+      ? { task: schedule.task, skills }
+      : { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
     // Validate expectedDurationSeconds: must be a finite positive integer.

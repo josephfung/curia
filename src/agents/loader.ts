@@ -50,6 +50,13 @@ export interface AgentYamlConfig {
   system_prompt: string;
   pinned_skills?: string[];
   /**
+   * How pinned skills enter the agent's context (#2764, ADR-070).
+   * `eager` (default): bodies + member tools load at bootstrap (ADR-031/032 Tier 0).
+   * `on_demand`: only name + description are listed; body and tools load on activation.
+   * Temporary migration switch — removed when every agent is on_demand.
+   */
+  skill_loading?: 'eager' | 'on_demand';
+  /**
    * `/shared/` documents and config-store keys rendered into every turn's
    * `## Pinned context` block (#2338, ADR-056). A mapping with optional `docs` and
    * `configs`, each a string or a list of strings / `{ path|key, description }`.
@@ -66,6 +73,11 @@ export interface AgentYamlConfig {
     /** When set, creates a linked tasks row that enables drift detection for this job.
      *  Should express the stable original goal of the recurring task in plain language. */
     intent_anchor?: string;
+    /**
+     * Skills to pre-activate when this job fires (#2764). Stored on task_payload.skills
+     * and applied by the runtime before round 1.
+     */
+    skills?: string[];
   }>;
   /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
    *  When set, the runtime injects timeout_ms (duration + bounded headroom) into delegate
@@ -141,6 +153,17 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
   // A bad declaration fails the load here rather than rendering a broken block or
   // granting write access to the wrong path later.
   parsePinnedContext(config.pinned_context, name);
+
+  const skillLoading: unknown = config.skill_loading;
+  if (
+    skillLoading !== undefined
+    && skillLoading !== 'eager'
+    && skillLoading !== 'on_demand'
+  ) {
+    throw new Error(
+      `Invalid skill_loading in ${filePath}: ${JSON.stringify(skillLoading)} (must be "eager" or "on_demand")`,
+    );
+  }
 
   // Interpolate ${persona.*} placeholders in the system prompt.
   // persona.display_name, tone, and signature are prompt text only. The

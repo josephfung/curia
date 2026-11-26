@@ -20,10 +20,15 @@ import {
 import { appendSkillInstructions } from './pin-resolution.js';
 import { readSkillResource } from './skill-resources.js';
 
-export {
+import {
   formatActivatedSkillInstructionBlock,
   formatSkillReferenceBlock,
 } from './skill-instruction-format.js';
+
+export {
+  formatActivatedSkillInstructionBlock,
+  formatSkillReferenceBlock,
+};
 
 export const SKILL_ACTIVATE_TOOL_NAME = 'skill-activate';
 /** Voice-bridge-only tools excluded from text-turn discovery (#1614). */
@@ -250,11 +255,12 @@ export function resolveSkillActivation(options: {
 }
 
 /**
- * On wake: treat stored active skills as a strong prior, drop skills that no
- * longer share a whole-token overlap (≥3 chars) with the current step text,
- * and cap the set. When *no* stored skill is relevant, fall back to MRU up to
- * cap (still a strong prior, just without a relevance signal). Pinned skills
- * are excluded (already eager in the bootstrap prompt).
+ * On wake: re-load every skill activated on the task, most recently used first,
+ * capped at ACTIVE_SKILLS_CAP (#2764). No relevance filter and no pinned-skill
+ * exclusion — under on_demand a listed skill is not already in the tool set, and
+ * even under eager the wake must restore activated tools that may have been
+ * dropped from the working list. `pinnedSkillNames` and `relevanceText` remain
+ * in the options object for call-site compatibility; they are unused.
  */
 export function selectActiveSkillsForWake(options: {
   progress: Record<string, unknown> | undefined | null;
@@ -264,54 +270,21 @@ export function selectActiveSkillsForWake(options: {
   cap?: number;
 }): string[] {
   const cap = options.cap ?? ACTIVE_SKILLS_CAP;
-  const pinned = options.pinnedSkillNames instanceof Set
-    ? options.pinnedSkillNames
-    : new Set(options.pinnedSkillNames);
+  void options.pinnedSkillNames;
+  void options.relevanceText;
 
   const stored = readActiveSkillsBlock(options.progress)?.skills ?? [];
   if (stored.length === 0) return [];
 
-  const relevanceTokens = tokenizeForRelevance(options.relevanceText);
-  const scored: Array<{ name: string; relevant: boolean; activatedAt: string }> = [];
-
+  const kept: Array<{ name: string; activatedAt: string }> = [];
   for (const entry of stored) {
-    if (pinned.has(entry.name)) continue;
     const skill = options.skillRegistry.get(entry.name);
     if (!skill || skill.synthetic) continue;
-
-    const haystackTokens = tokenizeForRelevance([
-      skill.manifest.name,
-      skill.manifest.description,
-      ...skill.manifest.tools,
-    ].join(' '));
-    const relevant = relevanceTokens.size === 0
-      || intersectsTokens(relevanceTokens, haystackTokens);
-
-    scored.push({ name: entry.name, relevant, activatedAt: entry.activatedAt });
+    kept.push({ name: entry.name, activatedAt: entry.activatedAt });
   }
 
-  const relevant = scored.filter((s) => s.relevant);
-  const pool = relevant.length > 0 ? relevant : scored;
-
-  // MRU within the chosen pool.
-  pool.sort((a, b) => b.activatedAt.localeCompare(a.activatedAt));
-  return pool.slice(0, cap).map((s) => s.name);
-}
-
-/** Whole tokens of length ≥ 3 — avoids "task" matching "multitask". */
-function tokenizeForRelevance(text: string): Set<string> {
-  const tokens = new Set<string>();
-  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (raw.length >= 3) tokens.add(raw);
-  }
-  return tokens;
-}
-
-function intersectsTokens(a: Set<string>, b: Set<string>): boolean {
-  for (const t of a) {
-    if (b.has(t)) return true;
-  }
-  return false;
+  kept.sort((a, b) => b.activatedAt.localeCompare(a.activatedAt));
+  return kept.slice(0, cap).map((s) => s.name);
 }
 
 /** Apply multiple instruction blocks onto a system prompt (pinned path reuse). */
@@ -343,15 +316,11 @@ export function buildSkillActivationProtocol(
 }
 
 /**
- * Slim acknowledgement for the skill-activate *tool result* (#1505 review).
+ * Metadata ack for a skill activation (#1505 / #2764).
  *
- * The runtime splices the SKILL.md `instructions` and any loaded
- * `referenceContent.content` into the turn as their own `system` messages, so
- * echoing those bodies back inside the generic `tool_result` JSON would inject
- * each one twice. For a size-capped reference file that doubles its context
- * cost and can push an otherwise-budgeted turn over the provider limit. Keep
- * only metadata here (skill, tools, listings, and the reference path/truncated
- * flag) — the actual content reaches the LLM via the spliced system messages.
+ * Under append-only delivery (#2764 / ADR-070) the runtime composes the tool
+ * result as this ack plus the SKILL.md body (and any reference content) so the
+ * prompt prefix stays cacheable. Bodies are no longer spliced as system messages.
  */
 export function buildSkillActivationAck(
   activation: SkillActivationResult,
@@ -366,7 +335,6 @@ export function buildSkillActivationAck(
     assets: activation.assets,
   };
   if (activation.referenceContent) {
-    // Path + truncated flag only; the content is in the spliced system message.
     ack.referenceContent = {
       path: activation.referenceContent.path,
       truncated: activation.referenceContent.truncated,
@@ -374,6 +342,38 @@ export function buildSkillActivationAck(
     };
   }
   return ack;
+}
+
+/**
+ * Append-only skill-activate tool result (#2764): JSON ack, then the instruction
+ * block and optional reference body as plain text after a delimiter. The runtime
+ * builds this so long bodies bypass sanitize truncation of the JSON envelope.
+ */
+export function buildSkillActivationToolResult(
+  activation: SkillActivationResult,
+): string {
+  const ack = buildSkillActivationAck(activation);
+  const parts: string[] = [JSON.stringify(ack)];
+  const instructionBlock = formatActivatedSkillInstructionBlock(
+    activation.skill,
+    activation.instructions,
+    { references: activation.references, assets: activation.assets },
+  );
+  if (instructionBlock) {
+    parts.push('', instructionBlock);
+  }
+  if (activation.referenceContent) {
+    parts.push(
+      '',
+      formatSkillReferenceBlock(
+        activation.skill,
+        activation.referenceContent.path,
+        activation.referenceContent.content,
+        activation.referenceContent.truncated,
+      ),
+    );
+  }
+  return parts.join('\n');
 }
 
 /** Parse a skill-activate tool result; null when not an activation protocol payload. */

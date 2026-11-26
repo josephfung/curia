@@ -11,7 +11,8 @@
     "agent_id": "string?",
     "intent_anchor": "string?",
     "error_budget": "object? (resumable task config only: resumable, max_stalls, max_iterations, max_wallclock_hours, max_cost_usd — not per-invocation turn limits)",
-    "timezone": "string? (IANA timezone name, e.g. America/Toronto — overrides Curia's default timezone for this job's cron schedule)"
+    "timezone": "string? (IANA timezone name, e.g. America/Toronto — overrides Curia's default timezone for this job's cron schedule)",
+    "skills": "string[]? (skill names to pre-activate when this job fires)"
   },
   "outputs": {
     "jobId": "string",

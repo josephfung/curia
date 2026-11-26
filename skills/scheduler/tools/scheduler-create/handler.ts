@@ -150,11 +150,15 @@ export class SchedulerCreateHandler implements ToolHandler {
     }
 
     try {
+      const inputSkills = (ctx.input as { skills?: unknown }).skills;
+      const skills = Array.isArray(inputSkills)
+        ? inputSkills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : [];
       const result = await ctx.schedulerService.createJob({
         agentId,
         cronExpr: cron_expr,
         runAt,
-        taskPayload: { task },
+        taskPayload: skills.length > 0 ? { task, skills } : { task },
         createdBy: agentId,
         intentAnchor: intent_anchor,
         errorBudget: error_budget,

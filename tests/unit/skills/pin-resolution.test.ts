@@ -143,9 +143,50 @@ describe('resolvePinnedSkills', () => {
     expect(r.heartbeatEligible).toBe(true);
     expect(r.documentWorkspaceEnabled).toBe(true);
     expect(r.instructionBlocks).toHaveLength(2);
+    expect(r.listedSkills).toEqual([]);
     const prompt = appendSkillInstructions('BASE', r.instructionBlocks);
     expect(prompt).toContain('## Task Management');
     expect(prompt).toContain('## Document Workspace');
+  });
+
+  it('on_demand lists skills without expanding tools or bodies (#2764)', () => {
+    const tools = new ToolRegistry();
+    for (const name of [...TASK_TOOLS, ...DOC_TOOLS]) {
+      tools.register(toolManifest(name, 'low'), noopHandler);
+    }
+    const skills = new SkillRegistry();
+    skills.register({
+      name: 'tasks',
+      description: 'Track work that outlasts this turn.',
+      tools: [...TASK_TOOLS],
+      instructions: '## Task Management\n\nDo it.',
+      heartbeat: true,
+    }, '/tmp/tasks');
+    skills.register({
+      name: 'documents',
+      description: 'Read and write workspace documents.',
+      tools: [...DOC_TOOLS],
+      instructions: '## Document Workspace\n\nWrite it.',
+      document_workspace: true,
+    }, '/tmp/documents');
+
+    const r = resolvePinnedSkills(
+      ['tasks', 'documents'],
+      skills,
+      tools,
+      undefined,
+      'coordinator',
+      'on_demand',
+    );
+    expect(r.toolNames).toEqual([]);
+    expect(r.instructionBlocks).toEqual([]);
+    expect(r.listedSkills).toEqual([
+      { name: 'tasks', description: 'Track work that outlasts this turn.' },
+      { name: 'documents', description: 'Read and write workspace documents.' },
+    ]);
+    expect(r.heartbeatEligible).toBe(true);
+    expect(r.documentWorkspaceEnabled).toBe(true);
+    expect(r.resolvedSkills).toEqual(['tasks', 'documents']);
   });
 
   it('wires heartbeat without documents when only tasks is pinned', () => {
@@ -438,6 +479,7 @@ describe('reportScheduledPinGaps (#1501)', () => {
       toolNames: [],
       instructionBlocks: [],
       instructionBlockSkills: [],
+      listedSkills: [],
       heartbeatEligible: false,
       documentWorkspaceEnabled: false,
       resolvedSkills: [],
@@ -529,6 +571,7 @@ describe('reportWithheldPinTools (#2646)', () => {
       toolNames: [],
       instructionBlocks: [],
       instructionBlockSkills: [],
+      listedSkills: [],
       heartbeatEligible: false,
       documentWorkspaceEnabled: false,
       resolvedSkills: [],

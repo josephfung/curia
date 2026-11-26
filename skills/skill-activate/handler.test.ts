@@ -178,4 +178,30 @@ describe('skill-activate handler', () => {
     if (result.success) return;
     expect(result.error).toContain('Unknown skill');
   });
+
+  it('activates several skills in one call via skills[] (#2764)', async () => {
+    const ctx = makeCtx({ input: { skills: ['tasks'] } });
+    // Register a second callable skill for the multi-activate path.
+    ctx.skillRegistry!.register(
+      {
+        name: 'documents',
+        description: 'Docs',
+        tools: ['task-list'],
+        instructions: '## Documents',
+      },
+      '/tmp/documents',
+    );
+    const result = await handler.execute({
+      ...ctx,
+      input: { skills: ['tasks', 'documents'] },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as {
+      _curia_protocol: string;
+      activations: Array<{ skill: string }>;
+    };
+    expect(data._curia_protocol).toBe('skill_activation_batch');
+    expect(data.activations.map((a) => a.skill)).toEqual(['tasks', 'documents']);
+  });
 });

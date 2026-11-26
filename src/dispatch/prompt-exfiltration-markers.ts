@@ -160,3 +160,17 @@ export function extractPromptExfiltrationMarkers(
   // Deduplicate while preserving order (a constraint may also appear as a prompt line).
   return [...new Set(markers)];
 }
+
+/**
+ * Markers from SKILL.md bodies and reference files (#2764). Pinned and activated
+ * skill text was previously unscanned; any skill an agent can list or activate
+ * must contribute the same line-length tripwires as the system prompt.
+ */
+export function extractSkillBodyMarkers(skillTexts: readonly string[]): string[] {
+  const markers: string[] = [];
+  for (const text of skillTexts) {
+    if (!text.trim()) continue;
+    markers.push(...extractSystemPromptLineMarkers(text));
+  }
+  return [...new Set(markers)];
+}
