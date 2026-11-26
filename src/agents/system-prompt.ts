@@ -108,6 +108,12 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
 
 type PromptBuildOpts = { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' };
 
+/**
+ * By default a failure loading one block is logged and the block omitted — it
+ * never aborts a live turn. `onBlockError: 'throw'` makes it fatal instead, for
+ * renders (red-team, tests) where a prompt missing a block would silently test
+ * less than production sends.
+ */
 function makeFailBlock(
   agentId: string,
   opts: PromptBuildOpts,
@@ -128,6 +134,9 @@ function makeFailBlock(
  *
  * Specialists get no identity or security block, so theirs starts at
  * ## Your Contact Details.
+ *
+ * Every block is rebuilt per call, so identity and principal-identity changes
+ * take effect on the next turn without a restart.
  */
 export async function buildStableSystemPromptPrefix(
   sources: SystemPromptSources,
@@ -137,6 +146,12 @@ export async function buildStableSystemPromptPrefix(
   const { logger } = opts;
   const failBlock = makeFailBlock(agentId, opts);
 
+  // Build the fixed preamble — constraints first, most salient. Identity then
+  // security are PREPENDED to the body (not substituted in-place), so the YAML
+  // carries no ${...} placeholders. Every agent gets the identity block (#2143): the
+  // coordinator as who it is, every other agent in writes-as mode, since its own YAML
+  // already says who it is (the same coordinator test the date guardrail uses). Security
+  // stays coordinator-only (see agent-assembly.ts).
   let prompt = sources.systemPrompt;
   const preambleParts: string[] = [];
   if (officeIdentityService) {
@@ -145,24 +160,46 @@ export async function buildStableSystemPromptPrefix(
         ? officeIdentityService.compileSystemPromptBlock()
         : officeIdentityService.compileWritesAsBlock());
     } catch (err) {
+      // A compile failure must not abort the task. Log at error (operator signal)
+      // and proceed without the identity block rather than emitting a literal
+      // placeholder or a structurally broken block.
       failBlock('identity', err);
       logger.error({ err, agentId }, 'Failed to compile identity block — identity preamble omitted this turn');
     }
   }
+  // Security context is a platform guarantee, not opt-in text. When provided it is
+  // always prepended directly after identity.
   if (sources.securityContextBlock) {
     preambleParts.push(sources.securityContextBlock);
   }
 
+  // Who the agent is and who it serves come next, ahead of the YAML body, so the
+  // body's references to them ("Your Contact Details", "the principal") point up
+  // at facts already stated. They change only when an identity is edited, so they
+  // sit in the prefix shared across tasks rather than after the per-minute clock,
+  // where they were cached only within one task's tool loop (trim plan PR 11).
+  //
+  // Curia's own contact details — a concrete "acting as" identity so the LLM doesn't
+  // guess or fall back to the principal's details when a tool needs an account.
+  // Injected into ALL agents (#387). Rendered when there is ANY identity to show —
+  // gating on channel accounts alone would drop the contact ID for a deployment with
+  // no email/phone (codeant review on #974).
   const { channelAccounts } = sources;
   const ownPhoneLines = formatOwnPhoneLines(channelAccounts?.signal, channelAccounts?.sms);
   if (channelAccounts?.email || ownPhoneLines.length > 0 || sources.agentContactId) {
     const lines: string[] = ['## Your Contact Details', ...OWN_CONTACT_DETAILS_INTRO, ''];
     if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
     lines.push(...ownPhoneLines);
+    // The agent's own contact ID — coordinator-only in practice.
     if (sources.agentContactId) lines.push(`- Contact ID: ${sources.agentContactId}`);
     preambleParts.push(lines.join('\n'));
   }
 
+  // The principal and their verified contact details. The list is closed: an address
+  // not rendered here is not the principal's (#1950). Injected into ALL agents. With
+  // no identities the whole section stays omitted — do not render a complete-set
+  // claim over nothing. The profile (name, pronouns, title) renders even with no
+  // identities: the pronoun rule matters whatever channels are set up (#2226).
   {
     const block = formatWhoYouServeBlock(
       sources.principalIdentities ?? [],
@@ -176,20 +213,39 @@ export async function buildStableSystemPromptPrefix(
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;
   }
 
+  // Append the specialist roster as a fixed ## Available Specialists block — after
+  // the body, before the per-turn autonomy/date blocks (not strictly last).
+  // Coordinator-only in practice; gated on presence so specialists that don't
+  // route work never see it.
+  // @TODO: the roster comes from AgentRegistry.specialistSummary() over operator-authored
+  // agent manifests — trusted. If specialist names or roster lines (delegate_when,
+  // description) ever become user- or
+  // API-editable, strip newlines here (as the ### Principal Contact Details block does).
   if (sources.availableSpecialists) {
     prompt += '\n\n## Available Specialists\n' + sources.availableSpecialists;
   }
 
+  // On-demand skill list (#2764 / ADR-070): name + description only; bodies load on activation.
+  // After the roster so routing context precedes capability discovery.
   if (sources.skillList && sources.skillList.length > 0) {
     const skillsBlock = formatSkillsListBlock(sources.skillList);
     if (skillsBlock) prompt += '\n\n' + skillsBlock;
   }
 
-  // Date guardrail is static text — keep it in the cached prefix (#2764 PR 4).
+  // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). This module is
+  // the sole ### Date & time instruction for the coordinator — do not leave a
+  // pointer stub in agents/coordinator.yaml (that would leak repo paths into the
+  // model-visible prompt and duplicate the heading). Static text — keep it in the
+  // cached prefix (#2764 PR 4).
   if (agentId === 'coordinator') {
     prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
   }
 
+  // Declared `/shared/` documents and config keys (#2338), read fresh every turn so a
+  // console edit applies on the next turn. After the body, which refers to them, and
+  // ahead of the per-turn blocks: they change rarely, so they stay in the cached
+  // prefix. renderPinnedContextBlock never throws — a failed read renders as
+  // unavailable inside the block.
   if (sources.pinnedContext && sources.pinnedContext.length > 0) {
     const block = await renderPinnedContextBlock(
       sources.pinnedContext,
@@ -216,6 +272,8 @@ export async function buildPerTurnSystemPromptSuffix(
   const failBlock = makeFailBlock(agentId, opts);
   let prompt = '';
 
+  // Load the current autonomy config and append its behavioral block. Per-task (not
+  // startup) so a principal score change mid-session takes effect on the next action.
   if (autonomyService) {
     try {
       const autonomyConfig = await autonomyService.getConfig();
@@ -223,11 +281,18 @@ export async function buildPerTurnSystemPromptSuffix(
         prompt += '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
       }
     } catch (err) {
+      // An unexpected DB error loading the autonomy config should not abort the task.
+      // Log at error level (operator signal) and proceed without the block.
       failBlock('autonomy', err);
       logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
     }
   }
 
+  // Live sign-in verifications (#2017): pending or recently closed, so a turn the principal
+  // did not start (their code reply, a task wake) knows what is waiting. Coordinator and
+  // ceo-inbox only, and absent when nothing is active. Not part of the always-on prompt
+  // budget — this is the injection rung of ADR-046. A failed lookup omits the block; it
+  // never fails the turn.
   if (sources.verification && (agentId === 'coordinator' || agentId === 'ceo-inbox')) {
     try {
       const alive = sources.browserSessionAlive ?? (() => false);
@@ -249,6 +314,8 @@ export async function buildPerTurnSystemPromptSuffix(
     }
   }
 
+  // Reach order changes when a browser opens or closes the chat, so it stays
+  // out of the cached prefix (#2341). Standing preferences are not parsed here.
   if (sources.principalReach) {
     try {
       const reach = await sources.principalReach();
@@ -260,11 +327,16 @@ export async function buildPerTurnSystemPromptSuffix(
     }
   }
 
+  // Current date/time — refreshed every turn so the agent always has the correct
+  // date, even across midnight or DST transitions. Trim the timezone to guard
+  // against whitespace in env vars — Luxon treats "America/Toronto " as invalid.
   const timezone = sources.timezone?.trim();
   if (timezone) {
     try {
       prompt += '\n\n' + formatTimeContextBlock(timezone, now);
     } catch (err) {
+      // An invalid timezone produces "Invalid DateTime" strings, which is worse than
+      // omitting the block because it corrupts the agent's date reasoning.
       failBlock('time', err);
       logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
     }
