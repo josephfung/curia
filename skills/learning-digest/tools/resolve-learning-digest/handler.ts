@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import type { Logger } from '../../../../src/logger.js';
-import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/handler.js';
+import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../../../learning-jobs/tools/voice-learn/handler.js';
 import {
   readVoiceProposal,
   writeVoiceProposal,

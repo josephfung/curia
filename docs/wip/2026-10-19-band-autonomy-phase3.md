@@ -775,7 +775,7 @@ export function selectSamples<T>(candidates: readonly T[], weightOf: (c: T) => n
 ### Task B3: The sampler and `list-spot-checks`
 
 **Files:**
-- Create: `src/reports/spot-check-sampler.ts`, `skills/reports/tools/list-spot-checks/{tool.json,handler.ts,handler.test.ts}`
+- Create: `src/reports/spot-check-sampler.ts`, `skills/digest/tools/list-spot-checks/{tool.json,handler.ts,handler.test.ts}`
 - Modify: `skills/reports/SKILL.md` (add the tool; bump to `0.2.0`)
 - Test: `tests/unit/reports/spot-check-sampler.test.ts`
 
@@ -948,7 +948,7 @@ Branch `feat/band-sampling-c`, stacked on B.
 ### Task C1: `record-spot-check`
 
 **Files:**
-- Create: `skills/reports/tools/record-spot-check/{tool.json,handler.ts,handler.test.ts}`, `src/reports/spot-check-verdicts.ts`
+- Create: `skills/digest/tools/record-spot-check/{tool.json,handler.ts,handler.test.ts}`, `src/reports/spot-check-verdicts.ts`
 - Modify: `skills/reports/SKILL.md` (add the tool; bump to `0.3.0`)
 - Test: `tests/unit/reports/spot-check-verdicts.test.ts`
 

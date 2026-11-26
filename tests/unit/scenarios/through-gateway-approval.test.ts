@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ApproveActionHandler } from '../../../skills/autonomy/tools/approve-action/handler.js';
+import { ApproveActionHandler } from '../../../skills/approvals/tools/approve-action/handler.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogInsert, ActionLogRow, ResolveResult } from '../../../src/autonomy/action-log-types.js';
 import { ApprovalTriggerService } from '../../../src/autonomy/approval-trigger.js';

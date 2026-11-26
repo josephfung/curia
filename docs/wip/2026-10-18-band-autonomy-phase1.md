@@ -265,9 +265,9 @@ describe('principal.report', () => {
 
 **Files:**
 - Create: `skills/reports/SKILL.md` (bundle with three tools)
-- Create: `skills/reports/tools/report-to-principal/{tool.json,handler.ts,handler.test.ts}`
-- Create: `skills/reports/tools/list-principal-reports/{tool.json,handler.ts,handler.test.ts}`
-- Create: `skills/reports/tools/ack-principal-reports/{tool.json,handler.ts,handler.test.ts}`
+- Create: `skills/report-to-principal/{tool.json,handler.ts,handler.test.ts}`
+- Create: `skills/digest/tools/list-principal-reports/{tool.json,handler.ts,handler.test.ts}`
+- Create: `skills/digest/tools/ack-principal-reports/{tool.json,handler.ts,handler.test.ts}`
 - Modify: `agents/coordinator.yaml`: pin `reports` and bump the patch version
 
 **Interfaces:**

@@ -23,7 +23,7 @@ describe('ciRegistryRows', () => {
     expect(rows.tools).toEqual(expect.arrayContaining(['calendar-list-events', 'ceo-inbox-send-draft', 'voice-learn', 'contact-register']));
     expect(new Set(rows.tools).size).toBe(rows.tools.length);
     for (const tool of rows.tools) {
-      const manifests = [join(ROOT, 'skills', tool, 'tool.json'), ...['calendar', 'ceo-inbox', 'learning', 'contacts'].map(b => join(ROOT, 'skills', b, 'tools', tool, 'tool.json'))];
+      const manifests = [join(ROOT, 'skills', tool, 'tool.json'), ...['calendar', 'ceo-inbox', 'learning-jobs', 'learning-digest', 'contacts'].map(b => join(ROOT, 'skills', b, 'tools', tool, 'tool.json'))];
       expect(manifests.some(existsSync), `${tool} has no tool.json`).toBe(true);
     }
   });

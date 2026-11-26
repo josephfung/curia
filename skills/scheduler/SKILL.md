@@ -1,7 +1,8 @@
 ---
 name: scheduler
 description: >
-  Scheduled jobs — create/list/get/cancel/update plus scheduler-report. Narrow consumers may pin scheduler-report alone (ADR-032).
+  Create, list, get, update, and cancel scheduled jobs. Load when managing schedules; end-of-run
+  reporting lives in job-report.
 version: "0.2.0"
 tools:
   - scheduler-create
@@ -9,5 +10,4 @@ tools:
   - scheduler-get
   - scheduler-cancel
   - scheduler-update
-  - scheduler-report
 ---

@@ -73,7 +73,7 @@ const EMAIL_TRIAGE_AGENT = 'ceo-inbox';
 const REQUIRED_ENTRIES: ReadonlyArray<{ kind: RegistryKind; name: string }> = [
   { kind: 'agent', name: EMAIL_TRIAGE_AGENT },
   { kind: 'skill', name: 'ceo-inbox' },
-  { kind: 'skill', name: 'learning' },
+  { kind: 'skill', name: 'learning-jobs' },
   { kind: 'skill', name: 'tasks' },
 ];
 const START_LOCK_KEY = 'onboarding:start';

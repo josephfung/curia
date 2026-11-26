@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   SchedulerReportHandler,
   resolveSchedulerReportJobId,
-} from '../../../skills/scheduler/tools/scheduler-report/handler.js';
+} from '../../../skills/job-report/tools/scheduler-report/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

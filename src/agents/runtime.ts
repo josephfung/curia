@@ -1305,9 +1305,9 @@ export class AgentRuntime {
       await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
     }
 
-    // Every scheduler-fired turn gets scheduler (holds scheduler-report / future job-report).
+    // Every scheduler-fired turn gets job-report (scheduler-report) (#2764).
     if (taskEvent.payload.channelId === 'scheduler') {
-      await appendPreActivated(['scheduler'], 'job', 'Scheduler skill pre-activation skipped');
+      await appendPreActivated(['job-report'], 'job', 'Job-report skill pre-activation skipped');
       // Declared job skills + last-run learned activations live on the payload / metadata.
       const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
       const declared = collectJobSkillNames(
@@ -1322,9 +1322,9 @@ export class AgentRuntime {
       }
     }
 
-    // Spot-check replies: pre-activate reports (digest after PR 3 split) instead of instructing the model.
+    // Spot-check replies: pre-activate digest instead of instructing the model (#2764).
     if (turnGuidanceKeys.includes('spot-check-reply')) {
-      await appendPreActivated(['reports'], 'conversation', 'Spot-check reports skill pre-activation skipped');
+      await appendPreActivated(['digest'], 'conversation', 'Spot-check digest skill pre-activation skipped');
     }
 
     // Onboarding on a live principal turn (#2360, design §6): an ordinary principal message

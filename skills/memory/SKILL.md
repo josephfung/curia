@@ -1,13 +1,12 @@
 ---
 name: memory
 description: >
-  Shared knowledge-graph memory — query/store/confirm facts, manage entity-to-entity relationships (query/delete edges), plus decay-warnings-list.
+  Query and store shared knowledge-graph facts and relationships. Load when recalling or
+  writing everyday memory; decay review lives in memory-review.
 version: "0.2.0"
 tools:
   - memory-query
   - memory-store
-  - memory-confirm
-  - decay-warnings-list
   - query-relationships
   - delete-relationship
 ---
