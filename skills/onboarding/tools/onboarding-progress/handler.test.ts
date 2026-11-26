@@ -22,13 +22,20 @@ const PLAYBOOK = [
   '# Ongoing rhythm <!-- session: ongoing-rhythm -->',
   '## Propose a rhythm <!-- topic: propose-rhythm -->',
   'I propose a cadence to {principal}.',
+  '# Review <!-- session: review -->',
+  '## Working rules <!-- topic: review-rules -->',
+  'confirm / correct / set aside',
+  '## Writing voice <!-- topic: review-voice -->',
+  'confirm / correct / set aside',
+  '## Next step <!-- topic: next-step -->',
+  'When do we talk next?',
 ].join('\n');
 
 function task(p: Partial<TaskRow> & { id: string }): TaskRow {
   return { status: 'open', tags: [], parentTaskId: null, createdBy: 'onboarding', title: p.id, ...p } as TaskRow;
 }
 
-function makeWorld(opts: { withParent?: boolean } = {}) {
+function makeWorld(opts: { withParent?: boolean; playbook?: string } = {}) {
   const tasks: TaskRow[] = [];
   if (opts.withParent ?? true) tasks.push(task({ id: 'parent', tags: ['onboarding'], status: 'waiting', waitingOnContactId: PRINCIPAL_CONTACT_ID }));
   let nextId = 1;
@@ -52,7 +59,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
         (!f.tag || t.tags.includes(f.tag)) &&
         (!f.statuses || f.statuses.includes(t.status)) &&
         (!f.parentTaskId || t.parentTaskId === f.parentTaskId) &&
-        (!f.createdBy || t.createdBy === f.createdBy)),
+        (!f.createdBy || t.createdBy === f.createdBy)).slice(0, f.limit ?? Infinity),
     ),
     completeTask: vi.fn(async (id: string, note?: string) => {
       const t = tasks.find((x) => x.id === id)!;
@@ -61,9 +68,14 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       notes.set(id, note);
       return t;
     }),
-    updateTask: vi.fn(async (id: string, u: { tags?: string[]; status?: string }) => {
+    getTask: vi.fn(async (id: string) => tasks.find((x) => x.id === id) ?? null),
+    updateTask: vi.fn(async (id: string, u: { tags?: string[]; status?: string; progressNote?: string }) => {
       const t = tasks.find((x) => x.id === id)!;
       if (u.tags) t.tags = u.tags;
+      if (u.progressNote) {
+        const notes = (t.progress?.['notes'] as unknown[] | undefined) ?? [];
+        t.progress = { ...t.progress, notes: [...notes, { at: 'now', note: u.progressNote }] };
+      }
       if (u.status) t.status = u.status as TaskRow['status'];
       return t;
     }),
@@ -109,7 +121,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     scheduler: { enqueueTaskWake: vi.fn() },
     configStore,
     stateLock: (fn) => fn(),
-    workingDocsRepo: { read: vi.fn(async () => ({ body: PLAYBOOK, frontmatter: { editable_by: 'console' } })), create: vi.fn() } as unknown as WorkingDocsRepo,
+    workingDocsRepo: { read: vi.fn(async () => ({ body: opts.playbook ?? PLAYBOOK, frontmatter: { editable_by: 'console' } })), create: vi.fn() } as unknown as WorkingDocsRepo,
     principalName: async () => 'Avery Example',
     principalContactId: async () => PRINCIPAL_CONTACT_ID,
     principalHasIdentity: async () => true,
@@ -129,7 +141,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       ...extra,
     } as unknown as ToolContext);
   const sub = (topicId: string) => tasks.find((t) => t.tags.includes(`onboarding:topic:${topicId}`))!;
-  return { run, tasks, taskRepo, notes, sub };
+  return { run, tasks, taskRepo, notes, sub, store };
 }
 
 describe('onboarding-progress', () => {
@@ -216,6 +228,79 @@ describe('onboarding-progress', () => {
     expect(status).toMatchObject({ success: true, data: { onboardingComplete: false } });
   });
 
+  describe('while the deep dive runs (#2362)', () => {
+    const deepDive = (status: string) => JSON.stringify({
+      status,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      mailboxIds: ['personal'],
+      summaryPath: null,
+      draftPaths: [],
+      reviewTaskId: null,
+      backfilled: null,
+      spendUsd: 0,
+      requests: 0,
+      rateLimited: 0,
+      error: status === 'failed' ? 'grant revoked' : null,
+    });
+    const closeEveryTopic = async (w: ReturnType<typeof makeWorld>) => {
+      await w.run({ op: 'open_session', session_id: 'first-conversation' });
+      await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
+      for (const topic of ['hello', 'inbox-expectations']) {
+        await w.run({ op: 'topic_done', topic_id: topic, outcome: 'done', note: 'ok' });
+      }
+      return w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
+    };
+
+    it.each(['scanning', 'drafting'])('onboarding does not complete while the deep dive is running (%s)', async (status) => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive(status));
+      const last = await closeEveryTopic(w);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+      const status2 = await w.run({ op: 'status' });
+      expect(status2).toMatchObject({ success: true, data: { onboardingComplete: false } });
+    });
+
+    it('completes once it has failed', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('drafting'));
+      await closeEveryTopic(w);
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+      w.store.set('onboarding/deep_dive', deepDive('failed'));
+      const status = await w.run({ op: 'status' });
+      expect(status).toMatchObject({ success: true, data: { onboardingComplete: true } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
+    });
+
+    it('completes once its drafts are delivered', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('delivered'));
+      const last = await closeEveryTopic(w);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
+    });
+
+    it('does not complete when the hand-off finishes during the check: its Review topics hold it open', async () => {
+      const w = makeWorld();
+      w.store.set('onboarding/deep_dive', deepDive('drafting'));
+      // The hand-off lands at the first read of the run state: Review topic opened, then delivered.
+      const realGet = w.store.get.bind(w.store);
+      let handedOff = false;
+      w.store.get = (key: string) => {
+        if (key === 'onboarding/deep_dive' && !handedOff && w.sub('propose-rhythm')?.status === 'done') {
+          handedOff = true;
+          w.tasks.push(task({ id: 'review-1', parentTaskId: 'parent', tags: ['onboarding', 'onboarding:topic:review-drafts', 'onboarding:session:review'] }));
+          w.store.set(key, deepDive('delivered'));
+        }
+        return realGet(key);
+      };
+      const last = await closeEveryTopic(w);
+      expect(handedOff).toBe(true);
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+    });
+  });
+
   it('does not complete the parent while the ongoing-rhythm session has not been opened', async () => {
     const w = makeWorld();
     await w.run({ op: 'open_session', session_id: 'first-conversation' });
@@ -295,6 +380,172 @@ describe('onboarding-progress', () => {
       expect(result.success, event).toBe(false);
     }
     expect(w.taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('operator_notice accepts deep_dive_delivery_failed', async () => {
+    const w = makeWorld();
+    const result = await w.run({ op: 'operator_notice', event: 'deep_dive_delivery_failed' });
+    expect(result).toEqual({ success: true, data: { recorded: true } });
+    expect(w.taskRepo.updateTask).toHaveBeenCalledWith('parent', { progressNote: 'Operator notice: deep_dive_delivery_failed' });
+  });
+
+  describe('a standalone deep-dive review task (#2362)', () => {
+    // The task the hand-off makes when no onboarding is open: tagged deep-dive, made by onboarding.
+    const reviewWorld = (opts: { withParent?: boolean; playbook?: string } = {}) => {
+      const w = makeWorld({ withParent: opts.withParent ?? false, ...(opts.playbook ? { playbook: opts.playbook } : {}) });
+      w.tasks.push(task({ id: 'dd', tags: ['deep-dive'] }));
+      const bound = (taskId: string) => ({ taskMetadata: { boundTask: { taskId } } } as Partial<ToolContext>);
+      return { ...w, bound };
+    };
+
+    it('topic_done on a deep-dive task resolves that parent', async () => {
+      // An onboarding task is open too: the turn's own task wins.
+      const w = reviewWorld({ withParent: true });
+      await w.run({ op: 'open_session', session_id: 'review' }, w.bound('dd'));
+      const rules = w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules'))!;
+      expect(rules.parentTaskId).toBe('dd');
+
+      // Bound to a topic subtask, the root is still the deep-dive task.
+      const result = await w.run({ op: 'topic_done', topic_id: 'review-rules', outcome: 'done', note: 'Confirmed: all five.' }, w.bound(rules.id));
+      expect(result).toMatchObject({ success: true, data: { topicId: 'review-rules', onboardingComplete: false } });
+      expect(rules.status).toBe('done');
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
+    });
+
+    it('a deep-dive task completes when its review topics close', async () => {
+      const w = reviewWorld();
+      await w.run({ op: 'open_session', session_id: 'review' }, w.bound('dd'));
+      await w.run({ op: 'topic_done', topic_id: 'review-rules', outcome: 'done', note: 'Confirmed.' }, w.bound('dd'));
+      expect(w.tasks.find((t) => t.id === 'dd')!.status).toBe('open');
+      // No ongoing-rhythm session, and Next step does not count: the document topics decide.
+      const last = await w.run({ op: 'topic_done', topic_id: 'review-voice', outcome: 'declined', note: 'Set aside.' }, w.bound('dd'));
+      expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
+      expect(w.tasks.find((t) => t.id === 'dd')!.status).toBe('done');
+      // The rhythm question left open is closed with the task, not left waiting on the principal.
+      expect(w.sub('next-step').status).toBe('cancelled');
+    });
+
+    it('offers only the review session: status lists it alone and open_session refuses the others', async () => {
+      const w = reviewWorld();
+      const status = await w.run({ op: 'status' }, w.bound('dd'));
+      if (!status.success) throw new Error(status.error);
+      expect((status.data as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toEqual(['review']);
+      const refused = await w.run({ op: 'open_session', session_id: 'first-conversation' }, w.bound('dd'));
+      expect(refused.success).toBe(false);
+      expect(w.taskRepo.createTask).not.toHaveBeenCalled();
+    });
+
+    it('warns when a deep-dive task has no review topics to complete on', async () => {
+      const w = reviewWorld();
+      const warn = vi.spyOn(logger, 'warn');
+      try {
+        const status = await w.run({ op: 'status' }, w.bound('dd'));
+        expect(status).toMatchObject({ success: true, data: { onboardingComplete: false } });
+        expect(warn).toHaveBeenCalledWith({ taskId: 'dd' }, expect.stringContaining('no document topics'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('on an older playbook, completes once its other Review topics close', async () => {
+      // Installs seeded before the document topics keep the old Review section: walk-drafts, next-step.
+      const oldPlaybook = [
+        '# Ongoing rhythm <!-- session: ongoing-rhythm -->',
+        '## Propose a rhythm <!-- topic: propose-rhythm -->',
+        'x',
+        '# Review <!-- session: review -->',
+        '## Walk through the drafts <!-- topic: walk-drafts -->',
+        'I go through the drafts.',
+        '## Next step <!-- topic: next-step -->',
+        'When do we talk next?',
+      ].join('\n');
+      const w = reviewWorld({ playbook: oldPlaybook });
+      const warn = vi.spyOn(logger, 'warn');
+      try {
+        await w.run({ op: 'open_session', session_id: 'review' }, w.bound('dd'));
+        const last = await w.run({ op: 'topic_done', topic_id: 'walk-drafts', outcome: 'done', note: 'Confirmed.' }, w.bound('dd'));
+        expect(last).toMatchObject({ success: true, data: { onboardingComplete: true } });
+        expect(w.tasks.find((t) => t.id === 'dd')!.status).toBe('done');
+        expect(w.sub('next-step').status).toBe('cancelled');
+        expect(warn).toHaveBeenCalledWith({ taskId: 'dd' }, expect.stringContaining('other Review topics'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('warns and falls through when the turn\'s task is missing', async () => {
+      const w = reviewWorld();
+      const warn = vi.spyOn(logger, 'warn');
+      try {
+        const opened = await w.run({ op: 'open_session', session_id: 'review' }, w.bound('gone'));
+        expect(opened.success).toBe(true);
+        expect(warn).toHaveBeenCalledWith({ taskId: 'gone' }, expect.stringContaining('missing'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('finds the open deep-dive task past a page of closed ones', async () => {
+      const w = makeWorld({ withParent: false });
+      for (let i = 0; i < 12; i++) w.tasks.push(task({ id: `old-${i}`, tags: ['deep-dive'], status: 'done' }));
+      w.tasks.push(task({ id: 'dd', tags: ['deep-dive'] }));
+      const opened = await w.run({ op: 'open_session', session_id: 'review' });
+      expect(opened.success).toBe(true);
+      expect(w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules'))!.parentTaskId).toBe('dd');
+    });
+
+    it('a turn bound to no task finds the open deep-dive task when no onboarding is open', async () => {
+      const w = reviewWorld();
+      await w.run({ op: 'open_session', session_id: 'review' });
+      expect(w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules'))!.parentTaskId).toBe('dd');
+    });
+
+    it('a turn bound to no task picks onboarding while its Review topics are ahead, then the deep-dive task', async () => {
+      const w = reviewWorld({ withParent: true });
+      await w.run({ op: 'open_session', session_id: 'review' });
+      const onParent = (topic: string) =>
+        w.tasks.find((t) => t.tags.includes(`onboarding:topic:${topic}`) && t.parentTaskId === 'parent');
+      expect(onParent('review-rules')).toBeDefined();
+      for (const topic of ['review-rules', 'review-priorities', 'review-voice']) {
+        await w.run({ op: 'topic_done', topic_id: topic, outcome: 'done', note: 'Confirmed.' });
+      }
+      expect(w.tasks.find((t) => t.id === 'parent')!.status).not.toBe('done');
+
+      // Onboarding's Review topics are closed, so the hand-off put the new drafts on 'dd'.
+      await w.run({ op: 'open_session', session_id: 'review' });
+      const rules = w.tasks.find((t) => t.tags.includes('onboarding:topic:review-rules') && t.parentTaskId === 'dd');
+      expect(rules).toBeDefined();
+      const done = await w.run({ op: 'topic_done', topic_id: 'review-rules', outcome: 'done', note: 'Confirmed.' });
+      expect(done).toMatchObject({ success: true, data: { topicId: 'review-rules' } });
+      expect(rules!.status).toBe('done');
+
+      // A turn bound to onboarding itself still works on onboarding, not on 'dd'.
+      const opened = await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' }, w.bound('parent'));
+      expect(opened.success).toBe(true);
+      const rhythm = w.tasks.find((t) => t.tags.includes('onboarding:topic:propose-rhythm'))!;
+      expect(rhythm.parentTaskId).toBe('parent');
+      const rhythmDone = await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'Weekly.' }, w.bound(rhythm.id));
+      expect(rhythmDone).toMatchObject({ success: true, data: { topicId: 'propose-rhythm' } });
+    });
+
+    it('a deep-dive tag on a task onboarding did not make does not count', async () => {
+      const w = makeWorld({ withParent: false });
+      w.tasks.push(task({ id: 'fake', tags: ['deep-dive'], createdBy: 'coordinator' }));
+      const result = await w.run({ op: 'open_session', session_id: 'review' }, { taskMetadata: { boundTask: { taskId: 'fake' } } } as Partial<ToolContext>);
+      expect(result.success).toBe(false);
+      expect(w.taskRepo.createTask).not.toHaveBeenCalled();
+    });
+
+    it('operator_notice on a deep-dive task is recorded there, once per event', async () => {
+      const w = reviewWorld();
+      const result = await w.run({ op: 'operator_notice', event: 'deep_dive_delivery_failed' }, w.bound('dd'));
+      expect(result).toEqual({ success: true, data: { recorded: true } });
+      expect(w.taskRepo.updateTask).toHaveBeenCalledWith('dd', { progressNote: 'Operator notice: deep_dive_delivery_failed' });
+      // The task's own note is the record: a repeat (or the hand-off's earlier notice) sends nothing.
+      const again = await w.run({ op: 'operator_notice', event: 'deep_dive_delivery_failed' }, w.bound('dd'));
+      expect(again).toEqual({ success: true, data: { alreadyRaised: true } });
+      expect(w.taskRepo.updateTask).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('operator_notice fails when the notice could not be written', async () => {

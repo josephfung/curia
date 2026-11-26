@@ -291,6 +291,20 @@ describe('minutesForCall', () => {
     }
   });
 
+  // #2699: under a mailbox's leave_in_inbox filing mode the archive tool marks the mail read
+  // instead, so the feed must not say "archived".
+  it('describes a ceo-inbox-archive that left the mail in the inbox as marked read', () => {
+    const left = call('ceo-inbox-archive', { message_id: 'm1' }, { subject: 'Statement ready', left_in_inbox: true });
+    expect(describeToolCall(left, ctx())).toMatchObject({
+      prominence: 'count',
+      text: 'marked “Statement ready” read',
+      tally: { verb: 'marked', one: 'an email read', many: 'emails read' },
+    });
+    expect(describeToolCall(call('ceo-inbox-archive', {}, { left_in_inbox: true }), ctx())?.text).toBe('marked an email read');
+    expect(describeToolCall(call('ceo-inbox-archive', {}, { subject: 'Statement ready' }), ctx())?.text).toBe('archived “Statement ready”');
+    expect(minutesForCall(left)).toBe(0.5);
+  });
+
   it('shares an estimate across the same action on two tools', () => {
     const pairs = [
       ['ceo-inbox-archive', 'email-archive'],

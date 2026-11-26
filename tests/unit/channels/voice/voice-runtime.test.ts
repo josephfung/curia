@@ -4,6 +4,7 @@ import type { BusEvent } from '../../../../src/bus/events.js';
 import type { OutboundContextRow } from '../../../../src/dispatch/outbound-context.js';
 import { OutboundContextService } from '../../../../src/dispatch/outbound-context.js';
 import { createSilentLogger, type Logger } from '../../../../src/logger.js';
+import { DEFAULT_PINNED_CONTEXT_WARN_CHARS } from '../../../../src/agents/pinned-context.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../../../src/agents/llm/provider.js';
 import { ABORTED_TOOL_RESULT } from '../../../../src/agents/llm/streaming-turn.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../../../src/agents/prompts/date-resolve-guardrail.js';
@@ -26,6 +27,7 @@ import {
   VOICE_DELEGATION_GUIDANCE,
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
+  formatPrioritiesPromptBlock,
 } from '../../../../src/channels/voice/voice-runtime.js';
 import type { VoiceToolBridge } from '../../../../src/channels/voice/voice-runtime.js';
 import { partnerCaller, principalCaller } from '../../../../src/channels/voice/test-fixtures.js';
@@ -334,6 +336,7 @@ function makeRuntime(overrides: {
   logger?: Logger;
   bargeInOnSpeechStart?: boolean;
   bargeInSpeechStartMinDbfs?: number;
+  readPriorities?: () => Promise<string | null>;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -368,6 +371,7 @@ function makeRuntime(overrides: {
     maxUtteranceBytes: overrides.maxUtteranceBytes,
     bargeInOnSpeechStart: overrides.bargeInOnSpeechStart,
     bargeInSpeechStartMinDbfs: overrides.bargeInSpeechStartMinDbfs,
+    readPriorities: overrides.readPriorities,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -4492,5 +4496,158 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     plain.stt.emit({ text: 'thanks that is all', isFinal: false, confidence: 0.9 });
     expect(plain.transport.clearQueuedAudioCount).toBe(0);
     await plain.runtime.endSession('tail', 'test');
+  });
+});
+
+describe('VoiceRuntime principal priorities (#2363)', () => {
+  const PRIORITIES_DOC = '---\ntitle: Priorities\nas_of: 2026-11-20\n---\n\n## Close the Series A\nRunway.\n';
+
+  function systemText(messages: Message[]): string {
+    const system = messages[0]!;
+    return typeof system.content === 'string' ? system.content : '';
+  }
+
+  function warnLogger() {
+    const warn = vi.fn();
+    const log = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child: () => log,
+    } as unknown as Logger;
+    return { log, warn };
+  }
+
+  /** Greeting plus two caller turns; returns each LLM call's system prompt. */
+  async function runCall(opts: {
+    sessionId: string;
+    readPriorities?: () => Promise<string | null>;
+    caller?: ReturnType<typeof principalCaller>;
+    logger?: Logger;
+    historyReadTimeoutMs?: number;
+  }): Promise<string[]> {
+    const llm = new FakeStreamProvider([replyScript('Hi.'), replyScript('Sure.'), replyScript('Done.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      readPriorities: opts.readPriorities,
+      logger: opts.logger,
+      historyReadTimeoutMs: opts.historyReadTimeoutMs,
+    });
+    await runtime.startSession({
+      sessionId: opts.sessionId,
+      conversationId: `voice:${opts.sessionId}`,
+      roomName: `voice-${opts.sessionId}`,
+      agentToken: 'tok',
+      caller: opts.caller ?? principalCaller(),
+    });
+    await runtime.awaitIdle(opts.sessionId);
+    stt.emit({ text: 'what should I focus on', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle(opts.sessionId);
+    stt.emit({ text: 'thanks', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle(opts.sessionId);
+    expect(llm.seenMessages).toHaveLength(3);
+    return llm.seenMessages.map(systemText);
+  }
+
+  it('reads the priorities once per session and puts them in every caller turn\'s prompt', async () => {
+    const readPriorities = vi.fn(async () => PRIORITIES_DOC);
+    const [, ...turns] = await runCall({ sessionId: 'prio-once', readPriorities });
+
+    expect(readPriorities).toHaveBeenCalledTimes(1);
+    const block = formatPrioritiesPromptBlock(PRIORITIES_DOC)!;
+    expect(turns).toHaveLength(2);
+    for (const prompt of turns) {
+      expect(prompt).toContain(block);
+      expect(prompt).toContain('## Close the Series A');
+    }
+  });
+
+  it('keeps the priorities out of the opening greeting, so a call never opens on them', async () => {
+    const without = await runCall({ sessionId: 'prio-greet-baseline' });
+    const [greeting] = await runCall({ sessionId: 'prio-greet', readPriorities: async () => PRIORITIES_DOC });
+    expect(greeting).toBe(without[0]);
+  });
+
+  it('does not hold the greeting for a slow priorities read', async () => {
+    const reads = new Gate();
+    const llm = new FakeStreamProvider([replyScript('Hi.')]);
+    const { runtime } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      readPriorities: async () => { await reads.pass(); return PRIORITIES_DOC; },
+      historyReadTimeoutMs: GATED_READ_TIMEOUT_MS,
+    });
+    await runtime.startSession({
+      sessionId: 'prio-greet-slow',
+      conversationId: 'voice:prio-greet-slow',
+      roomName: 'voice-prio-greet-slow',
+      agentToken: 'tok',
+      caller: principalCaller(),
+    });
+    await runtime.awaitIdle('prio-greet-slow');
+    expect(llm.seenMessages).toHaveLength(1);
+    reads.open();
+  });
+
+  it('leaves the prompt unchanged when there is no priorities document', async () => {
+    const without = await runCall({ sessionId: 'prio-none-baseline' });
+    const missing = await runCall({ sessionId: 'prio-none', readPriorities: async () => null });
+    const blank = await runCall({ sessionId: 'prio-blank', readPriorities: async () => '  \n' });
+    expect(missing).toEqual(without);
+    expect(blank).toEqual(without);
+  });
+
+  it('logs a warning and carries on without priorities when the read fails', async () => {
+    const { log, warn } = warnLogger();
+    const without = await runCall({ sessionId: 'prio-fail-baseline' });
+    const prompts = await runCall({
+      sessionId: 'prio-fail',
+      readPriorities: async () => { throw new Error('db down'); },
+      logger: log,
+    });
+    expect(prompts).toEqual(without);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-fail' }),
+      'priorities read failed; call proceeds without priorities',
+    );
+  });
+
+  it('carries on without priorities when the read misses the voice deadline', async () => {
+    const { log, warn } = warnLogger();
+    const reads = new Gate();
+    const prompts = await runCall({
+      sessionId: 'prio-slow',
+      readPriorities: async () => { await reads.pass(); return PRIORITIES_DOC; },
+      logger: log,
+      historyReadTimeoutMs: 20,
+    });
+    reads.open();
+    for (const prompt of prompts) expect(prompt).not.toContain('## Principal priorities');
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-slow', timeoutMs: 20 }),
+      'priorities read exceeded the voice deadline; call proceeds without priorities',
+    );
+  });
+
+  it('warns about an oversized priorities document but still injects it', async () => {
+    const { log, warn } = warnLogger();
+    const big = `## Big\n${'x'.repeat(DEFAULT_PINNED_CONTEXT_WARN_CHARS)}\n`;
+    const [, turn] = await runCall({ sessionId: 'prio-big', readPriorities: async () => big, logger: log });
+    expect(turn).toContain(formatPrioritiesPromptBlock(big)!);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'prio-big', chars: big.length }),
+      'priorities document exceeds the size warning threshold — injected in full',
+    );
+  });
+
+  it('never reads or injects the priorities for a non-principal caller', async () => {
+    const readPriorities = vi.fn(async () => PRIORITIES_DOC);
+    const prompts = await runCall({ sessionId: 'prio-partner', readPriorities, caller: partnerCaller() });
+    expect(readPriorities).not.toHaveBeenCalled();
+    for (const prompt of prompts) expect(prompt).not.toContain('Close the Series A');
+  });
+
+  it('fences the document so its own headings and fences cannot break out', () => {
+    const block = formatPrioritiesPromptBlock('## A\n```\ncode\n```\n')!;
+    expect(block).toContain('````\n## A\n```\ncode\n```\n````');
   });
 });

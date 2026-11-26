@@ -37,7 +37,12 @@ The installer will:
 1. Check for Docker, the Compose plugin, and `curl`.
 2. Fetch `docker-compose.yml`, `.env.example`, and the TLS overlay into the current directory.
 3. Generate secrets for `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`.
-4. Prompt for your **Anthropic API key** (format-validated, 3 retries).
+4. Ask which **model provider** to use and prompt for its credentials (format-validated, 3 retries):
+   - **Anthropic** (the default; Enter keeps it): an API key starting `sk-ant-`. Tiers keep `config/default.yaml`'s Claude models.
+   - **OpenRouter**: an API key starting `sk-or-`. The installer shows recommended models for the fast, standard and powerful tiers and the judges; answer `n` to pick each from a list.
+   - **AWS Bedrock**: an IAM access key ID (`AKIA…`), its secret, and the region where Bedrock model access is on. Models are offered the same way, with global routing, plus US-only or EU-only routing when the region is in that geography. Bedrock can't stream, so voice stays off.
+
+   Credentials go to the vault only. The region goes in `.env` as `AWS_REGION`. OpenRouter and Bedrock models go in `config/local.yaml`, which `docker-compose.yml` mounts into the container; an Anthropic install gets that file with comments only. See [`model_routing`](configuration.md#model_routing) to change models later.
 5. Ask about deployment topology: local only, public HTTPS (Caddy), or behind an existing reverse proxy.
 6. Pull the published image, start Postgres, run migrations and vault-seed inside the container (no host `pnpm` or `openssl` required), then bring the full stack up.
 7. Print a summary box with the bootstrap secret you need to sign in.
@@ -100,11 +105,15 @@ for you:
 1. Checks prerequisites (`docker`, `docker compose`, Node 26+, `pnpm`, `openssl`).
 2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
    with `openssl rand -hex 32`.
-3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
-   3 retries).
-4. Writes `.env` from `.env.example`, leaving optional channel vars
-   (Nylas, embeddings, Tavily, Signal) commented out for Tiers 2 and 3 and the
-   optional Tavily upgrade.
+3. Asks which **model provider** to use (Anthropic by default, OpenRouter or AWS
+   Bedrock) and prompts for its credentials, as the image install does. For
+   OpenRouter or Bedrock it writes the chosen models to `config/local.yaml`. If
+   that file already has settings of yours, it stops and prints the models block
+   for you to merge, rather than edit the file. Merge it with its marker lines:
+   later runs then replace the block where it stands.
+4. Writes `.env` from `.env.example`, leaving the optional embedding-server
+   vars commented out. Channel credentials and the optional Tavily key are not
+   `.env` config: they go in the vault, from the console or `seed-vault`.
 5. Starts the Postgres container, waits for it to be healthy, and applies
    all database migrations.
 6. **Seeds the encrypted secrets vault** from the values it just generated
@@ -220,8 +229,8 @@ Two things to know before relying on a removal:
 > Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
 > `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
 > etc.) belong in `.env`. Everything else goes through the vault. The principal's
-> email is not env config; it's set in the onboarding wizard and lives in the
-> contacts store.
+> email is not env config; it's set on the Setup page's *Who it's for* step and
+> lives in the contacts store.
 
 ---
 

@@ -40,7 +40,7 @@ Every action is logged. Every decision is traceable. Every agent stays in its la
 | **Institutional memory** | Conversation history + flat files (lost or stale across restarts) | Knowledge graph + entity memory + temporal decay (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
 | **Agent coordination** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
-| **Multi-channel** | Many channels, often without consistent security boundaries | Email, Signal, CLI, HTTP API — every channel shares the same security model and audit trail |
+| **Multi-channel** | Many channels, often without consistent security boundaries | Email, Signal, SMS, Slack, voice, web chat, CLI, HTTP API — every channel shares the same security model and audit trail |
 | **Autonomy** | All or nothing | Five configurable bands — from advisory-only to fully independent, with intent drift detection |
 
 ---
@@ -95,9 +95,22 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ## Quickstart
 
+**Getting started has two phases.**
+
+- **Setup** (whoever runs Curia; about 5 minutes to install, then an hour or two to connect): Docker, a model provider key (Anthropic, OpenRouter or AWS Bedrock) and a domain, then Curia's own email, a way to message the executive, a voice, and access to Google Docs.
+- **Onboarding** (the executive): Curia invites them to a first conversation, by voice or chat, and takes it from there.
+
+**[What to expect →](https://docs.meetcuria.com/get-started/what-to-expect)** (who does what, time, costs, and what you'll need)
+
 ### Operator install (image)
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin), `curl`, and an [Anthropic API key](https://console.anthropic.com). No Node or pnpm required.
+The installer needs [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin) and `curl`, plus credentials for one model provider. It asks which provider to use:
+
+- **Anthropic** (the default): an [Anthropic API key](https://console.anthropic.com).
+- **OpenRouter**: an [OpenRouter API key](https://openrouter.ai/settings/keys). The installer then offers models for each tier, with a recommended set.
+- **AWS Bedrock**: an IAM access key with Bedrock model access, and its region. Voice calls need streaming, which Bedrock doesn't have, so voice stays off.
+
+No Node or pnpm.
 
 ```bash
 mkdir curia && cd curia
@@ -114,7 +127,7 @@ By default it installs the **latest release** — both the config files and the 
 CURIA_VERSION=v0.40.1 bash install.sh
 ```
 
-Save the bootstrap secret to a password manager and use it on the login page to create your account.
+Save the bootstrap secret to a password manager and use it on the login page to create your account. The Setup page then walks you through connecting Curia, and its last step, **Start onboarding**, hands over to the executive.
 
 **To update:** Back up your database first, then pull and restart. Migrations apply
 automatically on boot; re-running when already up to date is a safe no-op.

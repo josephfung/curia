@@ -1,0 +1,94 @@
+# Case 49b (#2362, ADR-069): a priorities document exists, and the principal asks for a
+# recommendation. Rule: the coordinator's pinned_context entry for
+# /shared/principal/priorities.md ("Weigh work and suggestions against them"). The document is
+# served through seed.pinned, as the coordinator's pinned block shows a live document. The ask
+# is a judgement call with no right answer in itself; what the case scores is that the
+# recommendation is weighed against a named priority, and that nothing is sent or rewritten.
+name: priorities suggestion names the relevant priority
+description: >
+  The principal's priorities document lists three current priorities: close the Series B
+  within about six weeks, hire a VP of Sales, and ship the v2 platform to the first five customers. The
+  principal asks whether to accept an invitation to speak on a fintech panel in about a week
+  evening, about three hours with travel. Curia gives a recommendation that is explicitly
+  weighed against at least one of those priorities, by name or plain reference, and does not
+  accept or decline on the principal's behalf.
+tags: [priorities, pinned-context]
+# New in #2362: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+seed:
+  pinned:
+    docs:
+      /shared/principal/priorities.md: |
+        ---
+        type: note
+        title: Priorities
+        as_of: "{{date:today-14}}"
+        past: /meetings/principal/priorities-past.md
+        format: Current priorities only, each a ## section with why it matters. Update as_of on every change. Move superseded ones to the document named in past:, never delete them.
+        ---
+        ## Close the Series B
+
+        Target close: {{date:today+45}}. The runway depends on it. Investor meetings come first until the round is signed.
+
+        ## Hire a VP of Sales
+
+        Pipeline is stalled without one. Wants warm introductions to experienced fintech sales
+        leaders.
+
+        ## Ship the v2 platform to the first five customers
+
+        Promised for this quarter; the team needs the principal at Monday product reviews.
+inbound:
+  from: principal
+  channel: web
+  content: >
+    I've been asked to speak on a fintech panel on the evening of {{date:today+8}}. It's about three hours
+    with travel. Should I do it? Give me your recommendation.
+tool_stubs:
+  # A run checks the panel date with the calendar specialist first: a working day, and the
+  # evening is free.
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          {{day:today+8}}: 9:00–9:30 AM leadership stand-up; 11:00 AM–12:00 PM investor call
+          (Series B); 2:00–3:00 PM sales pipeline review. Nothing after 3:00 PM, so the evening
+          is free. The days either side hold only regular working-hours meetings, with no
+          travel or evening commitments.
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000049b, sensitivity: internal }
+  doc-write:
+    - match: {}
+      return: { action: section-edited, document: { path: /shared/principal/priorities.md, version: 2 } }
+expected_behaviors:
+  - id: names_a_priority
+    weight: critical
+    description: >
+      The recommendation is weighed against at least one of the three priorities in the
+      document, named or plainly referred to (the Series B, the VP of Sales hire, or the v2
+      launch), and says how the panel helps or competes with it. A generic pros-and-cons answer
+      that could have been written without the document is a miss.
+  - id: gives_a_recommendation
+    weight: critical
+    description: Gives a clear recommendation (do it, skip it, or do it on a condition), not only questions.
+  - id: priorities_unchanged
+    weight: critical
+    description: Does not edit the priorities document; nothing about the priorities changed.
+    check:
+      not_called: [doc-write]
+      with: { path: /shared/principal/priorities.md }
+  - id: decides_nothing_for_principal
+    weight: critical
+    description: Does not accept or decline the invitation on the principal's behalf.
+    check:
+      not_called: [email-send, email-reply, signal-send, sms-send, slack-send]
+  - id: priorities_not_invented
+    weight: important
+    description: Cites only priorities the document holds; it does not invent others.
+failure_modes:
+  - Answers with generic advice about speaking engagements, ignoring the priorities
+  - Rewrites or "refreshes" the priorities document
+  - Replies to the organiser

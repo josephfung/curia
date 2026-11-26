@@ -21,6 +21,17 @@ instance in one path with no detours. The onboarding flow spans four layers:
 The layers are independent (each can be re-entered or skipped), but
 when run in sequence they constitute the end-to-end first-run experience.
 
+Getting started has two phases, told the same way here, in the README and in the
+public docs (#2356):
+
+- **Setup** (the operator: whoever runs Curia, who may be the executive) is Layers 1–3:
+  install, then the Setup page, ending at Start onboarding.
+- **Onboarding** (the principal) is Layer 4: Curia invites the principal to a first
+  conversation and learns how they work.
+
+An operator install from the published image uses `install.sh` rather than Layer 1's
+`pnpm run setup`; both end at the Setup page.
+
 ---
 
 ## Layer 1 — Host bootstrap (`pnpm run setup`)
@@ -44,12 +55,20 @@ Fails fast with a one-line message and install link if any are missing:
 
 1. Generate `DB_PASSWORD`, `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET` using
    `openssl rand -hex 32`.
-2. Prompt for an Anthropic API key (validated against `sk-ant-[A-Za-z0-9_-]+`,
-   3 retries).
+2. Ask which model provider to use, then prompt for its credentials (3 retries
+   each, #2749):
+   - Anthropic (the default; Enter keeps it): an API key, `sk-ant-[A-Za-z0-9_-]+`.
+   - OpenRouter: an API key, `sk-or-[A-Za-z0-9_-]+`.
+   - AWS Bedrock: an access key ID (`AKIA` + 16), a 40-character secret, and a
+     region (`AWS_REGION`, written to `.env`). Voice stays off: Bedrock can't stream.
+
+   For OpenRouter or Bedrock, offer recommended fast, standard, powerful and judge
+   models (or a pick per slot) and write them to `config/local.yaml`, which
+   `docker-compose.yml` mounts into the container.
 3. Write `.env` from `.env.example`, substituting generated and collected values.
-   Optional channel vars (Nylas, OpenAI, Signal) and the optional Tavily key stay
-   commented. Web search needs no key: it runs Tavily keyless, and a key only raises
-   its limits (#2445).
+   The optional embedding-server vars stay commented. Channel credentials and the
+   optional Tavily key are not `.env` config; they go in the vault. Web search needs no
+   key: it runs Tavily keyless, and a key only raises its limits (#2445).
 4. `docker compose up -d postgres`, poll health every 2s up to 60s.
 5. Install npm dependencies (`pnpm install --frozen-lockfile`) when
    `node_modules/` is absent.
@@ -79,13 +98,14 @@ is absent — that signals a previous run was interrupted partway.
 | Failure point | Behaviour |
 |---------------|-----------|
 | Missing prerequisite | Exit 1 with install link; no side effects |
-| Bad Anthropic key | Retry up to 3 times; exit with console URL hint |
+| Bad provider credential (key, access key, secret or region) | Retry up to 3 times; exit with a hint on where to get it |
+| `config/local.yaml` already has operator settings | Leave it alone, print the models block to merge, exit 1 |
 | Postgres health timeout | Exit 1 with `docker compose logs postgres` hint |
 | Migration failure | Exit 1 with "run `pnpm setup`, choose option 2" hint |
 
 ### Out of scope for the script
 
-- In-app onboarding (covered by Layers 2 and 3).
+- The rest of Setup (Layers 2 and 3) and Onboarding (Layer 4).
 - Windows-native support (WSL works).
 
 ---
@@ -597,6 +617,57 @@ step is recorded before its wake, so a failed write never repeats one. An event-
 is due from 12 hours before its event until it is settled, instead of the ±12-hour window,
 so a late call still loads it (`expires_at` still bounds it); a cancelled one never is.
 
+### The deep dive (#2362)
+
+Curia reads about 90 days of the principal's mail and calendar once, stores a summary, and
+drafts three documents for the principal to review. Every later step reads the summary, never
+the mailbox. Code in `src/onboarding/deep-dive/` (its README documents each heuristic); design:
+`docs/wip/2026-11-23-deep-dive-design.md`.
+
+- **Triggers.** A principal mailbox connecting while onboarding is open, and onboarding Start
+  when a mailbox is already connected. Either calls `startOnce()`, which claims the run state
+  (config store `onboarding/deep_dive`: `scanning`, `drafting`, `delivered` or `failed`) under
+  an advisory lock, so an install runs it once. A run left `scanning` or `drafting` is resumed at
+  boot, and by the watcher when stalled, from its last finished stage. With no mailbox, no run.
+- **The scan.** Metadata only (participants, subjects, folders, event times), paced at one
+  request a second with the Nylas backoff on a 429, and capped so it stays inside the free-tier
+  limits: 90 days, 15,000 messages, 1,500 requests, and a bounded sample of sent bodies for
+  voice (`limits.ts`). Hitting a cap ends that step as truncated, not failed; the coverage is
+  recorded and the drafts say so.
+- **The history summary.** `/meetings/onboarding/deep-dive/history-summary.md`: correspondents,
+  unopened mail, hand-offs, recurring meetings, where time went, each item with evidence ids. It
+  is `editable_by: console` like the playbook, so only the console changes it; the drafts and
+  the contacts backfill trust it.
+- **Contacts backfill.** Two-way correspondents (at least three messages, one each way) and
+  attendees of recurring meetings the principal organised or accepted, minus the principal's own
+  addresses and automated or bulk senders. At most 150, highest volume first, created through
+  the email adapter's path so dedup and organisation routing apply.
+- **The drafts.** One powerful-tier call each, under `/meetings/onboarding/deep-dive/`:
+  `working-rules.md`, `time-and-priorities.md` and `writing-voice.md`, each opening with
+  "nothing here is in effect yet". They use what the principal has said so far and flag
+  conflicts with the current rules; they never replace them. Spend is stored and logged.
+- **Hand-off.** The Review session's topics are opened on the open onboarding task, or on a
+  standalone coordinator task tagged `deep-dive` when onboarding is closed, then a note names the
+  drafts and the contacts count and the coordinator is woken. The coordinator makes a Google Doc
+  of each draft, shares it with the principal as writer, and books the review.
+- **The onboarding hold.** While the run is `scanning` or `drafting`, or delivered with its
+  review topics still open, the onboarding task does not complete. A `failed` run releases it.
+- **Re-runs.** The `deep-dive-run` tool (the principal asks; coordinator-only, discovered rather
+  than pinned), `POST /api/onboarding/deep-dive`, or the console button. Each clears the run
+  state and starts again, on an install that finished onboarding or never ran the dive.
+- **Failure.** The run is marked `failed`, the operator gets `deep_dive_failed`, and the open
+  onboarding task gets a note so the review topics can be declined. If the drafts were written
+  but the note, wake or Google share failed, the run stays `delivered` and the operator gets
+  `deep_dive_delivery_failed`; the review runs from the Curia drafts.
+
+**The Review session** has four topics: `review-rules`, `review-priorities`, `review-voice` and
+`next-step`. Each draft is offered as confirm, correct or set aside. Nothing is imported until
+the principal confirms that document and the coordinator has read the rules back to them.
+Confirmed rules go to ceo-inbox and calendar to write in their own formats, priorities to
+`/shared/principal/priorities.md`, and voice through `executive-profile-update`. Each outcome is
+recorded with `topic_done` (done, or declined for a set-aside). An install whose playbook was
+seeded earlier keeps its old Review section (never overwritten).
+
 ### Operator notices
 
 `notifyOperator` (`src/onboarding/notify-operator.ts`) records a progress note on the
@@ -604,8 +675,8 @@ onboarding task, logs a warning, and emails the operator through the one system-
 `OutboundGateway.sendNotification` (#2710, [ADR-068](../adr/068-operator-notices.md)). The
 watcher and the subscribers raise each event at most once per onboarding.
 
-The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
-`web_search_failed`. All four are operator-routed in `NOTIFICATION_AUDIENCES`
+The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked`,
+`web_search_failed`, `deep_dive_failed` and `deep_dive_delivery_failed`. All six are operator-routed in `NOTIFICATION_AUDIENCES`
 (`src/notifications/audience.ts`), so the gateway addresses them from the current `operator`
 setting: the operator's email when one is set, and the principal's when none is — a "Myself"
 install behaves exactly as before. The setting, not the original Setup choice, decides: an
@@ -617,12 +688,15 @@ trust. Nothing model-supplied reaches it: a tool call's `details` are context fo
 note, the log and the `onboarding.operator_notice` audit row (key names only) and never the
 email. Bodies carry no principal content — no message text, addresses or objectives.
 
-`onboarding-progress` op `operator_notice` raises only `web_search_failed`: it is the one notice
-only the model can see, and the other three are detected in code. It goes through the same
-once-per-run dedupe as everything else (`OnboardingService.raiseOperatorNotice`), so a repeated
-call emails once and adds no second note — and answers `{ alreadyRaised: true }` rather than a
-failure, so the model does not retry it. `operatorNotified` records what was raised; a notice
-whose task note could not be written gives its event back, so a retry raises it.
+`onboarding-progress` op `operator_notice` raises only `web_search_failed` and
+`deep_dive_delivery_failed`, the notices only the model can see; the others are detected in code. It is
+deduped like everything else (`OnboardingService.raiseOperatorNotice`): once per run on the
+onboarding task, where `operatorNotified` records what was raised, and once per event on a
+standalone deep-dive review task, where the record is the task's own `Operator notice: <event>`
+note, checked under the state lock. The deep dive's own `deep_dive_delivery_failed` goes through
+the same check. A repeated call emails once and adds no second note, and answers
+`{ alreadyRaised: true }` rather than a failure, so the model does not retry it. A notice whose
+task note could not be written gives its event back, so a retry raises it.
 
 ### Done
 

@@ -185,6 +185,20 @@ export class NylasApiError extends Error {
   }
 }
 
+/** How a paced listing ended early on an error it could not retry past (#2362). */
+export type ListingEndKind = 'rate_limited' | 'server_error' | 'network';
+
+/**
+ * The kind of a transient Nylas failure: 429 (rate limited), 5xx (server) or 0 (the fetch
+ * itself failed: DNS, reset, timeout). Null for anything else (auth, bad request, a bug).
+ */
+export function transientEndKind(status: number | undefined): ListingEndKind | null {
+  if (status === 429) return 'rate_limited';
+  if (status === 0) return 'network';
+  if (status !== undefined && status >= 500 && status <= 599) return 'server_error';
+  return null;
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 export class CeoNylasClient {
@@ -292,9 +306,25 @@ export class CeoNylasClient {
   // ceiling was hit with more pages still available — callers must NOT treat the
   // window as fully drained in that case.
   async listAllMessages(
-    options: ListMessagesOptions & { maxScan?: number } = {},
-  ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean }> {
+    options: ListMessagesOptions & {
+      maxScan?: number;
+      /** Sleep between pages (default 0: none). Doubles, up to 30 s, after a page that saw a 429. */
+      pageDelayMs?: number;
+      /**
+       * Called once per page with the HTTP requests it took (retries included) and whether any was
+       * a 429. Returning `false` stops paging after this page (`truncated` if a cursor remains), so
+       * a caller with a request budget keeps the messages read so far (#2362).
+       *
+       * Setting it also keeps what was read when a later page fails transiently (429 or 5xx
+       * after retries, or a failed fetch): the listing returns those messages with
+       * `truncated: true` and `endedOn` naming the error, instead of throwing. A failed page
+       * is still reported to onPage (its requests count). A first page that fails still throws.
+       */
+      onPage?: (info: { requests: number; rateLimited: boolean }) => boolean | void;
+    } = {},
+  ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean; endedOn?: ListingEndKind }> {
     const maxScan = options.maxScan ?? 500;
+    let pageDelayMs = options.pageDelayMs ?? 0;
     const pageSize = Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
 
     const messages: NylasMessageSummary[] = [];
@@ -308,12 +338,29 @@ export class CeoNylasClient {
       this.setMessageFilters(params, options, false);
       const url = `${this.#baseUrl}/messages?${params}`;
 
-      const { data, nextCursor } = await this.#requestWithCursor<NylasApiMessage[]>(
-        'GET',
-        url,
-        'listAllMessages',
-      );
+      const stats: RequestStats = { requests: 0, rateLimited: false };
+      let page: { data: NylasApiMessage[]; nextCursor?: string };
+      try {
+        page = await this.#requestWithCursor<NylasApiMessage[]>('GET', url, 'listAllMessages', undefined, stats);
+      } catch (err) {
+        if (!options.onPage) throw err;
+        options.onPage({ requests: stats.requests, rateLimited: stats.rateLimited });
+        const endedOn = err instanceof NylasApiError ? transientEndKind(err.status) : null;
+        if (endedOn === null || messages.length === 0) throw err;
+        this.log.warn(
+          { endedOn, status: (err as NylasApiError).status, read: messages.length },
+          'nylas: listAllMessages ended early on a transient error; keeping the pages already read',
+        );
+        return { messages: messages.slice(0, maxScan), truncated: true, endedOn };
+      }
+      const { data, nextCursor } = page;
+      const keepGoing = options.onPage?.({ requests: stats.requests, rateLimited: stats.rateLimited });
+      if (stats.rateLimited) pageDelayMs = Math.min(pageDelayMs * 2, NYLAS_MAX_BACKOFF_MS);
       messages.push(...data.map(normalizeMessageSummary));
+      if (keepGoing === false) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
 
       // An empty page with a cursor would otherwise spin forever — bail out, but
       // treat a lingering cursor as truncation so the caller doesn't mistake an
@@ -328,6 +375,7 @@ export class CeoNylasClient {
       }
       if (!nextCursor) break;
       pageToken = nextCursor;
+      if (pageDelayMs > 0) await this.#pageDelay(pageDelayMs, 'listAllMessages');
     }
 
     // slice() defends against a final page overshooting maxScan when maxScan is not a
@@ -734,6 +782,7 @@ export class CeoNylasClient {
     url: string,
     operation: string,
     body?: unknown,
+    stats?: RequestStats,
   ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
@@ -747,6 +796,8 @@ export class CeoNylasClient {
     let attempt = 0;
     for (;;) {
       this.throwIfCancelled(operation);
+      // Counted before the fetch: an attempt that fails without a response still went out.
+      if (stats) stats.requests++;
       let res: Response;
       try {
         res = await fetch(url, init);
@@ -755,6 +806,7 @@ export class CeoNylasClient {
         this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
         throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
       }
+      if (stats && res.status === 429) stats.rateLimited = true;
 
       // 429 is always retriable (rejected before processing). 5xx only on GET
       // (POST/PUT may have been processed before the gateway returned 5xx).
@@ -852,6 +904,22 @@ export class CeoNylasClient {
     }
   }
 
+  // The pause between pages of a paced scan. Like a retry wait, it is refused when it
+  // would end after the call's deadline, so a paced scan cannot outlive its budget.
+  async #pageDelay(delayMs: number, operation: string): Promise<void> {
+    const leftMs = remainingMs(this.budget);
+    if (delayMs >= leftMs) {
+      this.log.warn({ operation, delayMs, leftMs }, `nylas: ${operation} page delay outlasts the call's budget, stopping`);
+      throw new NylasApiError(
+        0,
+        operation,
+        `Nylas ${operation}: the page delay (${delayMs}ms) is longer than the ${Math.max(0, leftMs)}ms this call has left`,
+      );
+    }
+    await this.sleep(delayMs);
+    this.throwIfCancelled(operation);
+  }
+
   // A backoff sleep that ends early when the tool call times out. The caller's
   // next throwIfCancelled() then stops the retry.
   private sleep(ms: number): Promise<void> {
@@ -867,6 +935,14 @@ export class CeoNylasClient {
       signal?.addEventListener('abort', done, { once: true });
     });
   }
+}
+
+// Filled in by #requestWithCursor so a caller can see what one logical request cost.
+interface RequestStats {
+  /** HTTP requests sent, retries included. */
+  requests: number;
+  /** True once any response was a 429, even if a retry then succeeded. */
+  rateLimited: boolean;
 }
 
 // ── Nylas API raw shapes (internal) ─────────────────────────────────────────

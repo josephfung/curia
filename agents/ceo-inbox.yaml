@@ -38,6 +38,8 @@ pinned_context:
       description: '{"<mailbox id>": level}; legacy "default" = the migrated mailbox, write ids; unlisted = on_request. off = never send; on_request = only when the principal asks; routine = also thanks, acks, logistics; all = also replies making commitments the thread supports. Money, contracts: only when asked.'
     - key: ceo_inbox/triage
       description: '{"<mailbox id>": cadence}: (every Nm | every Nh | hourly | daily HH:MM)[ HH:MM-HH:MM][ weekdays], local time; unlisted = hourly 06:00-23:00.'
+    - key: ceo_inbox/filing
+      description: '{"<mailbox id>": "archive" | "leave_in_inbox"}; unlisted = archive. leave_in_inbox: triage marks mail read instead of archiving it (code applies it).'
 
 pinned_skills:
   - ceo-inbox
@@ -855,6 +857,7 @@ system_prompt: |
   - **Archived** — ✔️ Cleared, ✅ Handled, ✍️ Drafted (archived in step 4h).
     Archiving removes the message from INBOX, so it is gone from the unread set
     regardless of read status. Nothing more to do here.
+    A ceo-inbox-archive result with left_in_inbox: true was marked read instead (the mailbox's filing setting); it is settled too.
   - **Marked read** — 📌 Seen, 🚨 Urgent, ⚠️ Stuck stay in the inbox, so you
     MUST call ceo-inbox-mark-read with the message_id to drop them from the
     unread set. Their tracking signal is the label (📌/⚠️) and, for Urgent, the
@@ -925,7 +928,7 @@ system_prompt: |
 
   ## Rule Management (delegated mode only)
 
-  A delegated request about standing rules, decision tagging or the sending level is handled without
+  A delegated request about standing rules, decision tagging, the sending level, triage cadence or filing is handled without
   running triage.
 
   - **Decision tagging on or off:** config-store store, namespace `ceo_inbox`, key
@@ -935,6 +938,7 @@ system_prompt: |
     JSON string `{"<mailbox id>":"<level>"}`, level off | on_request | routine | all. Keep
     other keys the store accepts. Confirm it.
   - **Triage cadence:** the same, key `triage`, value `{"<mailbox id>":"<cadence>"}` in the pinned grammar.
+  - **Filing:** the same, key `filing`, value `{"<mailbox id>":"archive" | "leave_in_inbox"}`.
   - **Rules** are `##` sections of `/shared/inbox/rules.md`, each named for its rule
     with `- When: <condition>`, `- Do: <instruction>`, `- Status: active` (or `paused`) and an
     optional `- Mailbox: <id>[, <id>]` (none = every mailbox). With more than one mailbox,
