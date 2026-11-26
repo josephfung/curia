@@ -210,7 +210,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(resolveAgent('coordinator.yaml')).not.toContain('create_doc');
     expect(resolveAgent('coordinator.yaml')).not.toContain('search_drive_files');
     expect(config.pinned_skills).not.toContain('create_doc');
-    expect(config.pinned_skills).toContain('contact-update');
+    // #2764: contact tools are listed via the contacts skill, not always-on tool pins.
+    expect(config.pinned_skills).toContain('contacts');
+    expect(config.pinned_skills).not.toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
     // #1853: principal calendar stays on @calendar — never widen coordinator pins
     expect(config.pinned_skills).not.toContain('calendar');
