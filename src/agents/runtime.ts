@@ -693,17 +693,6 @@ export class AgentRuntime {
     return instructionBlocks;
   }
 
-  /** @deprecated Use preActivateSkills — kept as a private alias for call-site clarity. */
-  private activateSkillsForTurn(
-    skillNames: string[],
-    workingToolDefs: ToolDefinition[],
-    skipMessage: string,
-    by: SkillActivationBy,
-    ctx: { taskEventId: string; conversationId: string },
-  ): Promise<string[]> {
-    return this.preActivateSkills(skillNames, workingToolDefs, skipMessage, by, ctx);
-  }
-
   /** Apply one activation protocol into tools + append-only tool_result content. */
   private applySkillActivationToTurn(
     activation: SkillActivationResult,
