@@ -67,8 +67,9 @@ export interface InboundGuidanceFacts {
   runningLate?: boolean;
   /**
    * The principal's own words ask to move, shorten or set up a meeting with someone
-   * (looksLikeReschedule, looksLikeGetTime). Only honoured on a live principal turn where
-   * Curia is not merely CC'd (#2608). Absent means no.
+   * (looksLikeReschedule, looksLikeGetTime). The dispatcher sets it only when the message
+   * reached Curia alone, as for runningLate. Only honoured on a live principal turn where Curia
+   * is not merely CC'd, and not beside running-late, which wins (#2608). Absent means no.
    */
   reschedule?: boolean;
 }
