@@ -3914,11 +3914,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.activated).toEqual([{ skill: 'digest', by: 'trigger' }]);
     });
 
-    it('reserves by: trigger for #2765 (no runtime caller on this epic)', async () => {
+    it('keeps by: trigger in the SkillActivationBy union for #2765', async () => {
       const { SKILL_ACTIVATION_BY } = await import('../../../src/bus/events.js');
       expect(SKILL_ACTIVATION_BY).toContain('trigger');
-      // Parked: #2765's scheduling skill will call preActivateSkills(..., 'trigger').
-      // Until then, no code path emits skill.activated with by: trigger.
+      // Spot-check / decay-warning pre-activation already emit by: trigger (#2767 / #2770).
+      // #2765's scheduling skill will use the same value for fire-time pre-activation.
     });
   });
 
