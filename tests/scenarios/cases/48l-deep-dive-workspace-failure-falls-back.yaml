@@ -166,12 +166,10 @@ expected_behaviors:
     description: Tries to publish a draft as a Google Doc (or create a Doc or Drive file), meeting the failure.
     check:
       any_of:
+        # Attempt only — stubs return error on purpose ("meeting the failure").
         - called: doc-publish-google
-          success: true
         - called: create_doc
-          success: true
         - called: create_drive_file
-          success: true
   - id: raises_delivery_notice
     weight: critical
     description: Raises the deep_dive_delivery_failed operator notice with onboarding-progress.

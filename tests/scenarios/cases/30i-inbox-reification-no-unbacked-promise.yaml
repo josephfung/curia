@@ -147,8 +147,8 @@ expected_behaviors:
     weight: important
     description: Tries to create the follow-up task that would back a promise.
     check:
+      # Attempt only — task-create is stubbed to fail so the unbacked-promise path fires.
       called: task-create
-      success: true
   - id: labelled_seen
     weight: important
     description: Labels the message 📌 Seen.

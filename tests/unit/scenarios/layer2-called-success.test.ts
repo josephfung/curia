@@ -1,9 +1,14 @@
 // Layer-2 A/C cases must set `success` on every `called` check (#2764 §10 / Layer 1).
 // A plain `called: tool` counts a runtime refusal as a hit; `success: true` does not.
+//
+// Exempt:
+// - upper-bound budgets (`max` without a positive `min`) — refused calls still cost a call
+// - "tries X" behaviors whose stubs fail on purpose (48l / 30i)
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { leafChecks } from '../../scenarios/assertions.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
+import type { BehaviorCheck } from '../../scenarios/types.js';
 
 const CASES_DIR = path.resolve(import.meta.dirname, '../../scenarios/cases');
 
@@ -25,6 +30,16 @@ const LAYER2_CALLED_SUCCESS_PREFIXES = [
   '60a-', '60b-', '60c-', '60d-', '60e-', '60f-', '60g-',
 ] as const;
 
+/** Behaviors whose stubs fail on purpose — the check is the attempt, not success. */
+const TRY_FAILURE_EXEMPT = new Set([
+  '48l-deep-dive-workspace-failure-falls-back.yaml :: tries_a_document',
+  '30i-inbox-reification-no-unbacked-promise.yaml :: tried_backing_task',
+]);
+
+function isUpperBoundBudget(leaf: Extract<BehaviorCheck, { kind: 'called' }>): boolean {
+  return leaf.max !== undefined && (leaf.min === undefined || leaf.min === 0);
+}
+
 describe('Layer-2 called checks require success (#2764)', () => {
   const cases = loadScenarioCases(CASES_DIR).filter((c) => {
     const base = path.basename(c.sourceFile);
@@ -35,16 +50,18 @@ describe('Layer-2 called checks require success (#2764)', () => {
     expect(cases.length).toBeGreaterThanOrEqual(40);
   });
 
-  it('every called leaf sets success (true or false)', () => {
+  it('every called leaf sets success (true or false), except upper-bound / try-failure leaves', () => {
     const missing: string[] = [];
     for (const c of cases) {
+      const base = path.basename(c.sourceFile);
       for (const b of c.expectedBehaviors) {
         if (!b.check) continue;
         for (const leaf of leafChecks(b.check)) {
           if (leaf.kind !== 'called') continue;
-          if (leaf.success === undefined) {
-            missing.push(`${path.basename(c.sourceFile)} :: ${b.id}`);
-          }
+          if (leaf.success !== undefined) continue;
+          if (isUpperBoundBudget(leaf)) continue;
+          if (TRY_FAILURE_EXEMPT.has(`${base} :: ${b.id}`)) continue;
+          missing.push(`${base} :: ${b.id}`);
         }
       }
     }
