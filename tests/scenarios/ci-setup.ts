@@ -29,9 +29,9 @@ const logger = pino({ name: 'scenario-ci-setup' });
 /** The registry rows to enable, read from the repo so a renamed tool fails the unit test, not a Sunday run. */
 export function ciRegistryRows(repoRoot: string = REPO_ROOT): { agents: string[]; skills: string[]; tools: string[] } {
   const agents = ['calendar', 'ceo-inbox'];
-  const skills = ['ceo-inbox', 'learning'];
+  const skills = ['ceo-inbox', 'learning-jobs', 'learning-digest'];
   // calendar's tools as well: reconcile holds them back without a Nylas key (#1974).
-  const bundleTools = ['calendar', 'ceo-inbox', 'learning'].flatMap(bundle =>
+  const bundleTools = ['calendar', 'ceo-inbox', 'learning-jobs', 'learning-digest'].flatMap(bundle =>
     readdirSync(path.join(repoRoot, 'skills', bundle, 'tools'), { withFileTypes: true })
       .filter(entry => entry.isDirectory())
       .map(entry => entry.name),

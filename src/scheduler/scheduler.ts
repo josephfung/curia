@@ -1246,8 +1246,8 @@ export class Scheduler {
       const declared = Array.isArray((job.taskPayload as { skills?: unknown }).skills)
         ? (job.taskPayload as { skills: unknown[] }).skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
         : [];
-      if (recapInstruction !== undefined && !declared.includes('reports')) {
-        declared.push('reports');
+      if (recapInstruction !== undefined && !declared.includes('digest')) {
+        declared.push('digest');
       }
       const learnedRaw = job.lastRunContext?.activatedSkillsRuns;
       const learned: string[] = [];

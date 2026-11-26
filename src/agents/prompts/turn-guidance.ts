@@ -317,8 +317,8 @@ const RECIPIENT_OUTBOUND_CONTEXT = [
  * A live principal message that looks like a verdict on a digest's spot check ("2 bad, that
  * was a renewal notice"). Added only on a live principal turn where Curia is not merely CC'd
  * (turn-guidance-triggers.ts), so a third party's "2 good" can never reach the tool. It names
- * the two calls in order because record-spot-check lives in the `reports` bundle, not the
- * coordinator's pins, and says to ask when the tool finds no match: a guessed verdict would
+ * the two calls in order because record-spot-check lives in the `digest` skill (pre-activated
+ * on this turn), and says to ask when the tool finds no match: a guessed verdict would
  * score the wrong action.
  *
  * Conditional on purpose (F1): the trigger is a start-of-message text rule, so "2 good"
@@ -328,7 +328,7 @@ const RECIPIENT_OUTBOUND_CONTEXT = [
  */
 const SPOT_CHECK_REPLY = [
   'If the principal is grading a digest\'s spot check ("2 bad, that was a renewal notice"),',
-  'the reports skill is already loaded — call record-spot-check with each number, good or',
+  'the digest skill is already loaded — call record-spot-check with each number, good or',
   'bad, and any reason given. If the number refers to something else, ignore this note. Tell',
   'the principal what was recorded (the tool returns each item\'s summary) and any numbers it',
   'skipped; if it finds no matching spot check or an unknown number, ask which action they',

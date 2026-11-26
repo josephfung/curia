@@ -28,21 +28,24 @@ skills:
   - mailbox
   - contacts
   - autonomy
+  - approvals
   - scheduler
+  - job-report
   - web
   - browser
   - memory
+  - memory-review
   - context-bridge
   - bullpen
   - executive-profile
   - setup
-  - reports
+  - digest
   - meetings
   # Onboarding (#2360): activated only on onboarding turns; inert until someone starts onboarding.
   - onboarding
   # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
-  # NOTE: ceo-inbox / learning / diagnostics skill bundles excluded — enable alongside
-  #        their agents. Enabling one enrolls its member tools on the next boot.
+  # NOTE: ceo-inbox / learning-jobs / learning-digest / diagnostics skill bundles excluded —
+  #        enable alongside their agents. Enabling one enrolls its member tools on the next boot.
 tools:
   # STANDALONE tools only — tools that belong to no SKILL.md bundle. A bundle's member
   # tools are enrolled through the bundle (skills: above), never listed here; a unit test
@@ -54,6 +57,8 @@ tools:
   - sms-send
   - slack-send
   - web-send
+  # Digest filing (#2159 / #2764): every-turn tool pin; list/ack live in the digest skill.
+  - report-to-principal
   # Memory + knowledge
   - entity-context
   # Config

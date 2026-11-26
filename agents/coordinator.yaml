@@ -168,16 +168,18 @@ pinned_skills:
   # memory bundle now also carries the KG relationship tools (query/delete edges,
   # #1502); the coordinator intentionally gains them as the KG-central agent.
   - memory
+  - memory-review
   - scheduler
+  - job-report
   - autonomy
-  # Digest queue (#2159): a tool pin, not the reports bundle. Filing an item is an every-turn
-  # need; list/ack run only in digest jobs, which skill-activate the bundle (tool budget).
+  - approvals
+  # Digest queue (#2159 / #2764): filing is a tool pin; list/ack/spot-check live in digest.
   - report-to-principal
+  - digest
   - tasks
   - documents
-  # Learning review surface only (producers stay on ceo-inbox via tool pins)
-  - list-learning-digest
-  - resolve-learning-digest
+  # Learning review surface only (producers stay on ceo-inbox via learning-jobs)
+  - learning-digest
   # Narrow / standalone pins (polymorphic — do not pull sibling tools)
   # bullpen: reply to inter-agent threads on the thread itself — the correct,
   # visible tool for acknowledging a mention, so it is never mis-routed to a
