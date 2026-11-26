@@ -14,7 +14,12 @@
 \set ON_ERROR_STOP on
 BEGIN READ ONLY;
 
-SELECT COALESCE(NULLIF(:'days', ''), '28') AS window_days \gset
+\if :{?days}
+\else
+\set days 28
+\endif
+
+SELECT :'days' AS window_days \gset
 \echo
 \echo '== #2764 cache / activation window (days)' :window_days
 

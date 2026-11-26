@@ -1,7 +1,7 @@
 ### Added
 
 - **Scheduled job skills** — contacts and ceo-inbox YAML jobs declare skills for pre-activation. (#2764)
-- **Inbox drain** — seeds `tasks` and `executive-profile` on `progress.activeSkills`. (#2764)
+- **Inbox drain** — seeds `tasks` on `progress.activeSkills` for the first wake. (#2764)
 - **`files` skill** — `file-parse` and `archive-extract` load on activation. (#2764)
 - **`secrets` skill** — vault list/capture tools load on activation. (#2764)
 - **Scheduler fire tests** — declared/learned skills and debrief `digest` land on `preActivateSkills`. (#2764)
@@ -20,3 +20,7 @@
 - **`skill.activated` tests** — every code pre-activation path asserts `by`. (#2764)
 - **Skill exfiltration** — boot walk covers every SKILL.md body and reference. (#2764)
 - **Skill descriptions** — CI requires a when-to-load clause on every description. (#2764)
+
+### Security
+
+- **`secrets` skill** — vault list/capture tools allow only coordinator and setup-wizard. (#2764)
