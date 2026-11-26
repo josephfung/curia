@@ -6,3 +6,4 @@
 ### Changed
 
 - **`principalReach` regression** — every shipped agent keeps send reach only via listed skills. (#2764)
+- **Agent schedule schema** — allows `skills` on declarative jobs for pre-activation. (#2764)
