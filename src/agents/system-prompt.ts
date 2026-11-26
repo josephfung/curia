@@ -342,6 +342,9 @@ export async function buildPerTurnSystemPromptSuffix(
     }
   }
 
+  // Turn budget — tells the model the exact number of turns it has so it can plan
+  // tool use from turn 1. Injected for ALL agents. Comes before the task-bound
+  // blocks and the intent anchor so the anchor stays close to the end.
   prompt += '\n\n' + formatTurnBudgetBlock(resolveMaxTurns(sources.errorBudget));
   return prompt;
 }
