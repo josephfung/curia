@@ -288,13 +288,8 @@ export interface AgentConfig {
   /** Skill bundle names resolved from pinned_skills at bootstrap (Tier 0). */
   pinnedSkillNames?: string[];
   /**
-   * How skill pins enter context (#2764 / ADR-070). Default `eager` until PR 3.
-   * `on_demand`: listedSkills only; bodies and member tools load on activation.
-   */
-  skillLoading?: 'eager' | 'on_demand';
-  /**
-   * Skills listed for the model under on_demand (name + description). Empty when eager.
-   * Rendered as `## Skills` in the system prompt.
+   * Skills listed for the model (name + description). Body and member tools
+   * load on activation (#2764 / ADR-070). Rendered as `## Skills` in the system prompt.
    */
   skillList?: ReadonlyArray<{ name: string; description: string }>;
   /** Skill (bundle) registry — used for Tier-1 wake re-load of active skills (#1495). */

@@ -15,7 +15,6 @@
 import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
-import { formatActivatedSkillInstructionBlock } from './skill-instruction-format.js';
 import { agentMayCallTool, skillReservedForOtherAgents } from './skill-activation.js';
 
 export type PinReferentKind = 'skill' | 'tool';
@@ -35,10 +34,7 @@ export interface UnresolvedPin {
   withheldTools?: string[];
 }
 
-/** How skill pins expand (#2764, ADR-070). Tool pins are always loaded. */
-export type SkillLoadingMode = 'eager' | 'on_demand';
-
-/** A skill pin under on_demand: name + description only until activation. */
+/** A skill pin: name + description only until activation (#2764, ADR-070). */
 export interface ListedSkill {
   name: string;
   description: string;
@@ -47,14 +43,14 @@ export interface ListedSkill {
 export interface PinResolution {
   /** Deduped tool names to pass to ToolRegistry.toToolDefinitions(). */
   toolNames: string[];
-  /** Instruction bodies to append to the system prompt (non-empty only). Eager mode. */
+  /**
+   * Always empty after #2764 switch-on — skill bodies arrive on activation.
+   * Kept so callers that still read the field compile without a parallel rename.
+   */
   instructionBlocks: string[];
   /** The skill each entry of `instructionBlocks` came from, index for index. */
   instructionBlockSkills: string[];
-  /**
-   * Skill pins under on_demand: listed for the model, body/tools deferred (#2764).
-   * Empty in eager mode.
-   */
+  /** Skill pins listed for the model; body/tools deferred (#2764). */
   listedSkills: ListedSkill[];
   /** True when any pinned skill sets heartbeat: true. */
   heartbeatEligible: boolean;
@@ -77,12 +73,14 @@ function isSystemOnlyTool(toolRegistry: ToolRegistry, name: string): boolean {
 /**
  * Resolve an agent's pinned_skills list against SkillRegistry + ToolRegistry.
  *
- * Resolution order per pin name:
- * 1. SkillRegistry hit (bundle or MCP-projected skill, including synthetic
- *    singletons) → expand members + instructions/flags (eager), or list only
- *    (on_demand, #2764 / ADR-070).
+ * Resolution order per pin name (#2764 / ADR-070):
+ * 1. SkillRegistry hit on a real bundle / MCP skill → list name + description;
+ *    member tools and body load on activation. Synthetic singletons expand as
+ *    tool pins (always loaded).
  * 2. Else ToolRegistry hit → first-class single-tool pin (ADR-032).
  * 3. Else warn and skip (recorded in unresolvedPins).
+ *
+ * Heartbeat / document_workspace flags still apply from the skill pin.
  */
 export function resolvePinnedSkills(
   pinnedSkills: string[],
@@ -90,7 +88,6 @@ export function resolvePinnedSkills(
   toolRegistry: ToolRegistry,
   logger?: Logger,
   agentName?: string,
-  mode: SkillLoadingMode = 'eager',
 ): PinResolution {
   const toolNames: string[] = [];
   const seenTools = new Set<string>();
@@ -133,7 +130,7 @@ export function resolvePinnedSkills(
         agentName !== undefined && skillReservedForOtherAgents(skill, toolRegistry, agentName);
       if (!reservedForOthers) {
         resolvedSkills.push(pin);
-        resolvedPins.push({ pin, kind: 'skill' });
+        resolvedPins.push({ pin, kind: skill.synthetic ? 'tool' : 'skill' });
       }
       const missingTools: string[] = [];
       const withheldTools: string[] = [];
@@ -153,9 +150,9 @@ export function resolvePinnedSkills(
           withheldTools.push(t);
           continue;
         }
-        // on_demand: do not expand member tools into the fixed set — activation loads them
-        // (#2764). Still detect missing tools so bootstrap gaps stay loud.
-        if (mode === 'on_demand') {
+        // Real bundles list only — activation loads members. Synthetic singletons are
+        // tool pins under another name and always expand (#2764).
+        if (!skill.synthetic) {
           if (!toolRegistry.get(t)) missingTools.push(t);
           continue;
         }
@@ -168,56 +165,23 @@ export function resolvePinnedSkills(
         unresolvedPins.push({ pin, reason: 'caller_not_allowed', withheldTools });
       }
       if (reservedForOthers) continue;
-      // Flags apply from the pin in both modes (heartbeat / document workspace).
       if (skill.manifest.heartbeat) heartbeatEligible = true;
       if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
-      if (mode === 'on_demand') {
-        listedSkills.push({
-          name: skill.manifest.name,
-          description: skill.manifest.description.trim(),
-        });
-        if (!skill.synthetic) {
-          logger?.debug?.(
-            { agent: agentName, pin, kind: 'skill', mode: 'on_demand' },
-            'Listed capability pin (on_demand)',
-          );
-        }
-        continue;
-      }
-      // Prefer the shared formatter when the skill has progressive-disclosure
-      // files so pinned imports get the references index. Native instruction
-      // blocks without references stay as the raw body (no activation wrapper).
-      const refs = skill.manifest.references ?? [];
-      const assets = skill.manifest.assets ?? [];
-      if (refs.length > 0 || assets.length > 0) {
-        const block = formatActivatedSkillInstructionBlock(
-          skill.manifest.name,
-          skill.manifest.instructions,
-          { references: refs, assets },
-        );
-        if (block) {
-          instructionBlocks.push(block);
-          instructionBlockSkills.push(pin);
-        }
-      } else {
-        const body = skill.manifest.instructions.trim();
-        if (body) {
-          instructionBlocks.push(body);
-          instructionBlockSkills.push(pin);
-        }
-      }
-      if (!skill.synthetic) {
+      if (skill.synthetic) {
         logger?.debug?.(
-          {
-            agent: agentName,
-            pin,
-            kind: 'skill',
-            tools: skill.manifest.tools,
-            synthetic: false,
-          },
+          { agent: agentName, pin, kind: 'tool', synthetic: true },
           'Resolved capability pin',
         );
+        continue;
       }
+      listedSkills.push({
+        name: skill.manifest.name,
+        description: skill.manifest.description.trim(),
+      });
+      logger?.debug?.(
+        { agent: agentName, pin, kind: 'skill' },
+        'Listed capability pin',
+      );
       continue;
     }
 

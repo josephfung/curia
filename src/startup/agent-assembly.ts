@@ -39,7 +39,6 @@ import type { TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import type { ToolRegistry } from '../skills/registry.js';
 import type { SkillRegistry } from '../skills/skill-registry.js';
 import {
-  appendSkillInstructions,
   reportScheduledPinGaps,
   reportWithheldPinTools,
   resolvePinnedSkills,
@@ -410,16 +409,14 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const { logger, toolRegistry, skillRegistry } = ctx;
   const isCoordinator = agentConfig.role === 'coordinator';
 
-  const skillLoading = agentConfig.skill_loading ?? 'eager';
-  // Expand pinned_skills (bundles) → member tools + instruction blocks + flags
-  // (eager), or listedSkills only (on_demand, #2764 / ADR-070).
+  // Skill pins list name + description; bodies and member tools load on activation
+  // (#2764 / ADR-070). Synthetic singletons and tool pins stay always-on.
   const pinResolution = resolvePinnedSkills(
     agentConfig.pinned_skills ?? [],
     skillRegistry,
     toolRegistry,
     logger,
     agentConfig.name,
-    skillLoading,
   );
   // Scheduled agents with unresolved pins still boot and keep their cron jobs
   // (#1501) — error-level log only, so monitoring can catch reduced toolsets.
@@ -431,11 +428,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   );
   reportWithheldPinTools(agentConfig.name, pinResolution, logger);
 
-  let systemPrompt = interpolateAgentSystemPrompt(agentConfig, ctx);
-  // Eager: inject pinned skill instruction blocks. On_demand: bodies arrive on activation.
-  if (skillLoading === 'eager') {
-    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
-  }
+  const systemPrompt = interpolateAgentSystemPrompt(agentConfig, ctx);
 
   const pinnedToolNames = pinResolution.toolNames;
   const toolDefs = toolRegistry.toToolDefinitions(pinnedToolNames);
@@ -454,22 +447,18 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   };
 
   // allow_discovery gates tool-registry only. skill-activate is offered to every
-  // agent that lists skills (on_demand) or that opts into discovery (eager path
-  // historically bundled both) (#2764).
+  // agent that lists at least one skill (#2764).
   if (agentConfig.allow_discovery) {
     injectTool(TOOL_REGISTRY, 'allow_discovery is true');
-    if (skillLoading === 'eager') {
-      injectTool(SKILL_ACTIVATE, 'allow_discovery is true');
-    }
   }
-  if (skillLoading === 'on_demand' && pinResolution.listedSkills.length > 0) {
-    injectTool(SKILL_ACTIVATE, 'agent lists skills under on_demand');
+  if (pinResolution.listedSkills.length > 0) {
+    injectTool(SKILL_ACTIVATE, 'agent lists skills');
   }
 
   // principalReach must see tools the agent can eventually send with, including
-  // member tools of listed skills (sends move into skills in PR 3).
+  // member tools of listed skills (sends live in email/messaging).
   const reachToolNames = [...pinnedToolNames];
-  if (skillLoading === 'on_demand') {
+  {
     const seen = new Set(reachToolNames);
     for (const listed of pinResolution.listedSkills) {
       const skill = skillRegistry.get(listed.name);
@@ -530,7 +519,6 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     pinnedTools: pinnedToolNames,
     skillToolDefs: toolDefs,
     pinnedSkillNames: pinResolution.resolvedSkills,
-    skillLoading,
     skillList: pinResolution.listedSkills,
     skillRegistry,
     conversationActiveSkills: ctx.conversationActiveSkills,

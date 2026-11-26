@@ -139,17 +139,16 @@ describe('resolvePinnedSkills', () => {
     }, '/tmp/documents');
 
     const r = resolvePinnedSkills(['tasks', 'documents'], skills, tools);
-    expect(r.toolNames).toEqual([...TASK_TOOLS, ...DOC_TOOLS]);
+    expect(r.toolNames).toEqual([]);
     expect(r.heartbeatEligible).toBe(true);
     expect(r.documentWorkspaceEnabled).toBe(true);
-    expect(r.instructionBlocks).toHaveLength(2);
-    expect(r.listedSkills).toEqual([]);
-    const prompt = appendSkillInstructions('BASE', r.instructionBlocks);
-    expect(prompt).toContain('## Task Management');
-    expect(prompt).toContain('## Document Workspace');
+    expect(r.instructionBlocks).toEqual([]);
+    expect(r.listedSkills.map((s) => s.name)).toEqual(['tasks', 'documents']);
+    expect(r.listedSkills[0]!.description.length).toBeGreaterThan(20);
+    expect(r.listedSkills[1]!.description.length).toBeGreaterThan(20);
   });
 
-  it('on_demand lists skills without expanding tools or bodies (#2764)', () => {
+  it('lists skills without expanding tools or bodies (#2764)', () => {
     const tools = new ToolRegistry();
     for (const name of [...TASK_TOOLS, ...DOC_TOOLS]) {
       tools.register(toolManifest(name, 'low'), noopHandler);
@@ -176,7 +175,6 @@ describe('resolvePinnedSkills', () => {
       tools,
       undefined,
       'coordinator',
-      'on_demand',
     );
     expect(r.toolNames).toEqual([]);
     expect(r.instructionBlocks).toEqual([]);
@@ -187,6 +185,41 @@ describe('resolvePinnedSkills', () => {
     expect(r.heartbeatEligible).toBe(true);
     expect(r.documentWorkspaceEnabled).toBe(true);
     expect(r.resolvedSkills).toEqual(['tasks', 'documents']);
+  });
+
+  it('expands synthetic singletons as tool pins, not listed skills (#2764)', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('delegate', 'low'), noopHandler);
+    tools.register(toolManifest('date-resolve', 'none'), noopHandler);
+    const skills = new SkillRegistry();
+    skills.register(
+      { name: 'delegate', description: 'Hand work to a specialist.', tools: ['delegate'], instructions: '' },
+      '',
+      { synthetic: true },
+    );
+    skills.register(
+      { name: 'date-resolve', description: 'Resolve dates.', tools: ['date-resolve'], instructions: '' },
+      '',
+      { synthetic: true },
+    );
+    skills.register({
+      name: 'tasks',
+      description: 'Track work.',
+      tools: ['task-list'],
+      instructions: 'body',
+    }, '/tmp/tasks');
+    tools.register(toolManifest('task-list', 'none'), noopHandler);
+
+    const r = resolvePinnedSkills(
+      ['delegate', 'date-resolve', 'tasks'],
+      skills,
+      tools,
+      undefined,
+      'coordinator',
+    );
+    expect(r.toolNames).toEqual(['delegate', 'date-resolve']);
+    expect(r.listedSkills).toEqual([{ name: 'tasks', description: 'Track work.' }]);
+    expect(r.instructionBlocks).toEqual([]);
   });
 
   it('wires heartbeat without documents when only tasks is pinned', () => {
@@ -206,7 +239,8 @@ describe('resolvePinnedSkills', () => {
     const r = resolvePinnedSkills(['tasks'], skills, tools);
     expect(r.heartbeatEligible).toBe(true);
     expect(r.documentWorkspaceEnabled).toBe(false);
-    expect(r.toolNames).toEqual([...TASK_TOOLS]);
+    expect(r.toolNames).toEqual([]);
+    expect(r.listedSkills).toEqual([{ name: 'tasks', description: 'tasks' }]);
   });
 
   it('does not offer a system-only member tool through a bundle pin (#1358)', () => {
@@ -222,7 +256,9 @@ describe('resolvePinnedSkills', () => {
     }, '/tmp/web');
 
     const r = resolvePinnedSkills(['web'], skills, tools);
-    expect(r.toolNames).toEqual(['card-use-request']);
+    // Listed only — activation loads card-use-request; system-only never expands.
+    expect(r.toolNames).toEqual([]);
+    expect(r.listedSkills).toEqual([{ name: 'web', description: 'web' }]);
     expect(r.unresolvedPins).toEqual([]);
   });
 
@@ -250,16 +286,19 @@ describe('resolvePinnedSkills', () => {
     it('does not hand an agent a bundle member its allowed_callers excludes', () => {
       const { tools, skills } = calendarFixture();
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
-      expect(r.toolNames).toEqual(['calendar-open-tool']);
+      // Skill is listed; withheld member is still recorded so the gap stays loud.
+      expect(r.toolNames).toEqual([]);
+      expect(r.listedSkills.map((s) => s.name)).toEqual(['calendar']);
       expect(r.unresolvedPins).toEqual([
         { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
       ]);
     });
 
-    it('still hands the tool to an agent that allowed_callers names', () => {
+    it('still lists a bundle when the agent may call its members', () => {
       const { tools, skills } = calendarFixture();
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'calendar');
-      expect(r.toolNames).toEqual(['calendar-list-events', 'calendar-open-tool']);
+      expect(r.toolNames).toEqual([]);
+      expect(r.listedSkills.map((s) => s.name)).toEqual(['calendar']);
       expect(r.unresolvedPins).toEqual([]);
     });
 
@@ -295,10 +334,11 @@ describe('resolvePinnedSkills', () => {
       ]);
     });
 
-    it('keeps the instructions of a bundle the agent can still use in part', () => {
+    it('lists a partially usable bundle so activation can load the allowed members', () => {
       const { tools, skills } = calendarFixture(['calendar-list-events', 'calendar-open-tool'], 'Shared calendar notes');
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
-      expect(r.instructionBlocks).toEqual(['Shared calendar notes']);
+      expect(r.instructionBlocks).toEqual([]);
+      expect(r.listedSkills).toEqual([{ name: 'calendar', description: 'calendar' }]);
       expect(r.resolvedSkills).toEqual(['calendar']);
     });
 
@@ -353,7 +393,8 @@ describe('resolvePinnedSkills', () => {
     }, '/tmp/calendar');
 
     const r = resolvePinnedSkills(['calendar'], skills, tools);
-    expect(r.toolNames).toEqual(['calendar-list-events']);
+    expect(r.toolNames).toEqual([]);
+    expect(r.listedSkills.map((s) => s.name)).toEqual(['calendar']);
     expect(r.unresolvedPins).toEqual([
       {
         pin: 'calendar',
@@ -447,7 +488,10 @@ describe('resolvePinnedSkills', () => {
     );
 
     const r = resolvePinnedSkills(['google-workspace'], skills, tools);
-    expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
+    expect(r.toolNames).toEqual([]);
+    expect(r.listedSkills).toEqual([
+      { name: 'google-workspace', description: 'MCP server google-workspace' },
+    ]);
     expect(r.resolvedSkills).toEqual(['google-workspace']);
     expect(r.resolvedPins).toEqual([{ pin: 'google-workspace', kind: 'skill' }]);
   });
@@ -685,10 +729,12 @@ describe('on-disk bullpen bundle (#2126)', () => {
     expect(parsed.instructions).toBe('');
   });
 
-  it('resolves an existing `- bullpen` pin to the four tools, and nothing named bullpen', () => {
+  it('lists `- bullpen` without expanding tools; nothing named bullpen is registered', () => {
     const resolution = resolvePinnedSkills(['bullpen'], skills, tools);
     expect(resolution.unresolvedPins).toEqual([]);
-    expect([...resolution.toolNames].sort()).toEqual(['bullpen-close', 'bullpen-post', 'bullpen-read', 'bullpen-reply']);
+    expect(resolution.toolNames).toEqual([]);
+    expect(resolution.listedSkills.map((s) => s.name)).toEqual(['bullpen']);
+    expect(parsed.tools?.sort()).toEqual(['bullpen-close', 'bullpen-post', 'bullpen-read', 'bullpen-reply']);
     expect(tools.get('bullpen')).toBeUndefined();
   });
 

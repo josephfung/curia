@@ -157,7 +157,11 @@ system_prompt: |
 
 pinned_skills:
   - date-resolve
-  - diagnostics
+  # Domain as tool pins (#2764 §6).
+  - resolve-time-window
+  - audit-query
+  - audit-trace
+  - ops-lookup
   - request-clarification
 allow_discovery: false
 error_budget:

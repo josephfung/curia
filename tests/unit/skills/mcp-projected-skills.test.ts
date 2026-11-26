@@ -82,7 +82,8 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     expect(skills.toolOwner('create_doc')?.manifest.name).toBe('google-workspace');
 
     const r = resolvePinnedSkills(['google-workspace'], skills, tools);
-    expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
+    expect(r.toolNames).toEqual([]);
+    expect(r.listedSkills.map((s) => s.name)).toEqual(['google-workspace']);
   });
 
   // #1960: upstream MCP tool descriptions are not ours to edit, so their how-to notes
@@ -111,12 +112,13 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
       expect(gw?.manifest.tools).toEqual(['update_drive_file', 'create_drive_file']);
     });
 
-    it('lists the reference in the pinned skill block so the agent knows it exists', () => {
-      const { skills, tools } = project(REPO_SKILLS_DIR);
-      const r = resolvePinnedSkills(['google-workspace'], skills, tools);
-      const block = r.instructionBlocks.join('\n');
-      expect(block).toContain('skill-activate({ skill: "google-workspace", reference: "<path>" })');
-      expect(block).toContain('- drive-files.md');
+    it('lists google-workspace with its references available on activation', () => {
+      const { skills } = project(REPO_SKILLS_DIR);
+      const gw = skills.get('google-workspace');
+      expect(gw?.manifest.references).toEqual(['drive-files.md']);
+      const r = resolvePinnedSkills(['google-workspace'], skills, new ToolRegistry());
+      expect(r.listedSkills.map((s) => s.name)).toEqual(['google-workspace']);
+      expect(r.instructionBlocks).toEqual([]);
     });
 
     it('loads drive-files.md through skill-activate', async () => {
