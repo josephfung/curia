@@ -673,9 +673,10 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
   if (facts.bookingLink === true) keys.push('booking-link');
   if (facts.liveTurn && facts.makeRoom === true) keys.push('make-room');
   // Not on a CC'd email: that is written to someone else, and email-cc-principal covers a
-  // meeting handed over in it. Not beside running-late: "Running late, push my 10am" is a late
-  // note, which Curia sends itself before the start, never a draft or a proposal.
-  if (facts.liveTurn && facts.reschedule === true && !facts.curiaCc && !runningLate) keys.push('reschedule');
+  // meeting handed over in it. Never when the message reads as running late, whether or not the
+  // running-late note is added (an outbound block replaces it): "Running late, push my 10am" is a
+  // late note, which Curia sends itself before the start, never a draft or a proposal.
+  if (facts.liveTurn && facts.reschedule === true && !facts.curiaCc && facts.runningLate !== true) keys.push('reschedule');
   if (facts.liveTurn && entries.length > 0) {
     keys.push('outbound-context');
     if (entries.some((m) => isTaskWakeReplyBinding(m))) keys.push('outbound-context-task-wake');

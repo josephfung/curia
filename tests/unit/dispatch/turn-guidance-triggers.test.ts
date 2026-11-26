@@ -263,6 +263,12 @@ describe('reschedule (#2608)', () => {
 
   it('gives way to running-late, whose note Curia sends itself before the start', () => {
     expect(inboundTurnGuidance(facts({ runningLate: true, reschedule: true }))).toEqual(['running-late']);
+    // With an outbound block running-late's note is not added, and reschedule still stays out
+    // (CodeRabbit, #2760).
+    expect(inboundTurnGuidance(facts({ runningLate: true, reschedule: true, injectedEntryMetadata: [null] })))
+      .toEqual(['outbound-context']);
+    expect(inboundTurnGuidance(facts({ reschedule: true, injectedEntryMetadata: [null] })))
+      .toEqual(['outbound-context', 'reschedule']);
     expect(looksLikeRunningLate('Running late - push the board call by 10 minutes')).toBe(true);
     expect(looksLikeReschedule('Running late - push the board call by 10 minutes')).toBe(true);
   });
