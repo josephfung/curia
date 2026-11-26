@@ -268,7 +268,7 @@ describe('reschedule (#2608)', () => {
     expect(inboundTurnGuidance(facts({ runningLate: true, reschedule: true, injectedEntryMetadata: [null] })))
       .toEqual(['outbound-context']);
     expect(inboundTurnGuidance(facts({ reschedule: true, injectedEntryMetadata: [null] })))
-      .toEqual(['outbound-context', 'reschedule']);
+      .toEqual(['reschedule', 'outbound-context']);
     expect(looksLikeRunningLate('Running late - push the board call by 10 minutes')).toBe(true);
     expect(looksLikeReschedule('Running late - push the board call by 10 minutes')).toBe(true);
   });
