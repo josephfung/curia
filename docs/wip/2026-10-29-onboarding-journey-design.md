@@ -819,6 +819,19 @@ can run in parallel.
 
 ## Appendix A — setup-doc inconsistencies to fix in #2356
 
+**Status, checked against the code on 2026-11-25.** Fixed in this repo: 4 (`docs/dev/setup.md`
+states it, matching the boot warning at `src/index.ts:824`), 6 (`docs/dev/setup.md` says to
+enable the channel in the console), 8 (spec 18 and `docs/dev/setup.md` no longer put channel
+values in `.env`; spec 08 says no `curia setup` CLI exists and points to spec 18) and 9 (the
+README's channel row). The `curia` side of 5 agrees: `docs/dev/setup.md` and `.env.example`
+both use `channel.email.nylas_api_key`, seeded from `NYLAS_API_KEY`. 1 is decided: the docs
+say an Anthropic key is required to install, as the installers (`scripts/setup-common.sh:178`)
+enforce; installing with another provider is #2749. In curia-docs, 3, 7, 10
+and 11 and that side of 1, 5 and 9 were already fixed by the Setup-half PR (checked on
+2026-11-25: no Ollama provider, installation lists the key as required, one set of
+`channel.email.*` key names, the Signal socket path asked for consistently, no IMAP, no
+"under 15 minutes"). 2 is josephfung/curia-website#14.
+
 1. **LLM providers.**
    - `curia-docs/core-concepts/introduction.mdx:108` lists Ollama, which has no provider in the
      code.

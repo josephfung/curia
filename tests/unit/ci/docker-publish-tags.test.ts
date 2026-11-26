@@ -53,6 +53,7 @@ interface Workflow {
       strategy: { matrix: { include: MatrixEntry[] } };
       steps: Array<Record<string, unknown>>;
     };
+    'build-arch': { steps: Array<Record<string, unknown>> };
   };
 }
 
@@ -307,6 +308,8 @@ function renderTags(tagsBlock: string, ctx: Context): string[] {
  * ref-dropdown dispatch form (#1718), and it is the only case where
  * `github.ref` legitimately names the build target rather than the launch site.
  */
+const LAUNCH_SHA = '0123456789abcdef0123456789abcdef01234567';
+
 function contextFor(opts: { eventName: string; ref: string; inputTag?: string; releaseTag?: string }): Context {
   const refTag = opts.ref.startsWith('refs/tags/') ? opts.ref.slice('refs/tags/'.length) : '';
   const resolvedTag = opts.inputTag || opts.releaseTag || refTag;
@@ -324,10 +327,13 @@ function contextFor(opts: { eventName: string; ref: string; inputTag?: string; r
       // rather than passed in so a fixture cannot state a ref and a ref_name
       // that disagree.
       ref_name: opts.ref.replace(/^refs\/(heads|tags)\//, ''),
+      // The commit the run was triggered for: on a push, the pushed commit; on a
+      // dispatch, the launch ref's HEAD at dispatch time.
+      sha: LAUNCH_SHA,
       event: { release: { tag_name: opts.releaseTag ?? '' } },
     },
     inputs: { tag: opts.inputTag ?? '' },
-    needs: { resolve: { outputs: { tag: resolvedTag } } },
+    needs: { resolve: { outputs: { tag: resolvedTag, checkout_ref: resolvedTag ? `refs/tags/${resolvedTag}` : '' } } },
   };
 }
 
@@ -392,7 +398,7 @@ function checkoutRef(): string {
  *
  * `bash -e` matches the default shell GitHub Actions runs a `run:` block under.
  */
-function runResolve(ctx: Context): { status: number; wrote: boolean; tag: string; output: string } {
+function runResolve(ctx: Context): { status: number; wrote: boolean; tag: string; checkoutRef: string | null; output: string } {
   // By id, not by position — the same principle `checkoutRef` states above. A
   // setup step with its own `run:` inserted ahead of this one would otherwise
   // silently redirect the whole suite onto the wrong script, with the wrong
@@ -442,7 +448,8 @@ function runResolve(ctx: Context): { status: number; wrote: boolean; tag: string
     // the opposite of what really runs. `wrote` keeps "never written" separate
     // from "written empty", which an `?? ''` fallback would collapse.
     const written = [...readFileSync(outputPath, 'utf8').matchAll(/^tag=(.*)$/gm)];
-    return { status, wrote: written.length > 0, tag: written.at(-1)?.[1] ?? '', output };
+    const refs = [...readFileSync(outputPath, 'utf8').matchAll(/^checkout_ref=(.*)$/gm)];
+    return { status, wrote: written.length > 0, tag: written.at(-1)?.[1] ?? '', checkoutRef: refs.at(-1)?.[1] ?? null, output };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -495,7 +502,7 @@ describe('docker-publish.yml tag derivation', () => {
     });
 
     it('checks out the requested tag, and the concurrency group follows it', () => {
-      expect(interpolate(checkoutRef(), DISPATCH_WITH_TAG)).toBe('v0.40.0');
+      expect(interpolate(checkoutRef(), DISPATCH_WITH_TAG)).toBe('refs/tags/v0.40.0');
       // Not `refs/heads/main`, or a routine main merge would cancel a rollback.
       expect(interpolate(workflow.concurrency.group, DISPATCH_WITH_TAG)).not.toContain('refs/heads/main');
     });
@@ -507,8 +514,18 @@ describe('docker-publish.yml tag derivation', () => {
       expect(tagsFor('curia-postgres', DISPATCH_BARE)).toEqual(['edge']);
     });
 
-    it('checks out the launch ref', () => {
-      expect(interpolate(checkoutRef(), DISPATCH_BARE)).toBe('refs/heads/main');
+    it('checks out the commit main was at when dispatched, not the moving branch', () => {
+      expect(interpolate(checkoutRef(), DISPATCH_BARE)).toBe(LAUNCH_SHA);
+      expect(interpolate(checkoutRef(), PUSH_MAIN)).toBe(LAUNCH_SHA);
+    });
+
+    it('checks out the same source in every leg and in the assembling job', () => {
+      // build-arch's legs start at different times (and can be re-run on their own),
+      // so a branch name here would let one image's platforms come from two commits.
+      const refs = (['build-arch', 'build'] as const).map((job) =>
+        (workflow.jobs[job].steps.find((step) => String(step.uses ?? '').startsWith('actions/checkout@')) as { with?: { ref?: string } }).with?.ref,
+      );
+      expect(refs[0]).toBe(refs[1]);
     });
   });
 
@@ -552,7 +569,7 @@ describe('docker-publish.yml tag derivation', () => {
     });
 
     it('checks out the tag', () => {
-      expect(interpolate(checkoutRef(), DISPATCH_FROM_TAG_REF)).toBe('v0.40.0');
+      expect(interpolate(checkoutRef(), DISPATCH_FROM_TAG_REF)).toBe('refs/tags/v0.40.0');
     });
   });
 
@@ -594,6 +611,14 @@ describe('docker-publish.yml tag derivation', () => {
   });
 
   describe('the resolve job, executed', () => {
+    it('writes the checkout ref as refs/tags/<tag>, and empty for an edge build', () => {
+      // The fixture's needs.resolve.outputs.checkout_ref mirrors this; a bare tag name
+      // here would let checkout pick a same-named branch.
+      expect(runResolve(DISPATCH_WITH_TAG)).toMatchObject({ status: 0, tag: 'v0.40.0', checkoutRef: 'refs/tags/v0.40.0' });
+      expect(runResolve(RELEASE)).toMatchObject({ status: 0, tag: 'v0.42.0', checkoutRef: 'refs/tags/v0.42.0' });
+      expect(runResolve(PUSH_MAIN)).toMatchObject({ status: 0, tag: '', checkoutRef: '' });
+    });
+
     // These run the workflow's own shell rather than the model of it above.
     it.each([
       ['push to main', PUSH_MAIN, ''],

@@ -19,8 +19,10 @@ It is a filesystem of markdown documents addressed by path, serialized in the **
 Knowledge Format (OKF)** and stored in Postgres. It is deliberately loose where the other
 tiers are strict — freeform, untyped-beyond-a-`type`-tag, mutable, and un-gated — because
 its job is to hold work-in-progress, not durable truth. Curated conclusions still graduate
-into the KG through the existing gates (§10); the workspace is the scratchpad, the KG is the
-record.
+into the KG through the existing gates (§10); for agents' working documents, the workspace is
+the scratchpad and the KG is the record. A durable, principal-owned `/shared/` document (a rules
+document, the principal's priorities) is itself the record of what it holds, and KG facts are
+context for it ([ADR-069](../adr/069-principal-priorities-record.md)).
 
 Tracking epic: #1207 (sub-issues #1208–#1212; #1213 deferred). The as-built design memo was
 folded into this spec at the v0.39 release.

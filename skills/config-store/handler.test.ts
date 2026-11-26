@@ -747,6 +747,60 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
   });
 });
 
+// #2699: ceo_inbox/filing is keyed by live mailbox id and holds archive | leave_in_inbox.
+describe('ConfigStoreHandler — ceo_inbox/filing (#2699)', () => {
+  const directory = (views: ReturnType<typeof mailboxView>[]): NonNullable<ToolContext['mailboxDirectory']> =>
+    ({ list: async () => views.map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })) });
+  const two = directory([mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')]);
+  const store = (value: string, mailboxDirectory: ToolContext['mailboxDirectory'] = two, em = makeEntityMemory(), key = 'filing', namespace = 'ceo_inbox') =>
+    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace, key, value }, { mailboxDirectory }));
+
+  it('stores a valid per-mailbox mode and returns the live mailboxes', async () => {
+    const r = await store('{"work":"leave_in_inbox"}');
+    expect(r).toMatchObject({ success: true, data: { stored: true, mailboxes: [{ id: 'work', label: 'Work' }, { id: 'personal', label: 'Personal' }] } });
+  });
+
+  it('refuses a key that is not a live mailbox and stores nothing', async () => {
+    const em = makeEntityMemory();
+    const r = await store('{"wrk":"archive"}', two, em);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('wrk');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown mode', async () => {
+    const em = makeEntityMemory();
+    const r = await store('{"work":"keep"}', two, em);
+    expect(r.success).toBe(false);
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the mailbox directory is absent, storing nothing', async () => {
+    const em = makeEntityMemory();
+    const r = await new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'ceo_inbox', key: 'filing', value: '{"work":"archive"}' }, {}));
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('ceo_inbox/filing cannot be checked');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the directory list throws, storing nothing', async () => {
+    const broken: ToolContext['mailboxDirectory'] = { list: async () => { throw new Error('db down'); } };
+    const em = makeEntityMemory();
+    const r = await store('{"work":"archive"}', broken, em);
+    expect(r.success).toBe(false);
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('checks a case or padding variant of the namespace and key the same way', async () => {
+    for (const [namespace, key] of [['CEO_INBOX', 'filing'], [' Ceo_Inbox ', ' filing ']] as const) {
+      const em = makeEntityMemory();
+      const r = await store('{"wrk":"archive"}', two, em, key, namespace);
+      expect(r.success, `${namespace}/${key}`).toBe(false);
+      expect(em.storeFact).not.toHaveBeenCalled();
+    }
+  });
+});
+
 // #2475 R65: code-owned triage / sent-observe / voice-learning state is refused; the cadence key
 // `triage` itself is validated against the live mailboxes.
 describe('ConfigStoreHandler — code-owned ceo_inbox state and the triage cadence (R65)', () => {

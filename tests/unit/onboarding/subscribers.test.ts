@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import { OnboardingSubscribers } from '../../../src/onboarding/subscribers.js';
 import { writeOnboardingState, type OnboardingState } from '../../../src/onboarding/state.js';
+import type { DeepDiveService } from '../../../src/onboarding/deep-dive/service.js';
 import { BUSY_WAKE_RETRY_SECONDS, ONBOARDING_CREATED_BY } from '../../../src/onboarding/constants.js';
 import {
   createMailboxSignInFinished,
@@ -25,7 +26,12 @@ const baseState: OnboardingState = {
   operatorNotified: [],
 };
 
-async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; googleClientId?: () => Promise<string | undefined> }) {
+async function setup(opts: {
+  open: boolean;
+  state?: Partial<OnboardingState>;
+  googleClientId?: () => Promise<string | undefined>;
+  startOnce?: () => Promise<unknown>;
+}) {
   const handlers = new Map<string, (e: BusEvent) => unknown>();
   const bus = { subscribe: (type: string, _layer: string, h: (e: BusEvent) => unknown) => void handlers.set(type, h) };
   const data = new Map<string, string>();
@@ -41,6 +47,7 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; go
     listTasks: vi.fn(async () => (opts.open ? [{ id: 't1', parentTaskId: null, createdBy: ONBOARDING_CREATED_BY }] : [])),
     updateTask: vi.fn(async () => ({})),
   };
+  const startOnce = vi.fn(opts.startOnce ?? (async () => ({ started: true as const })));
   const scheduler = {
     enqueueTaskWake: vi.fn(async (_p: { taskId: string; agentId: string }) => ({ jobId: 'j1' })),
     runTaskWakeEarly: vi.fn(async (_id: string, _at: Date): Promise<'moved' | 'busy' | 'none'> => 'none'),
@@ -53,9 +60,10 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; go
     stateLock: (fn) => fn(),
     logger: logger as never,
     googleClientId: opts.googleClientId ?? (async () => 'client-123'),
+    deepDive: { startOnce: startOnce as unknown as DeepDiveService['startOnce'] },
   }).start();
   const fire = async (e: BusEvent) => { await handlers.get(e.type)?.(e); };
-  return { fire, taskRepo, scheduler, data };
+  return { fire, taskRepo, scheduler, data, startOnce };
 }
 
 const redeemed = () => createPairingInvitationRedeemed({ invitationId: 'inv1', deviceName: 'Pixel' });
@@ -119,6 +127,29 @@ describe('OnboardingSubscribers', () => {
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', {
       progressNote: 'Mailbox connected (personal): run the first look; pick up connect-mailbox / inbox-expectations',
     });
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledTimes(1);
+  });
+
+  it('mailbox connected with onboarding open starts the deep dive', async () => {
+    const t = await setup({ open: true });
+    await t.fire(connected());
+    expect(t.startOnce).toHaveBeenCalledTimes(1);
+    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', {
+      progressNote: 'Mailbox connected (personal): run the first look; pick up connect-mailbox / inbox-expectations',
+    });
+  });
+
+  it('mailbox connected with no onboarding task starts nothing', async () => {
+    // Outside onboarding only an explicit re-run starts a scan.
+    const t = await setup({ open: false });
+    await t.fire(connected());
+    expect(t.startOnce).not.toHaveBeenCalled();
+  });
+
+  it('a deep-dive start that throws still notes and wakes the task', async () => {
+    const t = await setup({ open: true, startOnce: async () => { throw new Error('store down'); } });
+    await t.fire(connected());
+    expect(t.taskRepo.updateTask).toHaveBeenCalledTimes(1);
     expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledTimes(1);
   });
 

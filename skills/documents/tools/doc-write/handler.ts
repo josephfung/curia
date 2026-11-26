@@ -25,6 +25,10 @@ import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durabl
 import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
 import type { WorkingDocRow } from '../../../../src/db/working-docs-repo.js';
 import { EDITABLE_BY_KEY, editableBy } from '../../../../src/memory/console-only-docs.js';
+import { PRIORITIES_PATH, priorityFrontmatterDefaults } from '../../../../src/memory/priorities-doc.js';
+import { toLocalIso } from '../../../../src/time/timestamp.js';
+
+const PRIORITIES_KEPT_KEYS = ['title', 'as_of', 'past', 'format'];
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -247,10 +251,18 @@ export class DocWriteHandler implements ToolHandler {
               error: `${normalized} was archived by the principal. Do not recreate it; the principal can restore it in the console.`,
             };
           }
+          // The priorities document starts with its standard frontmatter (#2362); keys the
+          // caller gives win.
+          const frontmatter = normalized === PRIORITIES_PATH
+            ? {
+                ...priorityFrontmatterDefaults((toLocalIso(Math.floor(Date.now() / 1000), timezone) ?? '').slice(0, 10)),
+                ...input.frontmatter,
+              }
+            : input.frontmatter;
           const created = await repo.create({
             path: normalized,
             type: input.type.trim(),
-            frontmatter: input.frontmatter,
+            frontmatter,
             body: input.body ?? '',
             taskId: associatedTaskId,
             conversationId: input.conversation_id ?? ctx.conversationId ?? undefined,
@@ -301,9 +313,20 @@ export class DocWriteHandler implements ToolHandler {
           if (!existing) {
             return { success: false, error: `Document not found at ${normalized} — use create mode first` };
           }
+          // replace swaps the stored frontmatter for the one given, so a caller that sends only
+          // as_of would drop past: and format:. Keep the stored values of the standard keys the
+          // caller leaves out, as_of included (#2362); a key the caller sends wins.
+          const replaceFrontmatter = normalized === PRIORITIES_PATH && input.frontmatter !== undefined
+            ? {
+                ...Object.fromEntries(
+                  Object.entries(existing.frontmatter).filter(([key]) => PRIORITIES_KEPT_KEYS.includes(key)),
+                ),
+                ...input.frontmatter,
+              }
+            : input.frontmatter;
           result = await repo.update(normalized, {
             type: input.type,
-            frontmatter: input.frontmatter,
+            frontmatter: replaceFrontmatter,
             body: input.body,
             expectedVersion: input.expected_version,
             expectedId: existing.id,

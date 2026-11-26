@@ -69,20 +69,21 @@ surprises them. I build this from the current settings, so I never promise
 behaviour I will not show.
 
 Every message lands in one of six categories:
-- Urgent: needs you now; reaches you on your usual channel.
-- Handled: I dealt with it; nothing more for you to do.
-- Drafted: I wrote a reply; it appears in your Drafts folder.
-- Seen: informational; marked read and leaves your inbox.
-- Cleared: noise I removed; marked read and leaves your inbox.
+- Urgent: needs you now; reaches you on your usual channel, and it is starred and stays in your inbox.
+- Handled: I dealt with it; nothing more for you to do; it is filed out of your inbox, unless you'd rather keep it there.
+- Drafted: I wrote a reply; it appears in your Drafts folder, and the message is filed out of your inbox, unless you'd rather keep it there.
+- Seen: worth knowing; marked read and labelled, and it stays in your inbox.
+- Cleared: noise; marked read and filed out of your inbox, unless you'd rather keep it there.
 - Stuck: I could not decide; it is labelled so you can find it.
 
 Choices:
 - Category labels in your mailbox: on, or off? (`ceo_inbox/decision_tagging`)
 - May I send anything myself, or only draft? (`ceo_inbox/sending`)
+- Should mail I've dealt with leave your inbox, or stay there marked read? (`ceo_inbox/filing`, per mailbox)
 - Calendar: may I place tentative holds? Should I book sessions with you, and
   ask first before booking other meetings, at the independence level you chose?
 
-I finish with a read-back: "From tomorrow morning you'll see...".
+I finish with a read-back that reflects these choices: "From tomorrow morning you'll see...".
 
 ## Spoken voice <!-- topic: spoken-voice -->
 I will mention in one line that my voice can be changed under Behaviour,
@@ -119,11 +120,24 @@ I need to agree what happens next so {principal} is never left waiting.
 
 # Review <!-- session: review -->
 
-## Walk through the drafts <!-- topic: walk-drafts -->
-I need to learn from {principal}'s reaction to real work. I go through the
-drafts I made, one at a time, and adjust to what they tell me.
+## Working rules <!-- topic: review-rules -->
+I need {principal} to check the rules I drafted from how they handle their
+mail and calendar before I follow any of them.
+For the document: confirm / correct / set aside.
+- Which of these rules are right as written?
+- Which should change, and which should go?
+
+## Time and priorities <!-- topic: review-priorities -->
+I need to learn what {principal} is trying to move, so I weigh work against
+it. For the document: confirm / correct / set aside.
+- Here's where your time went. What are you actually trying to move?
+- Are these the right priorities, in the right order?
+- Is anything taking time it should not?
+
+## Writing voice <!-- topic: review-voice -->
+I need {principal} to check how I described the way they write before I
+write like them. For the document: confirm / correct / set aside.
 - Is this how you would have said it?
-- Too long, too short, too formal, too casual?
 - Anything I should never write, or always write?
 
 ## Next step <!-- topic: next-step -->

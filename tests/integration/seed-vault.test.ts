@@ -3,7 +3,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { loadEncryptionKey } from '../../src/secrets/crypto.js';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
-import { seedVault, verifyRequiredSecrets, parseSeedOnly, SEED_SECRET_NAMES, SEED_IF_ABSENT_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
+import { seedVault, verifyRequiredSecrets, parseSeedOnly, parseSeedRequire, SEED_SECRET_NAMES, SEED_IF_ABSENT_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL && process.env.SECRET_ENCRYPTION_KEY ? describe : describe.skip;
@@ -158,6 +158,14 @@ describeIf('seedVault', () => {
     expect(await verifyRequiredSecrets(secrets, logger)).toEqual([]);
   });
 
+  it('verifyRequiredSecrets also checks the extra names it is given (#2749)', async () => {
+    await seedVault(secrets, { API_TOKEN: 'tok-x', WEB_APP_BOOTSTRAP_SECRET: 'wabs-x', AWS_ACCESS_KEY_ID: 'AKIAX' }, logger);
+    const extra = new Set(['aws_access_key_id', 'aws_secret_access_key']);
+    expect(await verifyRequiredSecrets(secrets, logger, extra)).toEqual(['aws_secret_access_key']);
+    // A name already in the base list is checked once.
+    expect(await verifyRequiredSecrets(secrets, logger, new Set(['api_token']))).toEqual([]);
+  });
+
   it('writes the LiveKit values when the vault has none', async () => {
     const { seeded } = await seedVault(secrets, LIVEKIT_ENV, logger);
     expect(seeded).toEqual(expect.arrayContaining([...SEED_IF_ABSENT_NAMES]));
@@ -238,5 +246,20 @@ describe('parseSeedOnly', () => {
 
   it('rejects an unknown name instead of seeding nothing', () => {
     expect(() => parseSeedOnly('openrouter_key')).toThrow(/unknown secret\(s\): openrouter_key/);
+  });
+});
+
+describe('parseSeedRequire', () => {
+  it('is empty when unset or blank', () => {
+    expect([...parseSeedRequire(undefined)]).toEqual([]);
+    expect([...parseSeedRequire(' ')]).toEqual([]);
+  });
+
+  it('parses the provider keys the installers pass', () => {
+    expect([...parseSeedRequire('aws_access_key_id,aws_secret_access_key')]).toEqual(['aws_access_key_id', 'aws_secret_access_key']);
+  });
+
+  it('rejects an unknown name instead of checking nothing', () => {
+    expect(() => parseSeedRequire('openrouter_key')).toThrow(/SEED_VAULT_REQUIRE names unknown secret\(s\): openrouter_key/);
   });
 });

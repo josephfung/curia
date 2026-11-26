@@ -22,6 +22,7 @@ import {
 } from '../../src/skills/principal-send/send-level.js';
 import { checkTriageCadenceWrite, TRIAGE_CADENCE_KEY } from '../../src/principal-mailboxes/triage-cadence.js';
 import { TRIAGE_NAMESPACE } from '../../src/principal-mailboxes/triage-state.js';
+import { checkFilingWrite, FILING_KEY } from '../../src/principal-mailboxes/filing-mode.js';
 
 const INDEX_LABEL = 'config-store-index';
 
@@ -87,10 +88,11 @@ export class ConfigStoreHandler implements ToolHandler {
       return { success: false, error: `${namespace}/${key} is state Curia keeps itself; it cannot be stored here.` };
     }
 
-    // Both mailbox-keyed settings are checked against the live mailboxes; without the directory
+    // The mailbox-keyed settings are checked against the live mailboxes; without the directory
     // nothing can be checked, so nothing is stored (a reader would ignore a bad value while the
     // agent reported it set).
-    const mailboxKeyed = (namespace === TRIAGE_NAMESPACE && key === TRIAGE_CADENCE_KEY) || isSendLevelKey(namespace, key);
+    const mailboxKeyed = (namespace === TRIAGE_NAMESPACE && key === TRIAGE_CADENCE_KEY) || isSendLevelKey(namespace, key)
+      || isFilingKey(namespace, key);
     if (mailboxKeyed && !ctx.mailboxDirectory) {
       ctx.log.warn({ namespace, key }, 'config-store: mailbox directory unavailable — mailbox-keyed setting not stored');
       return { success: false, error: `The principal mailboxes are not available, so ${namespace}/${key} cannot be checked. Nothing was stored.` };
@@ -117,6 +119,19 @@ export class ConfigStoreHandler implements ToolHandler {
       const check = checkSendLevelWrite(value, live.mailboxes);
       if (!check.ok) {
         ctx.log.info({ namespace, key }, 'config-store: ceo_inbox/sending write refused — not keyed by live mailbox ids with valid levels');
+        return { success: false, error: check.error };
+      }
+      mailboxes = live.mailboxes.map(({ id, label }) => ({ id, label }));
+    }
+
+    // ceo_inbox/filing (#2699) is keyed by mailbox id too: a key naming no live mailbox, or a mode
+    // other than archive | leave_in_inbox, would be ignored by the reader while the agent said it was set.
+    if (isFilingKey(namespace, key) && ctx.mailboxDirectory) {
+      const live = await liveMailboxes(ctx);
+      if (!live.ok) return { success: false, error: live.error };
+      const check = checkFilingWrite(value, live.mailboxes);
+      if (!check.ok) {
+        ctx.log.info({ namespace, key }, 'config-store: ceo_inbox/filing write refused — not live mailbox ids with valid modes');
         return { success: false, error: check.error };
       }
       mailboxes = live.mailboxes.map(({ id, label }) => ({ id, label }));
@@ -340,6 +355,11 @@ function canonicalKey(namespace: string | undefined, key: string | undefined): s
 /** The send-level entry (namespace and key arrive normalised). */
 function isSendLevelKey(namespace: string, key: string | undefined): boolean {
   return namespace === SEND_SETTING_NAMESPACE && key === SEND_SETTING_KEY;
+}
+
+/** The per-mailbox filing-mode entry (namespace and key arrive normalised). */
+function isFilingKey(namespace: string, key: string | undefined): boolean {
+  return namespace === TRIAGE_NAMESPACE && key === FILING_KEY;
 }
 
 /** The principal's live mailboxes for the send-level key. A failed list is logged and reported. */

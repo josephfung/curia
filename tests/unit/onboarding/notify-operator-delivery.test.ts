@@ -47,6 +47,15 @@ function makeDeps(overrides: {
 }
 
 describe('notifyOperator delivery', () => {
+  it('with no task (a deep dive that failed with nothing open) still emails, and records nothing', async () => {
+    const { gateway, sendNotification } = makeGateway();
+    const { deps, updateTask } = makeDeps({ gateway });
+    const result = await notifyOperator(deps, null, 'deep_dive_failed');
+    expect(result).toEqual({ recorded: false });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(sendNotification).toHaveBeenCalledWith(expect.objectContaining({ notificationType: 'deep_dive_failed' }));
+  });
+
   it('says the greeting was never recorded, not that it went unanswered, when none was sent (#2710 review)', async () => {
     const { gateway, sendNotification } = makeGateway();
     const { deps } = makeDeps({ gateway });

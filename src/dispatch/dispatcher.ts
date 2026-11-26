@@ -38,7 +38,7 @@ import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
 import { hasPrincipalAuthority, isUnauthenticatedPrincipal } from '../contacts/principal.js';
-import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
+import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeRunningLate, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, senderOwnTextAnyChannel, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
@@ -1427,6 +1427,14 @@ export class Dispatcher {
       principalAcquaintance: acquaintanceEvidence,
       // The principal's own words only: text above any quote or forward marker.
       makeRoom: looksLikeMakeRoom(spotCheckText),
+      // The sender's own words on any channel: an email's own Subject leads ("Subject: Running
+      // late" is the whole message), and a quote pasted into Signal or Slack is cut (#2612).
+      // Only when the message reached Curia alone: said in a group, or with Curia BCC'd or on
+      // To beside others, the people waiting may already have it, and the guidance would send
+      // them a second note unasked. The CLI and web console are the principal's own; any other
+      // channel must show it is one-to-one, so missing metadata fails closed (to the ask).
+      runningLate: (payload.channelId === 'cli' || payload.channelId === 'web' || inboundIsOneToOne(payload.channelId, payload.metadata))
+        && looksLikeRunningLate(senderOwnTextAnyChannel(payload.channelId, payload.content)),
     });
 
     // The backlog line (prompt trim PR 7): on a principal turn with anything waiting on

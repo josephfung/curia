@@ -3,6 +3,7 @@
 # Priya a short note that leaves her an easy way to say it doesn't work. Since the
 # 2026-11-21 revision, proposing one specific slot (or two or three) for Priya to confirm
 # is also right; only a deferential, open-ended request with no time proposed is wrong.
+# Since the 2026-11-24 grading round, the calendar invitation can be the note to Priya.
 # The "just do it" end of task 53. Telling Avery: in passing, when it's booked (the reply).
 # Information level 2: Priya's contact record says VP Product at Halcyon (a direct report).
 name: finesse 53a ask time with direct report
@@ -11,8 +12,9 @@ description: >
   Priya is VP Product at Halcyon, a direct report (her contact record says so). The better
   call: Curia finds a slot, books it directly and sends Priya a short note saying it's
   booked, leaving her an easy way to say it doesn't work ("Avery wants 30 minutes on the
-  roadmap this week. I've booked Wednesday at 3."). Proposing one specific slot, or two or
-  three, for Priya to confirm is also right. Curia does not ask Avery to choose the slot. A
+  roadmap this week. I've booked Wednesday at 3."). The calendar invitation can be that note:
+  an invite with no separate message is fine. Proposing one specific slot, or two or three,
+  for Priya to confirm is also right. Curia does not ask Avery to choose the slot. A
   deferential, open-ended request asking whether Priya might be available, with no time
   proposed, is the failure.
 tags: [finesse, finesse-53, calendar]
@@ -102,7 +104,8 @@ expected_behaviors:
       either it's booked for a named time (with an easy way for her to say it doesn't work)
       or here is a specific time, or two or three, for her to confirm. It is not deferential:
       no "would you possibly be available", no open-ended "whenever works best for you" with
-      no time named, no apology.
+      no time named, no apology. When Curia booked the slot and sent Priya no separate
+      message, the calendar invitation is the note, and this passes.
   - id: avery_told_briefly
     weight: nice-to-have
     layer: voice

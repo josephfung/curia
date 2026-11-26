@@ -193,6 +193,172 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
     expect(second.searchParams.get('received_after')).toBe('100');
   });
 
+  describe('listAllMessages paced listing (#2362)', () => {
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    // Page-delay sleeps are the 1000/2000 ms timers; a 429 retry backoff is ~375-625 ms.
+    function spyDelays(): number[] {
+      const delays: number[] = [];
+      const real = globalThis.setTimeout;
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (typeof ms === 'number') delays.push(ms);
+        return real(fn, ms, ...rest);
+      }) as typeof setTimeout);
+      return delays;
+    }
+
+    it('sleeps pageDelayMs between pages', async () => {
+      vi.useFakeTimers();
+      try {
+        const delays = spyDelays();
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+
+        const pending = client.listAllMessages({ pageDelayMs: 1000 });
+        await vi.runAllTimersAsync();
+        const { messages } = await pending;
+
+        expect(messages.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+        expect(delays.filter((d) => d >= 1000)).toEqual([1000, 1000]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('doubles the page delay after a 429 and reports it via onPage', async () => {
+      vi.useFakeTimers();
+      try {
+        const delays = spyDelays();
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(new Response('slow down', { status: 429 }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+          .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        const pages: Array<{ requests: number; rateLimited: boolean }> = [];
+
+        const pending = client.listAllMessages({ pageDelayMs: 1000, onPage: (p) => { pages.push(p); } });
+        await vi.runAllTimersAsync();
+        await pending;
+
+        expect(delays.filter((d) => d >= 1000)).toEqual([1000, 2000]);
+        expect(pages).toEqual([
+          { requests: 1, rateLimited: false },
+          { requests: 2, rateLimited: true },
+          { requests: 1, rateLimited: false },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('existing callers see no delay', async () => {
+      const delays = spyDelays();
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }] }));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      await client.listAllMessages({});
+
+      expect(delays).toEqual([]);
+    });
+
+    it('stops paging when onPage returns false, keeping what was read', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+      const client = new CeoNylasClient('key', 'grant', logger);
+      let pages = 0;
+
+      const { messages, truncated } = await client.listAllMessages({ onPage: () => ++pages < 2 });
+
+      expect(messages.map((m) => m.id)).toEqual(['a', 'b']);
+      expect(truncated).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    describe('a late transient failure with onPage keeps the pages already read', () => {
+      it.each([
+        ['a 429 that outlasts its retries', () => new Response('slow down', { status: 429 }), 'rate_limited'],
+        ['a 5xx that outlasts its retries', () => new Response('bad gateway', { status: 502 }), 'server_error'],
+      ] as const)('%s', async (_name, failing, endedOn) => {
+        vi.useFakeTimers();
+        try {
+          vi.spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+            .mockImplementation(async () => failing());
+          const client = new CeoNylasClient('key', 'grant', logger);
+          const pages: Array<{ requests: number; rateLimited: boolean }> = [];
+
+          const pending = client.listAllMessages({ onPage: (p) => { pages.push(p); } });
+          await vi.runAllTimersAsync();
+          const result = await pending;
+
+          expect(result.messages.map((m) => m.id)).toEqual(['a']);
+          expect(result).toMatchObject({ truncated: true, endedOn });
+          // The failed page is reported too, retries included.
+          expect(pages).toHaveLength(2);
+          expect(pages[1]!.requests).toBeGreaterThan(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a failed fetch (status 0)', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        const pages: Array<{ requests: number; rateLimited: boolean }> = [];
+
+        const result = await client.listAllMessages({ onPage: (p) => { pages.push(p); return true; } });
+
+        expect(result.messages.map((m) => m.id)).toEqual(['a']);
+        expect(result).toMatchObject({ truncated: true, endedOn: 'network' });
+        // The attempt that got no response still went out, so it counts.
+        expect(pages).toEqual([{ requests: 1, rateLimited: false }, { requests: 1, rateLimited: false }]);
+      });
+
+      it('still throws when the first page fails', async () => {
+        vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({ onPage: () => true })).rejects.toMatchObject({ status: 0 });
+      });
+
+      it('still throws on a non-transient error', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(new Response('nope', { status: 401 }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({ onPage: () => true })).rejects.toMatchObject({ status: 401 });
+      });
+
+      it('callers without onPage keep the throw', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({})).rejects.toMatchObject({ status: 0 });
+      });
+    });
+
+    it('refuses a page delay that outlasts the call budget', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }] }));
+      const budget = { deadline: Date.now() + 500, signal: new AbortController().signal };
+      const client = new CeoNylasClient('key', 'grant', logger, budget);
+
+      await expect(client.listAllMessages({ pageDelayMs: 1000 })).rejects.toBeInstanceOf(NylasApiError);
+    });
+  });
+
   it('sends only page_token on a search_query_native follow-up page', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: [], next_cursor: 'CUR' }), {

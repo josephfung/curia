@@ -65,6 +65,19 @@ describe('parsePlaybook', () => {
     expect(first.topics.find((t) => t.id === 'inbox-expectations')!.needsMailbox).toBe(true);
     expect(first.topics.find((t) => t.id === 'connect-mailbox')!.needsMailbox).toBe(false);
   });
+
+  it('playbook review section has three document topics and next-step', () => {
+    const review = parsePlaybook(fs.readFileSync(REAL_PLAYBOOK, 'utf-8')).find((s) => s.id === 'review')!;
+    expect(review.topics.map((t) => t.id)).toEqual(['review-rules', 'review-priorities', 'review-voice', 'next-step']);
+    const [rules, priorities, voice] = review.topics;
+    expect(rules!.title).toBe('Working rules');
+    expect(priorities!.body).toContain("Here's where your time went. What are you actually trying to move?");
+    expect(voice!.title).toBe('Writing voice');
+    for (const topic of [rules!, priorities!, voice!]) {
+      expect(topic.body, topic.id).toContain('confirm / correct / set aside');
+      expect(topic.needsMailbox, topic.id).toBe(false);
+    }
+  });
 });
 
 describe('seedPlaybook', () => {

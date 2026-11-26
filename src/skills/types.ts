@@ -67,7 +67,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, setupChecklist, mailboxSignIn, curiaEmailAddresses, onboardingService.
+   *  voiceSessions, setupChecklist, mailboxSignIn, curiaEmailAddresses, onboardingService, deepDiveService.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -285,6 +285,9 @@ export interface ToolContext {
   /** Onboarding service (#2360) — available to skills declaring 'onboardingService' in capabilities.
    *  Starts onboarding, opens playbook sessions and reads the playbook, principal name and state. */
   onboardingService?: import('../onboarding/onboarding-service.js').OnboardingService;
+  /** Deep dive (#2362) — available to skills declaring 'deepDiveService' in capabilities.
+   *  Starts a re-run of the mail and calendar history read. */
+  deepDiveService?: Pick<import('../onboarding/deep-dive/service.js').DeepDiveService, 'startOnce'>;
   /** Browser service — available to skills declaring 'browserService' in capabilities.
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */

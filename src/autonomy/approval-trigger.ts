@@ -172,12 +172,18 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
 /**
  * Build a human-readable one-liner from skill name and input fields.
  * Used in principal notifications, the pending-actions digest, and the
- * coordinator's advisory failure message.
+ * coordinator's advisory failure message. `result` is the call's result data once it has run
+ * (the spot-check pool): a ceo-inbox-archive the filing mode turned into a mark-read (#2699).
  */
 export function buildDescription(
   toolName: string,
   input: Record<string, unknown>,
+  result?: unknown,
 ): string {
+  if (toolName === 'ceo-inbox-archive' && typeof result === 'object' && result !== null
+    && (result as Record<string, unknown>)['left_in_inbox'] === true) {
+    return 'Mark an email read';
+  }
   // Determine verb
   // A card checkout shows what is being paid, from the masked display only (#1358).
   if (toolName === 'card-use-confirm') {

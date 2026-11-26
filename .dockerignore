@@ -24,3 +24,6 @@ docker/*
 !docker/pnpm-retry.sh
 # The browser image's entrypoint (docker/browser.Dockerfile, #2541).
 !docker/browser-entrypoint.sh
+# Deployment overrides reach the container through docker-compose.yml's bind mount
+# (#2749), never the image: a developer's copy must not be baked into a local build.
+config/local.yaml

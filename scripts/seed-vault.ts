@@ -92,6 +92,8 @@ export function seedEnvVar(name: string): string {
 // ones an install needs depends on how model_routing.tiers is configured, which this
 // script cannot see. src/index.ts enforces it at boot — every tier-mapped model's provider
 // must be registered — and names the tier, model and provider when one is not (#1766).
+// The installers know which provider they set up, and pass its keys in SEED_VAULT_REQUIRE
+// to have them checked too (#2749).
 export const REQUIRED_SECRET_NAMES = [
   'api_token',
   'web_app_bootstrap_secret',
@@ -105,9 +107,11 @@ export const REQUIRED_SECRET_NAMES = [
 export async function verifyRequiredSecrets(
   secrets: SecretsService,
   log: pino.Logger,
+  extra: ReadonlySet<string> = new Set(),
 ): Promise<string[]> {
+  const required = [...new Set<string>([...REQUIRED_SECRET_NAMES, ...extra])];
   const missing: string[] = [];
-  for (const name of REQUIRED_SECRET_NAMES) {
+  for (const name of required) {
     // Treat an empty or whitespace-only value as missing, not present. An empty (or
     // blank) api_token would pass a bare null-check but disables HTTP auth —
     // validateBearerToken() treats "" as "no token configured" — so an unusable vault
@@ -118,7 +122,7 @@ export async function verifyRequiredSecrets(
   if (missing.length > 0) {
     log.error({ missing }, 'Required secrets missing from vault');
   } else {
-    log.info({ required: REQUIRED_SECRET_NAMES }, 'Required secrets present in vault');
+    log.info({ required }, 'Required secrets present in vault');
   }
   return missing;
 }
@@ -224,18 +228,31 @@ export async function principalRegistryHasRows(pool: pg.Pool): Promise<boolean> 
 }
 
 /**
- * Parse SEED_VAULT_ONLY (comma-separated vault names). Unknown names are an error rather
- * than ignored: a typo would otherwise seed nothing and report success.
+ * Parse a comma-separated list of vault names from env var `varName`. Unknown names are an
+ * error rather than ignored: a typo would otherwise seed or check nothing and report success.
  */
-export function parseSeedOnly(raw: string | undefined): ReadonlySet<string> | undefined {
+function parseVaultNames(varName: string, raw: string | undefined): ReadonlySet<string> | undefined {
   if (raw === undefined || raw.trim() === '') return undefined;
   const names = raw.split(',').map(n => n.trim()).filter(n => n.length > 0);
   const known = new Set<string>([...SEED_SECRET_NAMES, ...SEED_IF_ABSENT_NAMES]);
   const unknown = names.filter(n => !known.has(n));
   if (unknown.length > 0) {
-    throw new Error(`SEED_VAULT_ONLY names unknown secret(s): ${unknown.join(', ')}. Known: ${[...known].join(', ')}`);
+    throw new Error(`${varName} names unknown secret(s): ${unknown.join(', ')}. Known: ${[...known].join(', ')}`);
   }
   return new Set(names);
+}
+
+/** Parse SEED_VAULT_ONLY: the vault names a run is scoped to. */
+export function parseSeedOnly(raw: string | undefined): ReadonlySet<string> | undefined {
+  return parseVaultNames('SEED_VAULT_ONLY', raw);
+}
+
+/**
+ * Parse SEED_VAULT_REQUIRE: vault names SEED_VAULT_VERIFY checks besides REQUIRED_SECRET_NAMES.
+ * The installers pass the model provider's keys here (#2749).
+ */
+export function parseSeedRequire(raw: string | undefined): ReadonlySet<string> {
+  return parseVaultNames('SEED_VAULT_REQUIRE', raw) ?? new Set();
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
@@ -255,10 +272,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     throw new Error('unreachable'); // guards against process.exit mocks
   }
   let only: ReadonlySet<string> | undefined;
+  let alsoRequired: ReadonlySet<string>;
   try {
     only = parseSeedOnly(process.env.SEED_VAULT_ONLY);
+    alsoRequired = parseSeedRequire(process.env.SEED_VAULT_REQUIRE);
   } catch (err) {
-    logger.error({ err }, 'seed-vault: invalid SEED_VAULT_ONLY');
+    logger.error({ err }, 'seed-vault: invalid SEED_VAULT_ONLY or SEED_VAULT_REQUIRE');
     process.exit(1);
     throw new Error('unreachable'); // guards against process.exit mocks
   }
@@ -270,7 +289,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // where api_token was never persisted) fails the install loudly instead of booting
       // with auth disabled. Ad-hoc single-secret runs (no flag) skip the required check.
       if (process.env.SEED_VAULT_VERIFY === '1') {
-        const missing = await verifyRequiredSecrets(secrets, logger);
+        const missing = await verifyRequiredSecrets(secrets, logger, alsoRequired);
         if (missing.length > 0) {
           logger.error(
             { missing },

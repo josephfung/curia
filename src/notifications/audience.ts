@@ -42,6 +42,8 @@ export const NOTIFICATION_AUDIENCES: Record<NotificationType, NotificationAudien
   invitation_expired: 'operator',
   web_search_failed: 'operator',
   mailbox_signin_blocked: 'operator',
+  deep_dive_failed: 'operator',
+  deep_dive_delivery_failed: 'operator',
 };
 
 /** The audience for a notification type. Total over the union above by construction. */

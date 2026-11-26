@@ -26,7 +26,7 @@ interface Step {
 }
 
 interface Workflow {
-  jobs: { build: { steps: Step[] } };
+  jobs: Record<string, { steps: Step[] }>;
 }
 
 const load = <T>(name: string): T =>
@@ -62,8 +62,10 @@ interface CheckJob {
 
 type CheckWorkflow = { jobs: Record<string, CheckJob> };
 
-describe('docker-publish Docker Hub login (#2095)', () => {
-  const steps = workflow.jobs.build.steps;
+// Both jobs pull from Docker Hub: build-arch (BuildKit and the Dockerfiles' base images,
+// one leg per platform) and build (the BuildKit image setup-buildx starts).
+describe.each(['build-arch', 'build'])('docker-publish %s Docker Hub login (#2095)', (job) => {
+  const steps = workflow.jobs[job]!.steps;
   const loginIndex = steps.findIndex(
     (step) => step.uses?.startsWith('docker/login-action@') && step.with?.registry === 'docker.io',
   );
@@ -83,7 +85,6 @@ describe('docker-publish Docker Hub login (#2095)', () => {
 
   it('runs before every step that pulls from Docker Hub', () => {
     const pulls = [
-      indexOf((step) => step.uses?.startsWith('docker/setup-qemu-action@') ?? false),
       indexOf((step) => step.uses?.startsWith('docker/setup-buildx-action@') ?? false),
       indexOf((step) => step.id === 'build'),
     ];
@@ -102,7 +103,7 @@ describe('PR-check Docker Hub pulls (#2095)', () => {
   const ci = load<CheckWorkflow>('ci.yml');
 
   it.each([
-    ['ci.yml', 'ci', 'postgres'],
+    ['ci.yml', 'test', 'postgres'],
     ['dast.yml', 'zap-baseline', 'postgres'],
     ['behavior-gate.yml', 'gate', 'postgres'],
   ])('%s authenticates its %s job\'s %s service', (file, job, service) => {
