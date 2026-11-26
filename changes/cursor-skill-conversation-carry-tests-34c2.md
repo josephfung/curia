@@ -1,3 +1,3 @@
 ### Added
 
-- **Conversation skill carry** — unit coverage for TTL, cap, MRU, and turn pre-activation. (#2764)
+- **Skill pre-activation** — unit coverage for conversation carry, bullpen, jobs, and digest. (#2764)
