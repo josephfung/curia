@@ -1313,6 +1313,27 @@ describe('SchedulerService', () => {
       expect(originator.channel).toBe('declarative');
       expect(originator.initiatedAt).toBeTruthy();
     });
+
+    it('stores declared skills on task_payload for fire-time pre-activation (#2764)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-skills' }] });
+
+      await svc.upsertDeclarativeJob('contacts', 'contacts', {
+        cron: '0 9 * * 1',
+        task: 'Run weekly contacts dedup',
+        skills: ['contact-upkeep', 'tasks', '  ', 'contact-upkeep'],
+      });
+
+      const [, params] = pool.query.mock.calls[0]! as [string, unknown[]];
+      // task_payload is one of the early bind params (JSON string).
+      const payloadJson = params.find(
+        (p): p is string => typeof p === 'string' && p.includes('contact-upkeep'),
+      );
+      expect(payloadJson).toBeTruthy();
+      const payload = JSON.parse(payloadJson!) as { task: string; skills: string[] };
+      expect(payload.task).toBe('Run weekly contacts dedup');
+      // upsert filters blanks but does not uniquify — fire path tolerates duplicates.
+      expect(payload.skills).toEqual(['contact-upkeep', 'tasks', 'contact-upkeep']);
+    });
   });
 
   describe('cancelStaleDeclarativeJobs', () => {

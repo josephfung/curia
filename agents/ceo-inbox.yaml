@@ -93,6 +93,7 @@ schedule:
       emit ceo.sent_observed, advance the watermark, then auto-complete or queue
       confirmations for matches. Call scheduler-report when done. Do NOT triage
       the inbox, draft, archive, label, or send any messages on this wake.
+    skills: [learning-jobs, tasks]
     expectedDurationSeconds: 120
   - cron: "0 8 * * 1"  # weekly voice-learn (Monday 8am)
     task: >
@@ -102,6 +103,7 @@ schedule:
       profile directly). Call
       scheduler-report when done. Do NOT triage the inbox, draft, archive, label, or
       send any messages on this wake.
+    skills: [learning-jobs]
     expectedDurationSeconds: 180
 
 system_prompt: |

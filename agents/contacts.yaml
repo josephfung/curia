@@ -248,7 +248,7 @@ pinned_skills:
   - contact-link-identity
   - contact-unlink-identity
   - contact-list
-  # Trust + upkeep (#2764): listed for on-demand; pinned eagerly until switch-over.
+  # Trust + upkeep (#2764): listed skills; weekly jobs declare them for pre-activation.
   - contact-trust
   - contact-upkeep
   # Context enrichment — stays standalone (not part of contacts; #1494 guard)
@@ -274,6 +274,7 @@ pinned_skills:
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM
     task: "Run your weekly contacts dedup scan. Call contact-find-duplicates (min_score: 0.93, max_tasks: 20) to file review tasks for new duplicate pairs, then report the summary counts via scheduler-report."
+    skills: [contact-upkeep, tasks]
     expectedDurationSeconds: 60
 
   - cron: "0 10 * * 3"   # Wednesdays at 10 AM
@@ -293,4 +294,5 @@ schedule:
          principal owns, which is how they hear about it; do not approve, decline
          or file anything yourself. If task_failures > 0, note that those
          recommendations are filed on the next run.
+    skills: [contact-trust, tasks]
     expectedDurationSeconds: 60
