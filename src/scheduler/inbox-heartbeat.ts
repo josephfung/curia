@@ -516,6 +516,9 @@ export class InboxHeartbeat {
       wakeAt: now,
       createdBy: 'heartbeat',
       originator: makeSystemOriginator(),
+      // Listed skills the drain needs before the model can activate (#2764 §5/§6).
+      // Domain ceo-inbox tools are tool pins; tasks + executive-profile stay skill pins.
+      activeSkills: ['tasks', 'executive-profile'],
     });
     this.o.logger.info({ taskId: task.id, due }, 'InboxHeartbeat: created an inbox-drain task');
     return 'woke';

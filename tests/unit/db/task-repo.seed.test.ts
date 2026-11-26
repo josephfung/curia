@@ -32,4 +32,21 @@ describe('buildInitialTaskProgress (#1267)', () => {
     expect(progress.escalation).toEqual(ESCALATION);
     expect((progress.notes as unknown[]).length).toBe(1);
   });
+
+  it('seeds progress.activeSkills for structural creators (#2764)', () => {
+    const progress = buildInitialTaskProgress({
+      activeSkills: ['tasks', 'executive-profile', '  ', 'tasks'],
+      now: NOW,
+    });
+    expect(progress.activeSkills).toEqual({
+      skills: [
+        { name: 'tasks', activatedAt: NOW.toISOString() },
+        { name: 'executive-profile', activatedAt: NOW.toISOString() },
+      ],
+    });
+  });
+
+  it('omits activeSkills when the seed list is empty', () => {
+    expect(buildInitialTaskProgress({ activeSkills: [] })).toEqual({ notes: [] });
+  });
 });

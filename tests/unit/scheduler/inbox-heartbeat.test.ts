@@ -107,6 +107,7 @@ describe('InboxHeartbeat.tick', () => {
     expect(await t.hb.tick(NOW)).toBe('woke');
     expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'ceo-inbox', title: 'Inbox drain', tags: ['inbox-drain'], wakeAt: NOW, createdBy: 'heartbeat',
+      activeSkills: ['tasks', 'executive-profile'],
     }));
   });
 
