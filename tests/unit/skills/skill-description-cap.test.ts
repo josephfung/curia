@@ -60,4 +60,34 @@ describe('skill description cap (#2764)', () => {
     expect(gw?.description).toMatch(/Drive/i);
     expect(gw?.description).toMatch(/Load when/i);
   });
+
+  // Descriptions drive on-demand loading (#2764): each must say what the skill does
+  // and when to load it. The when-clause is the "Load when/for/…" cue already used
+  // for google-workspace; bodies hold the rest of the procedure.
+  const WHEN_CLAUSE = /\bLoad (?:when|for|whenever|only if)\b/i;
+
+  it('every SKILL.md description says when to load the skill', () => {
+    const missing: Array<{ path: string; description: string }> = [];
+    for (const path of skillMdPaths()) {
+      const parsed = parseSkillMd(readFileSync(path, 'utf-8'), path);
+      const description = parsed.description.trim();
+      if (!WHEN_CLAUSE.test(description)) {
+        missing.push({ path, description });
+      }
+    }
+    expect(
+      missing,
+      missing.map((m) => `${m.path}: ${m.description}`).join('\n') || undefined,
+    ).toEqual([]);
+  });
+
+  it('every configured MCP skill description says when to load the skill', () => {
+    const missing: string[] = [];
+    for (const server of loadSkillsConfig(configDir).servers ?? []) {
+      const description = server.description?.trim();
+      if (!description) continue;
+      if (!WHEN_CLAUSE.test(description)) missing.push(server.name);
+    }
+    expect(missing).toEqual([]);
+  });
 });

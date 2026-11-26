@@ -1,7 +1,7 @@
 ---
 name: onboarding
 description: >
-  Run the principal's onboarding: greet them, work the topics of the onboarding task by chat or voice, apply each choice as it is made, show a first look, and book the next session.
+  Run the principal's onboarding: greet them, work the topics of the onboarding task by chat or voice, apply each choice as it is made, show a first look, and book the next session. Load when onboarding is open.
 version: "0.1.0"
 tools:
   - onboarding-progress

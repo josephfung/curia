@@ -5,10 +5,11 @@
 // This test is the push-back: it fails when an agent's fixed per-call payload grows
 // past its budget, and the failure names the placement rule a fix should follow.
 //
-// Two numbers per agent, measured over the real agents/, skills/ and config/ by
-// src/agents/prompt-budget.ts (which says what each counts): the always-on prompt (YAML
-// system_prompt plus pinned SKILL.md bodies) and the local tool-definition bytes. A
-// deployment measures its own agents with the same function (curia-deploy#276).
+// Budgets per agent, measured over the real agents/, skills/ and config/ by
+// src/agents/prompt-budget.ts (which says what each counts): the always-on prompt
+// (YAML system_prompt), the skill list (name+description), and local tool-definition
+// bytes (ADR-046 / ADR-070). A deployment measures its own agents with the same
+// function (curia-deploy#276).
 //
 // To opt another agent in, add a row to AGENT_BUDGETS. Set each budget from the
 // agent's measured numbers with small headroom, and raise one only in a PR that says
