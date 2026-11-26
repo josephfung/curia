@@ -130,11 +130,13 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
       }),
     );
 
-    // Verify turn budget block is wired into the system prompt at runtime.
+    // Turn budget is per-turn context on the latest user message (#2774), not system.
     const firstCall = (mockProvider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(firstCall.messages[0]!.content).toContain('## Turn budget');
+    expect(firstCall.messages[0]!.content).not.toContain('## Turn budget');
+    const user = [...firstCall.messages].reverse().find((m) => m.role === 'user');
+    expect(user?.content).toContain('## Turn budget');
   });
 });
 
