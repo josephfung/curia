@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { RecordOutreachHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import { TaskOutreachService } from '../../src/dispatch/task-outreach-capability.js';
-import type { TaskOutreachInput, TaskOutreachRepo, TaskOutreachRow } from '../../src/dispatch/task-outreach.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import { TaskOutreachService } from '../../../../src/dispatch/task-outreach-capability.js';
+import type { TaskOutreachInput, TaskOutreachRepo, TaskOutreachRow } from '../../../../src/dispatch/task-outreach.js';
 
 const log = pino({ level: 'silent' });
 const TASK_ID = '11111111-1111-4111-8111-111111111111';
