@@ -30,7 +30,7 @@ const PLAYBOOK = [
 ].join('\n');
 const FIRST_CONVERSATION_TOPICS = 3;
 /** Everything Start enables already on: no restart. */
-const ALL_REQUIRED_ENABLED = { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning-jobs', 'tasks'] };
+const ALL_REQUIRED_ENABLED = { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning-jobs', 'learning-digest', 'tasks'] };
 
 // What the settings store holds for Setup: the operator's presence is setup_for, and a
 // completed_at is the phase (#2709).
@@ -217,7 +217,7 @@ describe('OnboardingService.start', () => {
     // Triage held, the four registry entries enabled, the onboarding skill active.
     expect(await isTriageHeld(h.configStore)).toBe(true);
     expect(h.registry.installAndEnable.mock.calls.map(([k, n]) => `${k}:${n}`).sort()).toEqual(
-      ['agent:ceo-inbox', 'skill:ceo-inbox', 'skill:learning-jobs', 'skill:tasks'],
+      ['agent:ceo-inbox', 'skill:ceo-inbox', 'skill:learning-digest', 'skill:learning-jobs', 'skill:tasks'],
     );
     const activeFor = h.taskRepo.setActiveSkillsBlock.mock.calls.map((c) => (c as unknown[])[0] as string);
     expect(activeFor).toEqual(expect.arrayContaining([parent.id, homework[0]!.id]));
@@ -292,7 +292,7 @@ describe('OnboardingService.start', () => {
   });
 
   it('app route: returns the invitation and wakes only the homework', async () => {
-    const h = makeHarness({ enabled: { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning-jobs', 'tasks'] } });
+    const h = makeHarness({ enabled: { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning-jobs', 'learning-digest', 'tasks'] } });
     const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
     if (!result.ok) throw new Error('expected ok');
     expect(result.invitation).toEqual({ id: 'inv-1', url: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' });

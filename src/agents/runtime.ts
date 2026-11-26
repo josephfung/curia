@@ -1345,6 +1345,16 @@ export class AgentRuntime {
       if (turnGuidanceKeys.includes('spot-check-reply')) {
         await appendPreActivated(['digest'], 'trigger', 'Spot-check digest skill pre-activation skipped');
       }
+
+      // Decay-warning turns: pre-activate memory-review so decay-warnings-list /
+      // memory-confirm are callable without a discovery round (#2764).
+      if (backlog && backlog.decayWarnings > 0) {
+        await appendPreActivated(
+          ['memory-review'],
+          'trigger',
+          'Memory-review skill pre-activation skipped',
+        );
+      }
     }
 
     // Onboarding on a live principal turn (#2360, design §6): an ordinary principal message
