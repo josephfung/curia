@@ -101,6 +101,13 @@ expected_behaviors:
       review, here is the new time ("let me know if that doesn't work"), or here are one to
       three specific times to confirm. No apology, no excuse or reason, and no open-ended
       "whatever works best for you".
+  - id: no_web_skill
+    weight: important
+    layer: decision
+    description: Does not activate web — a direct report needs no web-search (#2764 B).
+    check:
+      skills_activated:
+        excludes: [web]
 contrast:
   group: finesse-51-reschedule
   recipient: A senior employee who reports directly to the executive.

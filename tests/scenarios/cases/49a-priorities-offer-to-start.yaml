@@ -50,6 +50,12 @@ expected_behaviors:
   - id: no_false_record
     weight: important
     description: Does not claim it has already saved the goals as the principal's priorities.
+  - id: no_documents_skill
+    weight: important
+    description: Does not activate documents on an offer-only turn (#2764 B).
+    check:
+      skills_activated:
+        excludes: [documents]
 failure_modes:
   - Says "noted" and moves on without offering to keep a priorities record
   - Creates the priorities document without asking
