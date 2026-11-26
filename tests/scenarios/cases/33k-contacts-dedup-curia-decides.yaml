@@ -126,6 +126,7 @@ expected_behaviors:
     description: Completes the review task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d }
 failure_modes:
   - Asks the principal whether to merge two companies

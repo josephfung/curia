@@ -24,6 +24,7 @@ expected_behaviors:
     description: Creates the event once, with a weekly Monday recurrence rule.
     check:
       called: calendar-create-event
+      success: true
       contains: { recurrence: "FREQ=WEEKLY", title: "Weekly Kick-Off" }
       min: 1
       max: 1
@@ -32,12 +33,14 @@ expected_behaviors:
     description: The recurrence rule repeats on Mondays.
     check:
       called: calendar-create-event
+      success: true
       contains: { recurrence: "BYDAY=MO" }
   - id: no_per_week_copies
     weight: critical
     description: Makes exactly one calendar-create-event call in all, not one per week.
     check:
       called: calendar-create-event
+      success: true
       max: 1
   - id: starts_next_monday
     weight: important

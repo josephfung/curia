@@ -50,6 +50,7 @@ expected_behaviors:
     description: Creates Priya with her name and no guessed email, phone or role.
     check:
       called: contact-create
+      success: true
       with: { email: null, phone: null, role: null }
       max: 1
   - id: resolved_entities_new_contact

@@ -106,6 +106,7 @@ expected_behaviors:
     description: Declines with calendar-respond-to-invite on the linked event's real ids.
     check:
       called: calendar-respond-to-invite
+      success: true
       with: { calendarId: cal-principal-work, eventId: evt-leadlyft-intro-9f2, response: decline }
   - id: no_guessed_ids
     weight: critical
@@ -114,6 +115,7 @@ expected_behaviors:
       that one call is the linked event's).
     check:
       called: calendar-respond-to-invite
+      success: true
       max: 1
   - id: no_attendee_rsvp
     weight: critical

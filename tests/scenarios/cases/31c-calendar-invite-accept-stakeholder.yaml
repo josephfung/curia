@@ -82,6 +82,7 @@ expected_behaviors:
     description: Accepts the invite with calendar-respond-to-invite on the consult's calendar and event ids.
     check:
       called: calendar-respond-to-invite
+      success: true
       with: { calendarId: cal-principal-work, eventId: evt-q4-board-prep, response: accept }
   - id: no_attendee_rsvp
     weight: critical
@@ -100,6 +101,7 @@ expected_behaviors:
     description: Passes hold-release criteria for this conversation (holdMatchCriteria naming the source message) on the accept.
     check:
       called: calendar-respond-to-invite
+      success: true
       contains: { holdMatchCriteria: "msg-dana-invite-003" }
 failure_modes:
   - Returns only a recommendation although the invite is from a known stakeholder and the slot is clear

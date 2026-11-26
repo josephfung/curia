@@ -72,6 +72,7 @@ expected_behaviors:
     description: Checks the proposed slot against the principal's calendar with calendar-check-conflicts.
     check:
       called: calendar-check-conflicts
+      success: true
   - id: no_free_time_search
     weight: critical
     description: Does not search for other free time once a proposed slot is clear.

@@ -80,6 +80,7 @@ expected_behaviors:
     description: Approves Dana Whitfield's recommendation by its id.
     check:
       called: approve-grant-recommendation
+      success: true
       with: { recommendation_id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d }
   - id: leaves_omar
     weight: critical
@@ -97,6 +98,7 @@ expected_behaviors:
     description: Completes Dana's recommendation task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f }
   - id: leaves_other_task
     weight: critical

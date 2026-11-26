@@ -64,11 +64,13 @@ expected_behaviors:
     description: Reads the recent meetings with Sarah from the calendar.
     check:
       called: calendar-list-events
+      success: true
   - id: queries_memory
     weight: important
     description: Queries stored memory for context about Sarah.
     check:
       called: memory-query
+      success: true
   - id: creates_nothing
     weight: important
     description: Creates no new contact; Sarah is already on file.

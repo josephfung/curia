@@ -78,6 +78,7 @@ expected_behaviors:
     description: Links the new Horizon Group address to Leah's contact.
     check:
       called: contact-link-identity
+      success: true
       contains: { identifier: horizongroup }
 failure_modes:
   - Replaces the Apex address without mentioning it

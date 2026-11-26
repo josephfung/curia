@@ -57,12 +57,14 @@ expected_behaviors:
     description: Runs contact-find-duplicates once.
     check:
       called: contact-find-duplicates
+      success: true
       max: 1
   - id: reports_run
     weight: critical
     description: Reports the run with scheduler-report.
     check:
       called: scheduler-report
+      success: true
   - id: works_no_pairs
     weight: critical
     description: Merges, previews or excludes no pair during the scan.

@@ -37,6 +37,7 @@ expected_behaviors:
     description: Sets Rosa's tier to trusted with contact-set-tier, on her contact ID.
     check:
       called: contact-set-tier
+      success: true
       with: { contact_id: "{{contact:rosa}}", tier: trusted }
   - id: no_permission_grants
     weight: important

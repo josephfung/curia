@@ -59,6 +59,7 @@ expected_behaviors:
     description: Runs contact-lookup for Jenna.
     check:
       called: contact-lookup
+      success: true
   - id: no_resolved_entities
     weight: critical
     description: The reply carries no <resolved_entities> block, since Jenna is ambiguous.

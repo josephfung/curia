@@ -73,6 +73,7 @@ expected_behaviors:
     description: Fixes the venue with ceo-inbox-draft-edit on the existing Acme draft.
     check:
       called: ceo-inbox-draft-edit
+      success: true
       with: { draft_id: draft-30-acme }
   - id: no_recreate
     weight: important
