@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { REDACTION_NOTE } from '../../src/skills/_shared/principal-directed.js';
+import { REDACTION_NOTE } from '../../../../src/skills/_shared/principal-directed.js';
 import { SignalSendHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
-import type { ContactService } from '../../src/contacts/contact-service.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
+import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import pino from 'pino';
 
 function makeLogger() {

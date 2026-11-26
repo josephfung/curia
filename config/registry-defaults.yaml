@@ -27,6 +27,9 @@ skills:
   - email
   - mailbox
   - contacts
+  - contact-trust
+  - contact-upkeep
+  - messaging
   - autonomy
   - approvals
   - scheduler
@@ -52,11 +55,7 @@ tools:
   # (registry-defaults-coverage.test.ts) fails if a default bundle's member appears here.
   - tool-registry
   - skill-activate
-  # Core communication
-  - signal-send
-  - sms-send
-  - slack-send
-  - web-send
+  # Channel sends now live in the messaging skill bundle (#2764).
   # Digest filing (#2159 / #2764): every-turn tool pin; list/ack live in the digest skill.
   - report-to-principal
   # Memory + knowledge

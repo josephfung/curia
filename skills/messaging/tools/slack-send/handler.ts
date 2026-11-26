@@ -1,33 +1,41 @@
-// handler.ts — sms-send skill implementation.
+// handler.ts — slack-send skill implementation.
 //
-// Sends a 1:1 SMS via OutboundGateway → Telnyx. The gateway enforces content
-// filter, blocked-contact, and autonomy. Carrier STOP (Telnyx 40300) surfaces as
-// blockedReason so the agent can record a KG fact instead of retrying.
+// Sends a 1:1 Slack DM via OutboundGateway → chat.postMessage. The gateway
+// enforces content filter, blocked-contact, and autonomy. Pass the U… as both
+// slackChannelId and slackUserId (Slack opens/uses the IM for a user id channel).
+//
+// Out of scope for v1: Enterprise Grid workspace user ids (W…) — rejected by
+// the recipient regex so Gate C / proactive DMs fail closed for those ids.
 //
 // The recipient is a reference (#2033, #2041, ADR-047): `recipient` takes a contact ID
-// or "principal", resolved to that contact's verified SMS number. Someone who is not a
-// contact yet is added first with contact-create. The retired raw input
-// (recipient_number) is refused, never ignored.
+// or "principal", resolved to that contact's verified Slack user id. Someone who is not
+// a contact yet is added first with contact-create. The retired raw input
+// (recipient_user_id) is refused, never ignored.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { holdRecipientName } from '../../src/skills/_shared/hold-recipient-name.js';
-import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
-import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { holdRecipientName } from '../../../../src/skills/_shared/hold-recipient-name.js';
+import { registerOutboundContext } from '../../../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
+import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../../../src/skills/_shared/principal-directed.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
-  derivedAddressData,
   findRetiredRecipientField,
   retiredRecipientFieldError,
-} from '../../src/skills/_shared/recipient-reference.js';
-import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
+} from '../../../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
-const MAX_MESSAGE_LENGTH = 1600;
-const E164_REGEX = /^\+[1-9]\d{6,14}$/;
+/** Slack chat.postMessage hard limit. */
+const MAX_MESSAGE_LENGTH = 40_000;
+/**
+ * Standard Slack user ids are uppercase U…. Case-sensitive on purpose: a
+ * lowercase `u…` would pass a case-insensitive check but miss exact-match
+ * principal identity comparison. Enterprise Grid `W…` ids are out of scope.
+ */
+const SLACK_USER_ID_REGEX = /^U[A-Z0-9]+$/;
 
-export class SmsSendHandler implements ToolHandler {
+export class SlackSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const skill = RECIPIENT_REFERENCE_SKILLS['sms-send']!;
+    const skill = RECIPIENT_REFERENCE_SKILLS['slack-send']!;
     const retired = findRetiredRecipientField(skill, ctx.input);
     if (retired) return { success: false, error: retiredRecipientFieldError(skill, retired) };
 
@@ -61,23 +69,22 @@ export class SmsSendHandler implements ToolHandler {
     if (!ctx.outboundGateway) {
       return {
         success: false,
-        error: 'sms-send skill requires outboundGateway access. Declare "outboundGateway" in capabilities.',
+        error: 'slack-send skill requires outboundGateway access. Declare "outboundGateway" in capabilities.',
       };
     }
 
-    // Resolve the reference (#2033). No contact, or no verified SMS number, means no send.
-    const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient as string, {
+    // Resolve the reference (#2033). No contact, or no verified Slack id, means no send.
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient as string, {
       field: 'recipient',
     });
     // A blocked contact is a policy hold (#2587); other refusals stay failures.
     if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
-    if (!E164_REGEX.test(resolved.identifier)) {
-      // A stored identity Telnyx cannot address: a data defect. Refuse rather than
-      // guess, and log the contact for an operator (the ID may be the principal's).
-      ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
+    if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
+      // W… Enterprise Grid ids stay out of scope on the reference path too.
+      ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');
       return {
         success: false,
-        error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
+        error: `The contact's verified Slack identity is not a U… user id, so nothing was sent. Enterprise Grid (W…) ids are not supported.`,
       };
     }
     const destination = resolved.identifier;
@@ -86,13 +93,19 @@ export class SmsSendHandler implements ToolHandler {
     const contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
     const identityName = resolved.identityName;
 
-    ctx.log.info({ destinationType: '1:1', byReference: true }, 'sms-send: dispatching SMS via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'slack-send: dispatching Slack DM via gateway');
 
     try {
+      // Overload: put U… in slackChannelId even though that field's type doc
+      // describes D…/C…/G… conversation ids. chat.postMessage accepts a user
+      // id as channel and opens/uses the IM (same precedent as
+      // src/autonomy/approval-delivery.ts). Principal eligibility / blocked-contact
+      // resolve from slackUserId (also the U…), never from slackChannelId alone.
       const result = await ctx.outboundGateway.send(
         {
-          channel: 'sms',
-          recipient: destination,
+          channel: 'slack',
+          slackChannelId: destination,
+          slackUserId: destination,
           message,
         },
         {
@@ -106,18 +119,18 @@ export class SmsSendHandler implements ToolHandler {
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
           // Named by the contact, as signal-send's is (scenario 34k): an identity label like
           // "unlabelled" gives the agent nothing to match the principal's answer to.
-          holdRecipe: { toolName: 'sms-send', partialPayload: ctx.input, description: `SMS to ${holdRecipientName(resolved.displayName, identityName, destination)}` },
+          holdRecipe: { toolName: 'slack-send', partialPayload: ctx.input, description: `Slack message to ${holdRecipientName(resolved.displayName, identityName, destination)}` },
         },
       );
 
       if (!result.success) {
-        return gatewaySendFailure(result, 'SMS send failed');
+        return gatewaySendFailure(result, 'Slack send failed');
       }
 
       // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).
 
       if (!result.deferredToDigest) await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
-        channelId: 'sms',
+        channelId: 'slack',
         // What was delivered, with any redactions applied; not the draft (#2312).
         content: result.sentContent ?? message,
         agentId: ctx.agentId ?? 'coordinator',
@@ -126,19 +139,17 @@ export class SmsSendHandler implements ToolHandler {
         // Lets the dispatcher show this entry when the recipient replies (#2261).
         recipientContactIds: [resolved.contactId],
         // A task-bound send leaves a task_outreach row so the reply can find its task (#2312).
-        outreach: { turn: ctx, via: 'sms', addresses: [destination] },
+        outreach: { turn: ctx, via: 'slack', addresses: [destination] },
       });
 
       return {
         success: true,
         data: {
-          // The resolved number. Reply-lock reads this field.
+          // The resolved user id. Reply-lock reads this field.
           delivered_to: destination,
           ...(contactId ? { contact_id: contactId } : {}),
           ...(identityName ? { recipient_identity: identityName } : {}),
-          channel: 'sms',
-          // A number verified on another phone-family channel (#2447): delivery unconfirmed.
-          ...derivedAddressData(resolved, 'sms'),
+          channel: 'slack',
           // Held by the relay budget for the principal's digest (#1320).
           ...relayDeferredData(result),
           // Details the gateway removed before sending (#2312).
@@ -147,8 +158,8 @@ export class SmsSendHandler implements ToolHandler {
       };
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, destinationType: '1:1' }, 'sms-send: gateway threw unexpectedly');
-      return { success: false, error: `SMS send failed: ${errMessage}` };
+      ctx.log.error({ err, destinationType: '1:1' }, 'slack-send: gateway threw unexpectedly');
+      return { success: false, error: `Slack send failed: ${errMessage}` };
     }
   }
 }

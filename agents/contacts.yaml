@@ -240,6 +240,9 @@ system_prompt: |
 
 pinned_skills:
   - contacts
+  # Trust + upkeep (#2764): listed for on-demand; pinned eagerly until switch-over.
+  - contact-trust
+  - contact-upkeep
   # Context enrichment — stays standalone (not part of contacts; #1494 guard)
   - entity-context
   # Memory — query/store only (not memory-confirm / decay-warnings-list)

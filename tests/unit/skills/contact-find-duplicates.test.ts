@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ContactFindDuplicatesHandler } from '../../../skills/contacts/tools/contact-find-duplicates/handler.js';
+import { ContactFindDuplicatesHandler } from '../../../skills/contact-upkeep/tools/contact-find-duplicates/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { ChannelIdentity, Contact, DuplicatePair } from '../../../src/contacts/types.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import { canonicalPairKey, dedupPairTag } from '../../../src/contacts/dedup-pair-key.js';
-import { DEFERRAL_COOLDOWN_DAYS } from '../../../skills/contacts/tools/contact-find-duplicates/handler.js';
+import { DEFERRAL_COOLDOWN_DAYS } from '../../../skills/contact-upkeep/tools/contact-find-duplicates/handler.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });

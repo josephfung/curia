@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WebSendHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { OutboundSendResult } from '../../src/skills/outbound-gateway.js';
-import { RELAY_DEFERRED_NOTE } from '../../src/skills/_shared/principal-directed.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { OutboundSendResult } from '../../../../src/skills/outbound-gateway.js';
+import { RELAY_DEFERRED_NOTE } from '../../../../src/skills/_shared/principal-directed.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 

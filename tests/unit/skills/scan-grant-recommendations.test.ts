@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { ScanGrantRecommendationsHandler } from '../../../skills/contacts/tools/scan-grant-recommendations/handler.js';
+import { ScanGrantRecommendationsHandler } from '../../../skills/contact-trust/tools/scan-grant-recommendations/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { Contact } from '../../../src/contacts/types.js';
 import type { GrantRecommendation } from '../../../src/contacts/types.js';

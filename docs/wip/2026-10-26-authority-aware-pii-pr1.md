@@ -100,7 +100,7 @@
 
 **Files:**
 - Modify: `src/skills/_shared/principal-directed.ts` (next to `relayDeferredData`)
-- Modify: `skills/email/tools/email-send/handler.ts` (~275 `registerOutboundContext`, ~283 data), `skills/email/tools/email-reply/handler.ts` (~309, ~324), `skills/signal-send/handler.ts` (group ~150-180 and 1:1 ~243-264), `skills/sms-send/handler.ts` (~116-135), `skills/slack-send/handler.ts` (~130-149); each `tool.json` (output field + minor version bump)
+- Modify: `skills/email/tools/email-send/handler.ts` (~275 `registerOutboundContext`, ~283 data), `skills/email/tools/email-reply/handler.ts` (~309, ~324), `skills/messaging/tools/signal-send/handler.ts` (group ~150-180 and 1:1 ~243-264), `skills/messaging/tools/sms-send/handler.ts` (~116-135), `skills/messaging/tools/slack-send/handler.ts` (~130-149); each `tool.json` (output field + minor version bump)
 - Test: each `handler.test.ts` beside the skill
 
 **Interfaces:**
