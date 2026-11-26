@@ -129,11 +129,11 @@ expected_behaviors:
       is a miss.
     check:
       any_of:
-        - { called: task-update, agent: any, contains: { wake_at: "20" } }
-        - { called: scheduler-create, agent: any }
-        - { called: report-to-principal, agent: any }
-        - { called: email-send, agent: any, contains: { to: principal } }
-        - { called: signal-send, agent: any, contains: { recipient: principal } }
+        - { called: task-update, success: true, agent: any, contains: { wake_at: "20" } }
+        - { called: scheduler-create, success: true, agent: any }
+        - { called: report-to-principal, success: true, agent: any }
+        - { called: email-send, success: true, agent: any, contains: { to: principal } }
+        - { called: signal-send, success: true, agent: any, contains: { recipient: principal } }
   - id: does_not_close_task
     weight: important
     layer: decision

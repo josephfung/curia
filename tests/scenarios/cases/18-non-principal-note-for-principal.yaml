@@ -160,8 +160,10 @@ expected_behaviors:
       any_of:
         - principal_note: present
         - called: email-send
+          success: true
           with: { to: principal }
         - called: [signal-send, sms-send, slack-send]
+          success: true
           with: { recipient: principal }
   - id: note_carries_the_decision
     weight: important

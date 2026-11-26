@@ -98,8 +98,10 @@ expected_behaviors:
     check:
       any_of:
         - called: config-store
+          success: true
           with: { action: store }
         - called: memory-store
+          success: true
   - id: replies
     weight: critical
     description: Answers the principal (not NO_REPLY).
