@@ -1226,6 +1226,7 @@ export async function createScenarioHarness(
       let thenOutcome: TurnOutcome | undefined;
       // Approval-wake turns a held relay started (#2312): their calls join the run's.
       let wakeCalls: TurnOutcome['calls'] = [];
+      let wakeActivations: TurnOutcome['skillActivations'] = [];
       let wakeError: string | undefined;
       try {
         // Capture matches events by conversation id, so a second live turn is
@@ -1432,6 +1433,7 @@ export async function createScenarioHarness(
         let wakes = await Promise.all(scope.wakeTurns);
         while (wakes.length < scope.wakeTurns.length) wakes = await Promise.all(scope.wakeTurns);
         wakeCalls = wakes.flatMap(w => w.calls);
+        wakeActivations = wakes.flatMap(w => w.skillActivations ?? []);
         wakeError = wakes.find(w => w.error)?.error;
       } finally {
         // Before endRun resolves a waiting first-call, so the publisher sees
@@ -1459,6 +1461,15 @@ export async function createScenarioHarness(
       // Wake and `then` turns are the coordinator's (both are captured for it), in run order.
       const followOnCalls = [...wakeCalls, ...(thenOutcome?.calls ?? [])].map(c => ({ ...c, agentId: COORDINATOR }));
       const merged = mergeCalls(inRunOrder([...outcome.calls, ...followOnCalls], trace, agent), stubbedCalls);
+      // Same merge for skill activations (#2764): excludes/includes must see wake and `then`
+      // paths. Specialist activations in `delegation: real` runs are still case-agent only
+      // (turn-capture.forAgent scopes by agent+conversation); B-case excludes that name a
+      // specialist-activated skill need a real-delegation capture or an agent-scoped check.
+      const skillActivations = [
+        ...outcome.skillActivations,
+        ...wakeActivations,
+        ...(thenOutcome?.skillActivations ?? []),
+      ];
       // Read after the run's turns settled, before cleanup removes the rows (#2312).
       const gateway = scenario.throughGateway ? await readGatewayOutcome(stack, scenario, seeded, scope) : undefined;
       // A scoped view failing means the case ran without its premise (no block, no thread).
@@ -1483,7 +1494,7 @@ export async function createScenarioHarness(
         refs: Object.fromEntries(seeded.refs),
         clock,
         toolCalls: merged,
-        ...(outcome.skillActivations.length > 0 ? { skillActivations: outcome.skillActivations } : {}),
+        ...(skillActivations.length > 0 ? { skillActivations } : {}),
         reply: outcome.reply,
         ...(outcome.principalNote !== undefined ? { principalNote: outcome.principalNote } : {}),
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),

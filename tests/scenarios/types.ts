@@ -986,6 +986,13 @@ export interface CaseResult {
    * current case file needs it unchanged. Absent on results saved before it existed.
    */
   setupHash?: string;
+  /**
+   * The case's scored agent (#2764 compare). Absent on results saved before it existed;
+   * compare then falls back to `coordinator`.
+   */
+  agent?: string;
+  /** Case tags (#2764 compare: scheduled cases use different call/token gates). */
+  tags?: string[];
 }
 
 /** One contrast group's blind-identification result (blind-id.ts, #2556), in the results JSON. */

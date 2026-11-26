@@ -654,6 +654,8 @@ async function main(): Promise<void> {
       const result: CaseResult = {
         ...scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate),
         setupHash: caseSetupHash(scenario),
+        agent: scenario.agent,
+        tags: scenario.tags,
       };
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       // Real delegation multiplies model calls (#2027): show whose they were.
