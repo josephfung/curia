@@ -314,10 +314,11 @@ const GET_TIME_PATTERN = new RegExp(
 // The guidance says to act without asking, so these fail closed to an ordinary turn.
 const NOT_A_REQUEST = /\b(?:did|wants?|wanted|asks?|asked|asking|should\s+(?:i|we)|is\s+it\s+(?:possible|worth|better)|would\s+it|whether)\b/i;
 
-// Someone else doing it: "Priya will reschedule our 1:1", "Dana can move the review". A name or a
-// third-person pronoun before a modal, earlier in the clause. Case-sensitive, so a capitalised
+// Someone else doing it: "Priya will reschedule our 1:1", "Dana can move the review", "Priya is
+// planning to reschedule it". A name or a third-person pronoun before a modal, an "is …ing to"
+// form, or a "has/needs/wants to" form, earlier in the clause. Case-sensitive, so a capitalised
 // name is told from an ordinary word; the principal's own "I", "We" and "You" are not actors here.
-const THIRD_PARTY_ACTOR = /\b(?!(?:I|We|You|Can|Could|Would|Please)\b)(?:[Hh]e|[Ss]he|[Tt]hey|[A-Z][a-z]+)(?:['’]ll|\s+(?:will|(?:is|are)\s+(?:going\s+to|gonna)|plans?\s+to|can|could|might|may))\b/;
+const THIRD_PARTY_ACTOR = /\b(?!(?:I|We|You|Can|Could|Would|Please)\b)(?:[Hh]e|[Ss]he|[Tt]hey|[A-Z][a-z]+)(?:['’]ll|\s+(?:will|would|should|can|could|might|may|(?:is|are|was|were)\s+(?:\w+ing\s+to|gonna|about\s+to)|(?:has|have|needs?|wants?|intends?|plans?|hopes?)\s+to|would\s+like\s+to))\b/;
 
 // Where a negation's reach ends besides CLAUSE_END: "I can't make my 2pm so move it to Friday" and
 // "Not urgent: reschedule the 2pm" are requests. A colon counts only before a space (not "1:1" or

@@ -353,6 +353,11 @@ describe('looksLikeReschedule and looksLikeGetTime (#2608)', () => {
     'Dana can move the board meeting if she needs to',
     "She'll push my 2pm, no need to do anything",
     'They are going to reschedule the review',
+    'Priya is planning to reschedule our 1:1. Please just tell me when it is.',
+    'Dana is hoping to move the board meeting',
+    'Priya needs to reschedule our 1:1',
+    'Sam wants to push the walk-through',
+    'Priya would like to find time with Josh',
     // Someone else's hard stop.
     'Priya has a hard stop at 3, so keep it tight',
     // Spot-check verdicts and replies.
