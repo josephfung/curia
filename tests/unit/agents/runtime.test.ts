@@ -3643,6 +3643,120 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.user).not.toContain('Onboarding in progress');
     });
   });
+
+  describe('conversation carry touch (#2764)', () => {
+    const memoryStoreDef = {
+      name: 'memory-store',
+      description: 'Store a memory',
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    };
+
+    async function runPinnedToolTurn(opts: {
+      preActivateMemory?: boolean;
+      /** Listed skills (defence-in-depth filter when allowDiscovery is false). */
+      skillList?: ReadonlyArray<{ name: string; description: string }>;
+    }): Promise<{ touch: ReturnType<typeof vi.fn>; listActive: ReturnType<typeof vi.fn> }> {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-1', name: 'memory-store', input: { text: 'note' } }],
+              usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
+            };
+          }
+          return {
+            type: 'text' as const,
+            content: 'Done.',
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        },
+      };
+
+      const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+      const skillRegistry = new SkillRegistry();
+      skillRegistry.register(
+        {
+          name: 'memory',
+          description: 'Store and recall memories',
+          tools: ['memory-store'],
+          instructions: '## Memory\nRemember.',
+        },
+        '/tmp/memory',
+      );
+
+      const touch = vi.fn(async () => {});
+      const listActive = vi.fn(async () => (opts.preActivateMemory ? ['memory'] : []));
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { ok: true } }),
+        getToolDefinitions: vi.fn((names: string[]) =>
+          [memoryStoreDef].filter((d) => names.includes(d.name)),
+        ),
+        resolveSkillActivationForAgent: vi.fn().mockImplementation((skill: string) => {
+          if (skill !== 'memory') return { error: `unknown skill ${skill}` };
+          return {
+            skill: 'memory',
+            tools: ['memory-store'],
+            skippedTools: [],
+            instructions: '## Memory\nRemember.',
+            references: [],
+            assets: [],
+          };
+        }),
+      } as unknown as ExecutionLayer;
+
+      new AgentRuntime({
+        agentId: 'ceo-inbox',
+        systemPrompt: 'You triage mail.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        // Tool pin only — the agent never listed or activated the memory bundle.
+        skillToolDefs: [memoryStoreDef],
+        skillRegistry,
+        skillLoading: 'on_demand',
+        allowDiscovery: false,
+        skillList: opts.skillList ?? [],
+        conversationActiveSkills: { listActive, touch },
+      }).register();
+
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'ceo-inbox',
+        conversationId: 'conv-carry-pin',
+        channelId: 'web',
+        senderId: 'ceo',
+        content: 'note this',
+        parentEventId: 'p-carry',
+        senderContext: CONFIRMED_SENDER_CONTEXT,
+      }));
+      return { touch, listActive };
+    }
+
+    it('does not touch the owning bundle of a tool pin the agent never activated', async () => {
+      const { touch } = await runPinnedToolTurn({ preActivateMemory: false });
+      expect(touch).not.toHaveBeenCalled();
+    });
+
+    it('touches a skill that was pre-activated this turn when a member tool succeeds', async () => {
+      const { touch } = await runPinnedToolTurn({
+        preActivateMemory: true,
+        // Listed so the allowDiscovery:false carry filter keeps it.
+        skillList: [{ name: 'memory', description: 'Store and recall memories' }],
+      });
+      expect(touch).toHaveBeenCalledWith('conv-carry-pin', 'ceo-inbox', 'memory');
+    });
+  });
 });
 
 // -- Error budget enforcement tests --
