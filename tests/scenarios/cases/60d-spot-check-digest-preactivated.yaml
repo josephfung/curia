@@ -1,0 +1,44 @@
+# Case 60d (#2764 Layer 2 D2): a principal spot-check reply ("2 bad") must record the
+# verdict. Code pre-activates digest on spot-check-reply turns (by: conversation), so
+# record-spot-check is available without a model skill-activate. Rule: runtime
+# preActivateSkills for spot-check-reply; digest skill.
+name: spot-check reply records with digest
+description: >
+  The principal replies "2 bad" on a channel after a spot-check digest. The coordinator
+  calls record-spot-check successfully. The digest skill must show as activated
+  (pre-activation path preferred).
+tags: [digest, skill-activation, on-demand, spot-check]
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: signal
+  content: "2 bad"
+tool_stubs:
+  record-spot-check:
+    - match: {}
+      return: { recorded: true, item: 2, verdict: bad }
+  list-spot-checks:
+    - match: {}
+      return: { items: [{ n: 2, summary: "Sent a draft without asking first", status: open }] }
+  skill-activate:
+    - match: {}
+      return:
+        skill: digest
+        tools: [list-principal-reports, list-spot-checks, record-spot-check, ack-principal-report]
+expected_behaviors:
+  - id: records
+    weight: critical
+    description: Calls record-spot-check successfully.
+    check:
+      called: record-spot-check
+      success: true
+  - id: digest_activated
+    weight: critical
+    description: Digest is activated (pre-activation or model).
+    check:
+      skills_activated:
+        includes: [digest]
+failure_modes:
+  - Acknowledges the verdict in chat without recording it
+  - record-spot-check refused because digest was never activated

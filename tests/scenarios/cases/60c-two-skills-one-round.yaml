@@ -1,0 +1,81 @@
+# Case 60c (#2764 Layer 2 D8): one request needs two skills. Both should activate in
+# one round (skills: [] on skill-activate, or two activations before other work).
+# Coordinator calls should stay near baseline (+ at most 1 for the activation round).
+name: two skills one round
+description: >
+  The principal asks the coordinator to look up the latest Series B news for Acme and
+  file a short brief under /projects/acme-series-b/. That needs web (search/fetch) and
+  documents (doc-place/doc-write). Both skills must activate; the reply should name the
+  brief path.
+tags: [web, documents, skill-activation, on-demand]
+release_gate: false
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Search the web for the latest Acme Series B news and file a short brief under
+    /projects/acme-series-b/. One or two paragraphs is enough.
+tool_stubs:
+  web-search:
+    - match: {}
+      return:
+        results:
+          - title: Acme closes Series B
+            url: https://news.example.test/acme-series-b
+            snippet: Acme raised a Series B led by Northwind Capital.
+  web-fetch:
+    - match: {}
+      return:
+        url: https://news.example.test/acme-series-b
+        content: Acme announced a Series B led by Northwind Capital to expand its platform.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        path: /projects/acme-series-b/brief.md
+        directory_prefix: /projects/acme-series-b/
+        catalog: []
+  doc-write:
+    - match: {}
+      return:
+        path: /projects/acme-series-b/brief.md
+        version: 1
+        bytes: 240
+  skill-activate:
+    - match: {}
+      return:
+        skill: web
+        tools: [web-search, web-fetch]
+    - match: {}
+      return:
+        skill: documents
+        tools: [doc-read, doc-list, doc-write, doc-search, doc-place]
+  delegate:
+    - match: {}
+      return: { agent: contacts, response: "No contact work needed." }
+expected_behaviors:
+  - id: activates_both
+    weight: critical
+    description: Activates both web and documents.
+    check:
+      skills_activated:
+        includes: [web, documents]
+  - id: searches
+    weight: critical
+    description: Calls web-search successfully.
+    check:
+      called: web-search
+      success: true
+  - id: files_brief
+    weight: critical
+    description: Writes the brief (doc-write succeeds).
+    check:
+      called: doc-write
+      success: true
+  - id: names_path
+    weight: important
+    description: The reply mentions the project brief path.
+failure_modes:
+  - Activates only one of web or documents and improvises the other
+  - Searches but never files
+  - Files without searching

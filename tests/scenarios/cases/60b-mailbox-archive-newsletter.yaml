@@ -1,0 +1,52 @@
+# Case 60b (#2764 Layer 2 D6): mailbox filing under on-demand loading. Archiving a
+# newsletter needs the mailbox skill (split from email). Rule: mailbox description
+# "file, label, archive"; email-archive tool.
+name: mailbox archive newsletter
+description: >
+  The principal asks the coordinator to archive a newsletter already identified by
+  message id. The coordinator activates mailbox (or already has it) and calls
+  email-archive successfully. It must not invent a send.
+tags: [mailbox, email, skill-activation, on-demand]
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Archive the newsletter with message id nylas-msg-60b-newsletter. Don't reply to it.
+tool_stubs:
+  email-archive:
+    - match: { message_id: nylas-msg-60b-newsletter }
+      return: { archived: true, message_id: nylas-msg-60b-newsletter }
+    - match: {}
+      return: { archived: true, message_id: nylas-msg-60b-newsletter }
+  skill-activate:
+    - match: {}
+      return:
+        skill: mailbox
+        tools: [email-list, email-get, email-archive, email-label, email-mark-read]
+  delegate:
+    - match: {}
+      return: { agent: ceo-inbox, response: "Archived in the principal mailbox." }
+expected_behaviors:
+  - id: archives
+    weight: critical
+    description: Calls email-archive successfully for the newsletter id.
+    check:
+      called: email-archive
+      success: true
+  - id: activates_mailbox
+    weight: critical
+    description: The mailbox skill is activated.
+    check:
+      skills_activated:
+        includes: [mailbox]
+  - id: no_send
+    weight: critical
+    description: Does not send or reply to the newsletter.
+    check:
+      not_called: [email-send, email-reply, signal-send, sms-send, slack-send]
+failure_modes:
+  - Says it archived without calling email-archive
+  - email-archive refused because mailbox was never activated
+  - Replies to or forwards the newsletter

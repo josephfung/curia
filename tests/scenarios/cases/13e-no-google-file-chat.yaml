@@ -30,6 +30,12 @@ expected_behaviors:
     check:
       not_called: [skill-activate]
       with: { skill: google-workspace }
+  - id: no_google_workspace_activated
+    weight: critical
+    description: google-workspace does not appear in skill.activated (any path).
+    check:
+      skills_activated:
+        excludes: [google-workspace]
   - id: pastes_sentences
     weight: nice-to-have
     description: The reply contains a short, polite decline the principal can use.
