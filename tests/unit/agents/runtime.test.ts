@@ -3531,6 +3531,93 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(sys).toBeDefined();
   });
 
+  it('pre-activates conversation-carried skills with by: conversation (#2764)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: async (params) => {
+        chatCalls.push({
+          tools: params.tools?.map((t) => ({ name: t.name })),
+          messages: params.messages as Array<{ role: string; content: unknown }>,
+        });
+        return {
+          type: 'text' as const,
+          content: 'Carried.',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      },
+    };
+
+    const browserToolDef = {
+      name: 'web-browser',
+      description: 'Browse',
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    };
+    const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+    const skillRegistry = new SkillRegistry();
+    skillRegistry.register(
+      {
+        name: 'browser',
+        description: 'Drive a real browser',
+        tools: ['web-browser'],
+        instructions: '## Browser\nUse the browser tools.',
+      },
+      '/tmp/browser',
+    );
+
+    const listActive = vi.fn().mockResolvedValue(['browser']);
+    const mockExecution = {
+      invoke: vi.fn(),
+      getToolDefinitions: vi.fn((names: string[]) =>
+        [browserToolDef].filter((d) => names.includes(d.name)),
+      ),
+      resolveSkillActivationForAgent: vi.fn().mockReturnValue({
+        skill: 'browser',
+        tools: ['web-browser'],
+        skippedTools: [],
+        instructions: '## Browser\nUse the browser tools.',
+      }),
+    } as unknown as ExecutionLayer;
+
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [skillActivateToolDef],
+      skillRegistry,
+      conversationActiveSkills: { listActive, touch: vi.fn() },
+    }).register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-carry-1',
+      channelId: 'web',
+      senderId: 'ceo',
+      content: 'Continue the checkout',
+      parentEventId: 'parent-carry-1',
+    }));
+
+    expect(listActive).toHaveBeenCalledWith('conv-carry-1', 'coordinator');
+    expect(mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('browser', 'coordinator');
+    const tools = chatCalls[0]!.tools?.map((t) => t.name) ?? [];
+    expect(tools).toContain('web-browser');
+    const sys = chatCalls[0]!.messages.find(
+      (m) => m.role === 'system'
+        && typeof m.content === 'string'
+        && m.content.includes('[Activated skill: browser]'),
+    );
+    expect(sys).toBeDefined();
+  });
+
   describe('onboarding context on live principal turns (#2360)', () => {
     const progressToolDef = {
       name: 'onboarding-progress',
