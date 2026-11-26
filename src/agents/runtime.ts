@@ -1237,8 +1237,14 @@ export class AgentRuntime {
     ): Promise<void> => {
       if (names.length === 0 || !executionLayer) return;
       if (!workingToolDefs) workingToolDefs = [];
-      const blocks = await this.preActivateSkills(names, workingToolDefs, skipMessage, by, preActCtx);
-      for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+      // Best-effort: unit mocks often omit resolveSkillActivationForAgent; a miss must
+      // not abort the turn (scheduler/bullpen/spot-check still need to run).
+      try {
+        const blocks = await this.preActivateSkills(names, workingToolDefs, skipMessage, by, preActCtx);
+        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+      } catch (err) {
+        logger.warn({ err, agentId, skills: names, by }, skipMessage);
+      }
     };
 
     // Task wake: every skill activated on the task (no relevance filter; cap 8) plus `tasks`.

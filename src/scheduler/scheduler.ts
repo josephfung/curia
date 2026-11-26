@@ -2093,6 +2093,7 @@ export class Scheduler {
         completionActivatedSkills = runMeta.activatedSkills;
       }
 
+      // Omit trailing activatedSkills when empty so existing 6-arg call sites / mocks stay exact.
       const result = await this.schedulerService.completeJobRun(
         jobId,
         completionSuccess,
@@ -2100,7 +2101,9 @@ export class Scheduler {
         completionSummary,
         completionFailedSkills,
         completionOmitted,
-        completionActivatedSkills,
+        ...(completionActivatedSkills && completionActivatedSkills.length > 0
+          ? [completionActivatedSkills]
+          : []),
       );
 
       if (result.suspended) {
