@@ -2,8 +2,9 @@
 // A plain `called: tool` counts a runtime refusal as a hit; `success: true` does not.
 //
 // Exempt:
-// - upper-bound budgets (`max` without a positive `min`) — refused calls still cost a call
-// - "tries X" behaviors whose stubs fail on purpose (48l / 30i)
+// - upper-bound budgets with an explicit `min: 0` — refused calls still cost a call
+//   (`max` alone defaults min to 1 in assertions.ts, so that is a positive check)
+// - named "tries X" / budget leaves whose stubs fail on purpose (48l / 30i / 23)
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { leafChecks } from '../../scenarios/assertions.js';
@@ -34,10 +35,12 @@ const LAYER2_CALLED_SUCCESS_PREFIXES = [
 const TRY_FAILURE_EXEMPT = new Set([
   '48l-deep-dive-workspace-failure-falls-back.yaml :: tries_a_document',
   '30i-inbox-reification-no-unbacked-promise.yaml :: tried_backing_task',
+  // Upper-bound budget without an explicit min:0 (assertions default min→1).
+  '23-no-tool-booking-takes-a-route.yaml :: bounded_venue_lookup',
 ]);
 
 function isUpperBoundBudget(leaf: Extract<BehaviorCheck, { kind: 'called' }>): boolean {
-  return leaf.max !== undefined && (leaf.min === undefined || leaf.min === 0);
+  return leaf.max !== undefined && leaf.min === 0;
 }
 
 describe('Layer-2 called checks require success (#2764)', () => {
