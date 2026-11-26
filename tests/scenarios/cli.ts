@@ -655,6 +655,9 @@ async function main(): Promise<void> {
         ...scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate),
         setupHash: caseSetupHash(scenario),
         agent: scenario.agent,
+        // §10 scheduled gates key off a real scheduler fire, not a `scheduler` tag
+        // (05a–05c are tagged but are live principal turns).
+        scheduled: scenario.inbound.from === 'scheduler',
         tags: scenario.tags,
       };
       // One block per case, printed at once, so concurrent cases do not interleave inside it.

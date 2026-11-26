@@ -991,7 +991,13 @@ export interface CaseResult {
    * compare then falls back to `coordinator`.
    */
   agent?: string;
-  /** Case tags (#2764 compare: scheduled cases use different call/token gates). */
+  /**
+   * True when the case's inbound was a scheduler fire (`inbound.from === 'scheduler'`).
+   * Compare uses this for the scheduled-case call/token gates (#2764 §10). Absent on
+   * results saved before it existed; compare then falls back to a `scheduler` tag.
+   */
+  scheduled?: boolean;
+  /** Case tags (legacy compare fallback when `scheduled` is absent). */
   tags?: string[];
 }
 

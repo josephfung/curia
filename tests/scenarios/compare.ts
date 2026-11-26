@@ -69,7 +69,13 @@ function median(values: number[]): number {
     : sorted[mid]!;
 }
 
+/**
+ * §10 scheduled gates: a real scheduler fire (`inbound.from === 'scheduler'`),
+ * written onto CaseResult by cli.ts. The `scheduler` tag is only a fallback for
+ * older results files — 05a–05c carry the tag but are live principal turns.
+ */
 function isScheduled(caseResult: CaseResult): boolean {
+  if (caseResult.scheduled !== undefined) return caseResult.scheduled;
   return (caseResult.tags ?? []).includes('scheduler');
 }
 
@@ -150,11 +156,17 @@ export function compareCases(
     const next = caseMetrics(branchCase);
     const flags: string[] = [];
     const runs = Math.max(base.runCount, next.runCount, 1);
-    // §10: branch pass rate falls no more than one run (of N) below baseline.
-    if (next.passRate + 1e-9 < base.passRate - 1 / runs) {
-      flags.push(
-        `pass rate ${(next.passRate * 100).toFixed(0)}% < ${(base.passRate * 100).toFixed(0)}% − 1/${runs}`,
-      );
+    // §10: each behaviour's pass rate falls no more than one run (of N) below baseline.
+    // Comparing the mean across behaviours can hide a single regressed behaviour.
+    const baseById = new Map(baseCase.behaviors.map(b => [b.behavior.id, b.passRate]));
+    for (const b of branchCase.behaviors) {
+      const baseRate = baseById.get(b.behavior.id);
+      if (baseRate === undefined) continue;
+      if (b.passRate + 1e-9 < baseRate - 1 / runs) {
+        flags.push(
+          `behaviour ${b.behavior.id} pass rate ${(b.passRate * 100).toFixed(0)}% < ${(baseRate * 100).toFixed(0)}% − 1/${runs}`,
+        );
+      }
     }
     if (base.scheduled || next.scheduled) {
       // Scheduled: calls must not rise; −40% token rule does not apply.

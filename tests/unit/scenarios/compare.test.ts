@@ -190,7 +190,38 @@ describe('caseMetrics / compareCases (#2764)', () => {
       },
     });
     const rows = compareCases(suite([mk(1, 5)]), suite([mk(0.4, 5)]));
-    expect(rows[0]!.flags.some(f => f.includes('pass rate'))).toBe(true);
+    expect(rows[0]!.flags.some(f => f.includes('behaviour x pass rate'))).toBe(true);
+  });
+
+  it('flags a single regressed behaviour even when the mean stays within allowance', () => {
+    const totals = { ...emptyTotals(), calls: 1, inputTokens: 100, cacheReadInputTokens: 0 };
+    const mk = (rates: Record<string, number>): CaseResult => caseResult({
+      name: 'multi',
+      agent: 'coordinator',
+      scheduled: false,
+      runs: Array.from({ length: 5 }, (_, i) => ({
+        runIndex: i, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 100, unstubbedCalls: 0,
+        usage: { byAgent: { coordinator: totals }, judge: emptyTotals(), total: totals },
+        providerRetries: [],
+      })),
+      behaviors: Object.entries(rates).map(([id, passRate]) => ({
+        behavior: { id, weight: 'critical' as const, description: id },
+        ratings: [],
+        passRate,
+        strictPassRate: passRate,
+      })),
+      usage: {
+        byAgent: { coordinator: { ...totals, calls: 5, inputTokens: 500 } },
+        judge: emptyTotals(),
+        total: { ...totals, calls: 5, inputTokens: 500 },
+      },
+    });
+    // Five behaviours: one drops 5/5 → 2/5 (−0.6); mean drop is only 0.12 (< 0.2).
+    const baseline = suite([mk({ a: 1, b: 1, c: 1, d: 1, e: 1 })]);
+    const branch = suite([mk({ a: 1, b: 1, c: 1, d: 1, e: 0.4 })]);
+    const flags = compareCases(baseline, branch)[0]!.flags;
+    expect(flags.some(f => f.includes('behaviour e pass rate'))).toBe(true);
   });
 
   it('for scheduled cases forbids call increases and skips the −40% token gate', () => {
@@ -199,7 +230,7 @@ describe('caseMetrics / compareCases (#2764)', () => {
     const baseline = suite([caseResult({
       name: 'scheduled job',
       agent: 'coordinator',
-      tags: ['scheduler'],
+      scheduled: true,
       runs: [{
         runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
         durationMs: 1000, unstubbedCalls: 0,
@@ -214,7 +245,7 @@ describe('caseMetrics / compareCases (#2764)', () => {
     const branch = suite([caseResult({
       name: 'scheduled job',
       agent: 'coordinator',
-      tags: ['scheduler'],
+      scheduled: true,
       runs: [{
         runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
         durationMs: 1000, unstubbedCalls: 0,
@@ -229,6 +260,65 @@ describe('caseMetrics / compareCases (#2764)', () => {
     const flags = compareCases(baseline, branch)[0]!.flags;
     expect(flags.some(f => f.includes('scheduled calls'))).toBe(true);
     expect(flags.some(f => f.includes('total input'))).toBe(false);
+  });
+
+  it('treats a scheduler-tagged principal turn (05a-shaped) as a live turn', () => {
+    // 05a–05c carry tags: [scheduler] but inbound.from: principal — live-turn gates apply.
+    const baseTotals = { ...emptyTotals(), calls: 2, inputTokens: 1000, cacheReadInputTokens: 0 };
+    const mk = (totals: ReturnType<typeof emptyTotals> & { calls: number; inputTokens: number }): CaseResult => caseResult({
+      name: '05a-shaped',
+      agent: 'coordinator',
+      scheduled: false,
+      tags: ['scheduler'],
+      runs: [{
+        runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 1000, unstubbedCalls: 0,
+        usage: { byAgent: { coordinator: totals }, judge: emptyTotals(), total: totals },
+        providerRetries: [],
+      }],
+      behaviors: [
+        { behavior: { id: 'x', weight: 'critical' as const, description: 'x' }, ratings: [], passRate: 1, strictPassRate: 1 },
+      ],
+      usage: { byAgent: { coordinator: totals }, judge: emptyTotals(), total: totals },
+    });
+    // Tokens meet −40% (500 ≤ 1000×0.6); +0.2 calls within live +0.5 — but scheduled
+    // "no increase" would still flag the calls. Correct classification → no flags.
+    const soft = compareCases(
+      suite([mk(baseTotals)]),
+      suite([mk({ ...emptyTotals(), calls: 2.2, inputTokens: 500, cacheReadInputTokens: 0 })]),
+    )[0]!.flags;
+    expect(soft.some(f => f.includes('scheduled calls'))).toBe(false);
+    expect(soft).toEqual([]);
+    // Unchanged total input fails the live −40% gate; a scheduled misclassify would skip it.
+    const tokens = compareCases(
+      suite([mk(baseTotals)]),
+      suite([mk({ ...emptyTotals(), calls: 2, inputTokens: 1000, cacheReadInputTokens: 0 })]),
+    )[0]!.flags;
+    expect(tokens.some(f => f.includes('total input'))).toBe(true);
+    expect(tokens.some(f => f.includes('scheduled calls'))).toBe(false);
+  });
+
+  it('falls back to the scheduler tag when CaseResult.scheduled is absent (older results)', () => {
+    const baseTotals = { ...emptyTotals(), calls: 2, inputTokens: 1000, cacheReadInputTokens: 0 };
+    const branchTotals = { ...emptyTotals(), calls: 3, inputTokens: 900, cacheReadInputTokens: 0 };
+    const mk = (totals: typeof baseTotals): CaseResult => caseResult({
+      name: 'legacy scheduled',
+      agent: 'coordinator',
+      tags: ['scheduler'],
+      // scheduled omitted — older results file
+      runs: [{
+        runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 1000, unstubbedCalls: 0,
+        usage: { byAgent: { coordinator: totals }, judge: emptyTotals(), total: totals },
+        providerRetries: [],
+      }],
+      behaviors: [
+        { behavior: { id: 'x', weight: 'critical' as const, description: 'x' }, ratings: [], passRate: 1, strictPassRate: 1 },
+      ],
+      usage: { byAgent: { coordinator: totals }, judge: emptyTotals(), total: totals },
+    });
+    const flags = compareCases(suite([mk(baseTotals)]), suite([mk(branchTotals)]))[0]!.flags;
+    expect(flags.some(f => f.includes('scheduled calls'))).toBe(true);
   });
 
   it('passes when the branch improves within thresholds', () => {
