@@ -288,18 +288,13 @@ export interface AgentConfig {
   /** Skill bundle names resolved from pinned_skills at bootstrap (Tier 0). */
   pinnedSkillNames?: string[];
   /**
-   * How skill pins enter context (#2764 / ADR-070). Default `eager` until PR 3.
-   * `on_demand`: listedSkills only; bodies and member tools load on activation.
-   */
-  skillLoading?: 'eager' | 'on_demand';
-  /**
    * From agent YAML `allow_discovery` (#2764). When false, model skill-activate is
    * limited to `skillList` names via InvokeOptions.activatableSkills.
    */
   allowDiscovery?: boolean;
   /**
-   * Skills listed for the model under on_demand (name + description). Empty when eager.
-   * Rendered as `## Skills` in the system prompt.
+   * Skills listed for the model (name + description). Body and member tools
+   * load on activation (#2764 / ADR-070). Rendered as `## Skills` in the system prompt.
    */
   skillList?: ReadonlyArray<{ name: string; description: string }>;
   /** Skill (bundle) registry — used for Tier-1 wake re-load of active skills (#1495). */
@@ -1227,7 +1222,6 @@ export class AgentRuntime {
     // One set across every appendPreActivated call this turn — a skill named by two
     // paths (wake + carry, declared + learned) must not append its body twice.
     const preActivatedThisTurn = new Set<string>();
-    const onDemand = this.config.skillLoading === 'on_demand';
     const appendPreActivated = async (
       names: string[],
       by: SkillActivationBy,
@@ -1251,7 +1245,6 @@ export class AgentRuntime {
     };
 
     // Task wake: every skill activated on the task (no relevance filter; cap 8) plus `tasks`.
-    // Under eager, skip skills already pinned (their tools/bodies are in the fixed set).
     if (boundTaskCtx && this.config.skillRegistry && executionLayer) {
       const wakeSkills = selectActiveSkillsForWake({
         progress: boundTaskCtx.progress,
@@ -1259,12 +1252,7 @@ export class AgentRuntime {
         skillRegistry: this.config.skillRegistry,
         relevanceText: '',
       });
-      const wakeForLoad = onDemand
-        ? wakeSkills
-        : wakeSkills.filter((n) => !pinnedSkillNames.has(n));
-      const wakePlusTasks = onDemand
-        ? (wakeForLoad.includes('tasks') ? wakeForLoad : [...wakeForLoad, 'tasks'])
-        : wakeForLoad;
+      const wakePlusTasks = wakeSkills.includes('tasks') ? wakeSkills : [...wakeSkills, 'tasks'];
       if (wakePlusTasks.length > 0) {
         await appendPreActivated(wakePlusTasks, 'wake', 'Wake active-skill re-load skipped');
         // Persist only when the re-selected set actually changed — a no-op write
@@ -1294,9 +1282,6 @@ export class AgentRuntime {
       }
     }
 
-    // Conversation / bullpen / job / spot-check paths are on_demand-only so an
-    // eager deploy of this PR alone cannot widen Tier 0 (scheduler bundle etc.).
-    if (onDemand) {
     // Conversation carry: skills used recently in this conversation (#2764).
     if (this.config.conversationActiveSkills && executionLayer) {
       try {
@@ -1318,43 +1303,42 @@ export class AgentRuntime {
       }
     }
 
-      // Bullpen turns always need the bullpen skill (#2764).
-      if (taskEvent.payload.channelId === 'bullpen') {
-        await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
-      }
+    // Bullpen turns always need the bullpen skill (#2764).
+    if (taskEvent.payload.channelId === 'bullpen') {
+      await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
+    }
 
-      // Every scheduler-fired turn gets job-report (scheduler-report) (#2764).
-      if (taskEvent.payload.channelId === 'scheduler') {
-        await appendPreActivated(['job-report'], 'job', 'Job-report skill pre-activation skipped');
-        // Declared job skills + last-run learned activations live on the payload / metadata.
-        const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
-        const declared = collectJobSkillNames(
-          taskEvent.payload as unknown as Record<string, unknown>,
-          meta,
-        );
-        if (declared.job.length > 0) {
-          await appendPreActivated(declared.job, 'job', 'Declared job skill pre-activation skipped');
-        }
-        if (declared.learned.length > 0) {
-          await appendPreActivated(declared.learned, 'job-learned', 'Learned job skill pre-activation skipped');
-        }
+    // Every scheduler-fired turn gets job-report (scheduler-report) (#2764).
+    if (taskEvent.payload.channelId === 'scheduler') {
+      await appendPreActivated(['job-report'], 'job', 'Job-report skill pre-activation skipped');
+      // Declared job skills + last-run learned activations live on the payload / metadata.
+      const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
+      const declared = collectJobSkillNames(
+        taskEvent.payload as unknown as Record<string, unknown>,
+        meta,
+      );
+      if (declared.job.length > 0) {
+        await appendPreActivated(declared.job, 'job', 'Declared job skill pre-activation skipped');
       }
+      if (declared.learned.length > 0) {
+        await appendPreActivated(declared.learned, 'job-learned', 'Learned job skill pre-activation skipped');
+      }
+    }
 
-      // Spot-check replies: pre-activate digest instead of instructing the model (#2764).
-      // `by: trigger` — distinct from conversation carry for Layer-3 by-path counts.
-      if (turnGuidanceKeys.includes('spot-check-reply')) {
-        await appendPreActivated(['digest'], 'trigger', 'Spot-check digest skill pre-activation skipped');
-      }
+    // Spot-check replies: pre-activate digest instead of instructing the model (#2764).
+    // `by: trigger` — distinct from conversation carry for Layer-3 by-path counts.
+    if (turnGuidanceKeys.includes('spot-check-reply')) {
+      await appendPreActivated(['digest'], 'trigger', 'Spot-check digest skill pre-activation skipped');
+    }
 
-      // Decay-warning turns: pre-activate memory-review so decay-warnings-list /
-      // memory-confirm are callable without a discovery round (#2764).
-      if (backlog && backlog.decayWarnings > 0) {
-        await appendPreActivated(
-          ['memory-review'],
-          'trigger',
-          'Memory-review skill pre-activation skipped',
-        );
-      }
+    // Decay-warning turns: pre-activate memory-review so decay-warnings-list /
+    // memory-confirm are callable without a discovery round (#2764).
+    if (backlog && backlog.decayWarnings > 0) {
+      await appendPreActivated(
+        ['memory-review'],
+        'trigger',
+        'Memory-review skill pre-activation skipped',
+      );
     }
 
     // Onboarding on a live principal turn (#2360, design §6): an ordinary principal message

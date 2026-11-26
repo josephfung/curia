@@ -29,9 +29,9 @@ const ADR = 'docs/adr/046-agent-behavior-fix-placement.md';
 
 interface AgentBudget {
   agent: string;
-  /** YAML system_prompt + pinned SKILL.md bodies, in estimated tokens. */
+  /** YAML system_prompt only (skill bodies load on activation), in estimated tokens. */
   alwaysOnPromptTokens: number;
-  /** JSON bytes of the local tool definitions (MCP excluded). */
+  /** JSON bytes of the local tool definitions (MCP excluded) — tool pins only. */
   localToolDefinitionBytes: number;
   /**
    * The `## Available Specialists` roster over the core agents, in estimated tokens. Each
@@ -39,6 +39,10 @@ interface AgentBudget {
    * out of the prompt lands here and is held to a budget too. Coordinator only.
    */
   rosterTokens?: number;
+  /**
+   * The `## Skills` list (name + description per listed skill), in estimated tokens (#2764).
+   */
+  skillListTokens?: number;
   /**
    * Whether the agent may pin an MCP server. Its tools cannot be measured here (they
    * come from the upstream server), so an agent under budget must not pin one: the
@@ -210,7 +214,7 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
     }
   });
 
-  it('always-on prompt (YAML system_prompt + pinned SKILL.md) is within budget', () => {
+  it('always-on prompt (YAML system_prompt) is within budget', () => {
     expect(
       m.alwaysOnPromptTokens,
       formatBudgetFailure({
@@ -226,6 +230,25 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
           `injection with its trigger, tool description, lazy playbook, and only then the always-on prompt. See ${ADR}.`,
       }),
     ).toBeLessThanOrEqual(budget.alwaysOnPromptTokens);
+  });
+
+  it.runIf(budget.skillListTokens !== undefined)('skill list is within budget', () => {
+    const skillListTokens = Math.ceil(m.skillListChars / CHARS_PER_TOKEN);
+    expect(
+      skillListTokens,
+      formatBudgetFailure({
+        agent: budget.agent,
+        what: 'the skill list',
+        unit: 'tokens',
+        measured: skillListTokens,
+        limit: budget.skillListTokens ?? 0,
+        contributors: m.contributors.skillList,
+        command,
+        advice:
+          'Each listed skill contributes its name and description every turn. Shorten descriptions ' +
+          `(≤300 chars) and avoid listing skills the agent rarely activates. See ${ADR} and ADR-070.`,
+      }),
+    ).toBeLessThanOrEqual(budget.skillListTokens ?? 0);
   });
 
   it('local tool definitions are within budget', () => {
