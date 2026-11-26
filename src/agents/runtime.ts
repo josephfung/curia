@@ -1243,10 +1243,10 @@ export class AgentRuntime {
       names: string[],
       by: SkillActivationBy,
       skipMessage: string,
-    ): Promise<void> => {
-      if (names.length === 0 || !executionLayer) return;
+    ): Promise<number> => {
+      if (names.length === 0 || !executionLayer) return 0;
       const fresh = names.filter((n) => !preActivatedThisTurn.has(n));
-      if (fresh.length === 0) return;
+      if (fresh.length === 0) return 0;
       for (const n of fresh) preActivatedThisTurn.add(n);
       if (!workingToolDefs) workingToolDefs = [];
       // Best-effort: unit mocks often omit resolveSkillActivationForAgent; a miss must
@@ -1254,8 +1254,10 @@ export class AgentRuntime {
       try {
         const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
         for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        return blocks.length;
       } catch (err) {
         logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
+        return 0;
       }
     };
 
@@ -1306,20 +1308,26 @@ export class AgentRuntime {
     // Conversation / bullpen / job / spot-check paths are on_demand-only so an
     // eager deploy of this PR alone cannot widen Tier 0 (scheduler bundle etc.).
     if (onDemand) {
-      // Conversation carry: skills used recently in this conversation (#2764).
-      if (this.config.conversationActiveSkills && executionLayer) {
-        try {
-          const carried = await this.config.conversationActiveSkills.listActive(
-            taskEvent.payload.conversationId,
-            agentId,
-          );
-          if (carried.length > 0) {
-            await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
-          }
-        } catch (err) {
-          logger.warn({ err, agentId, conversationId: taskEvent.payload.conversationId }, 'Conversation skill carry failed');
+    // Conversation carry: skills used recently in this conversation (#2764).
+    if (this.config.conversationActiveSkills && executionLayer) {
+      try {
+        let carried = await this.config.conversationActiveSkills.listActive(
+          taskEvent.payload.conversationId,
+          agentId,
+        );
+        // Defence in depth: when discovery is off, never re-load a skill the agent
+        // does not list (a stale carry entry from a tool-pin touch must not widen reach).
+        if (this.config.allowDiscovery === false) {
+          const listed = new Set((this.config.skillList ?? []).map((s) => s.name));
+          carried = carried.filter((n) => listed.has(n));
         }
+        if (carried.length > 0) {
+          await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
+        }
+      } catch (err) {
+        logger.warn({ err, agentId, conversationId: taskEvent.payload.conversationId }, 'Conversation skill carry failed');
       }
+    }
 
       // Bullpen turns always need the bullpen skill (#2764).
       if (taskEvent.payload.channelId === 'bullpen') {
@@ -1357,19 +1365,18 @@ export class AgentRuntime {
     const onboardingBlock = await this.onboardingTurnBlock(taskEvent, boundTaskCtx !== null, setupStep !== null);
     if (onboardingBlock) {
       // The block points at the skill's tools, so it goes in only when the skill is on this turn:
-      // pinned, or activated here (its instructions block comes back only on success).
-      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME);
+      // pinned, carried, or activated here. Route through appendPreActivated so a carry
+      // of `onboarding` does not append the body twice (#2764).
+      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME)
+        || preActivatedThisTurn.has(ONBOARDING_SKILL_NAME);
       if (!skillOn) {
         if (!workingToolDefs) workingToolDefs = [];
-        const blocks = await this.activateSkillsForTurn(
+        const blocks = await appendPreActivated(
           [ONBOARDING_SKILL_NAME],
-          workingToolDefs,
-          'Onboarding skill activation skipped',
           'onboarding',
-          { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId },
+          'Onboarding skill activation skipped',
         );
-        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
-        skillOn = blocks.length > 0;
+        skillOn = blocks > 0;
       }
       if (skillOn) {
         // Inside the system-labelled turn guidance, never above it: a block ahead of the header
@@ -3056,23 +3063,29 @@ export class AgentRuntime {
 
             // Conversation carry (#2764): using a skill = calling any of its member tools
             // (or activating it again — handled on skill-activate below). Once per skill/turn.
+            // Only touch skills already on this turn (pre-activated or model-activated) —
+            // never the owning bundle of a tool pin the agent did not list/activate
+            // (that would widen reach on the next carry under allow_discovery:false).
             if (
               this.config.conversationActiveSkills
               && this.config.skillRegistry
               && toolCall.name !== SKILL_ACTIVATE_TOOL_NAME
             ) {
               const owner = this.config.skillRegistry.toolOwner(toolCall.name);
-              if (owner && !conversationSkillsTouchedThisTurn.has(owner.manifest.name)) {
-                conversationSkillsTouchedThisTurn.add(owner.manifest.name);
+              const skillName = owner?.manifest.name;
+              const onThisTurn = skillName !== undefined
+                && (preActivatedThisTurn.has(skillName) || modelActivatedSkills.includes(skillName));
+              if (skillName && onThisTurn && !conversationSkillsTouchedThisTurn.has(skillName)) {
+                conversationSkillsTouchedThisTurn.add(skillName);
                 try {
                   await this.config.conversationActiveSkills.touch(
                     conversationId,
                     agentId,
-                    owner.manifest.name,
+                    skillName,
                   );
                 } catch (err) {
                   logger.warn(
-                    { err, agentId, skill: owner.manifest.name, conversationId, tool: toolCall.name },
+                    { err, agentId, skill: skillName, conversationId, tool: toolCall.name },
                     'Failed to touch conversation active skill after tool use',
                   );
                 }
