@@ -176,6 +176,7 @@ expected_behaviors:
     description: Completes the homework task once the brief is written.
     check:
       called: task-complete
+      success: true
       with: { task_id: 6e0b0a2d-2360-4c00-8a00-000000000489 }
   - id: brief_before_complete
     weight: important

@@ -219,6 +219,7 @@ expected_behaviors:
     description: Marks the verification satisfied with the verification tool.
     check:
       called: verification
+      success: true
       with: { action: satisfy }
   - id: no_refusal
     weight: critical

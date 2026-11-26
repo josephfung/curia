@@ -67,12 +67,14 @@ expected_behaviors:
     description: Calls email-reply on the message the principal named.
     check:
       called: email-reply
+      success: true
       with: { reply_to_message_id: scenario-msg-tomas-workshop }
   - id: cc_principal_by_alias
     weight: critical
     description: Copies the principal by passing "principal" in email-reply's cc.
     check:
       called: email-reply
+      success: true
       contains: { cc: principal }
   - id: no_new_thread
     weight: important

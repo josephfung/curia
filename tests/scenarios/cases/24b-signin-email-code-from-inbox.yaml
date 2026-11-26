@@ -209,6 +209,7 @@ expected_behaviors:
     description: Asks ceo-inbox (delegate) for the Air Canada sign-in code.
     check:
       called: delegate
+      success: true
       with: { agent: ceo-inbox }
   # A send may mention the code ("Signed in with the code from your inbox; here's your
   # booking"); only a request for it fails. One behavior per channel: a check reads one
@@ -287,6 +288,7 @@ expected_behaviors:
     description: Marks the verification satisfied.
     check:
       called: verification
+      success: true
       with: { action: satisfy }
   - id: finishes_errand
     weight: important

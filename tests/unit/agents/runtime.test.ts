@@ -3913,6 +3913,13 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       // Spot-check pre-activation records by: trigger (not conversation) (#2764 / #2767).
       expect(r.activated).toEqual([{ skill: 'digest', by: 'trigger' }]);
     });
+
+    it('reserves by: trigger for #2765 (no runtime caller on this epic)', async () => {
+      const { SKILL_ACTIVATION_BY } = await import('../../../src/bus/events.js');
+      expect(SKILL_ACTIVATION_BY).toContain('trigger');
+      // Parked: #2765's scheduling skill will call preActivateSkills(..., 'trigger').
+      // Until then, no code path emits skill.activated with by: trigger.
+    });
   });
 
   it('pre-activates conversation-carried skills with by: conversation (#2764)', async () => {

@@ -297,6 +297,7 @@ expected_behaviors:
     description: Asks ceo-inbox (delegate) for the emailed sign-in code.
     check:
       called: delegate
+      success: true
       with: { agent: ceo-inbox }
   - id: clicks_email
     weight: critical

@@ -224,6 +224,7 @@ expected_behaviors:
     description: Delegates the confirmed inbox rules to ceo-inbox (the board-mail rule names its sender).
     check:
       called: delegate
+      success: true
       with: { agent: ceo-inbox }
       contains: { task: board@example.com }
       min: 1
@@ -245,6 +246,7 @@ expected_behaviors:
     description: Delegates the confirmed Friday-afternoon rule to the calendar specialist.
     check:
       called: delegate
+      success: true
       with: { agent: calendar }
       min: 1
   - id: priorities_written
@@ -266,18 +268,21 @@ expected_behaviors:
     description: Marks the working-rules topic done (corrected counts as done).
     check:
       called: onboarding-progress
+      success: true
       with: { op: topic_done, topic_id: review-rules, outcome: done }
   - id: priorities_topic_done
     weight: important
     description: Marks the priorities topic done.
     check:
       called: onboarding-progress
+      success: true
       with: { op: topic_done, topic_id: review-priorities, outcome: done }
   - id: voice_topic_done
     weight: important
     description: Marks the voice topic done.
     check:
       called: onboarding-progress
+      success: true
       with: { op: topic_done, topic_id: review-voice, outcome: done }
   - id: nothing_declined
     weight: important

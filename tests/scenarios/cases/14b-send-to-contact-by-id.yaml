@@ -55,6 +55,7 @@ expected_behaviors:
     description: Calls email-send with `to` set to Priya's contact ID.
     check:
       called: email-send
+      success: true
       with: { to: "{{contact:priya}}" }
   - id: no_address_in_to
     weight: critical

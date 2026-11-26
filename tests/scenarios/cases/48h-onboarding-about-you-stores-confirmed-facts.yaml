@@ -140,18 +140,21 @@ expected_behaviors:
     description: Adds Priya as a contact with contact-create.
     check:
       called: contact-create
+      success: true
       contains: { name: priya }
   - id: daughter_contact
     weight: important
     description: Adds Mara as a contact with contact-create.
     check:
       called: contact-create
+      success: true
       contains: { name: mara }
   - id: brief_marks_updated
     weight: important
     description: Updates the research brief's marks with doc-write.
     check:
       called: doc-write
+      success: true
       with: { path: /meetings/onboarding/research-brief.md }
   - id: relationship_recorded
     weight: important

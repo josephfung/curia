@@ -63,6 +63,7 @@ expected_behaviors:
     description: Calls scheduler-update with action edit on the pipeline-review job.
     check:
       called: scheduler-update
+      success: true
       with: { action: edit, job_id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10 }
   - id: no_duplicate_job
     weight: critical
@@ -74,6 +75,7 @@ expected_behaviors:
     description: The edit sets a cron expression firing at 10:00 on Mondays (e.g. "0 10 * * 1").
     check:
       called: scheduler-update
+      success: true
       with: { action: edit }
       contains: { cron_expr: "0 10 " }
 failure_modes:

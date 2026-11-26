@@ -103,6 +103,7 @@ expected_behaviors:
       sixteen; since, three to five.
     check:
       called: [web-search, web-fetch]
+      success: true
       max: 6
   - id: no_address_in_to
     weight: critical
@@ -117,6 +118,7 @@ expected_behaviors:
     description: Searches the tool registry at most twice (one search, and at most one full listing).
     check:
       called: tool-registry
+      success: true
       min: 0
       max: 2
   - id: takes_a_route

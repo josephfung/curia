@@ -118,12 +118,14 @@ expected_behaviors:
     description: Lists the open debrief tasks by the debrief-pending tag.
     check:
       called: task-list
+      success: true
       with: { tag: debrief-pending }
   - id: hands_email_to_coordinator
     weight: critical
     description: Records the email to Sarah as a child task of the Acme debrief owned by the coordinator.
     check:
       called: task-create
+      success: true
       with:
         parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001
         target_agent_id: coordinator
@@ -132,6 +134,7 @@ expected_behaviors:
     description: The coordinator's follow-up task has a wake_at, so the coordinator wakes on it.
     check:
       called: task-create
+      success: true
       with: { target_agent_id: coordinator }
       contains: { wake_at: ":" }
   - id: no_bullpen_request
@@ -144,6 +147,7 @@ expected_behaviors:
     description: Records the follow-up actions as child tasks of the Acme debrief task.
     check:
       called: task-create
+      success: true
       with: { parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001 }
   - id: call_task_for_principal
     weight: important
@@ -161,6 +165,7 @@ expected_behaviors:
     description: Completes the Acme debrief task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001 }
   - id: leaves_board_debrief
     weight: critical
@@ -188,6 +193,7 @@ expected_behaviors:
     description: Stores that Acme plans a Q1 pilot with memory-store.
     check:
       called: memory-store
+      success: true
   - id: confirmation
     weight: important
     description: >

@@ -37,6 +37,7 @@ expected_behaviors:
     description: Calls scheduler-create for the Friday run.
     check:
       called: scheduler-create
+      success: true
   - id: leaves_monday_job
     weight: critical
     description: Does not edit the existing Monday job.
@@ -48,6 +49,7 @@ expected_behaviors:
     description: The new job's cron fires Fridays at 16:00 (e.g. "0 16 * * 5").
     check:
       called: scheduler-create
+      success: true
       contains: { cron_expr: "0 16 " }
 failure_modes:
   - Edits the Monday job to Friday, silently dropping the Monday run
