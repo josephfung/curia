@@ -91,7 +91,7 @@ describe('sanitizePlanPromptText', () => {
 describe('applyPlanHarness', () => {
   const mockSchema = { type: 'object' as const, properties: {} };
 
-  it('appends guidance and auto-pins the plan tool together for eligible tasks', () => {
+  it('returns guidance and auto-pins the plan tool together for eligible tasks', () => {
     const result = applyPlanHarness({
       boundTaskCtx: { taskId: 'task-1', errorBudget: {}, progress: {}, tags: [] },
       workingToolDefs: [{ name: 'other', description: 'x', input_schema: mockSchema }],
@@ -99,25 +99,22 @@ describe('applyPlanHarness', () => {
         names.includes(PLAN_SKILL_NAME)
           ? [{ name: PLAN_SKILL_NAME, description: 'plan', input_schema: mockSchema }]
           : [],
-      effectiveSystemPrompt: 'Base prompt',
     });
 
-    expect(result.effectiveSystemPrompt).toContain('Base prompt');
-    expect(result.effectiveSystemPrompt).toContain('## Planned Task');
+    expect(result.planGuidance).toContain('## Planned Task');
     expect(result.workingToolDefs?.some((t) => t.name === PLAN_SKILL_NAME)).toBe(true);
     expect(result.workingToolDefs?.some((t) => t.name === 'other')).toBe(true);
   });
 
-  it('leaves prompt and tools unchanged for iterate leaves', () => {
+  it('leaves guidance null and tools unchanged for iterate leaves', () => {
     const tools = [{ name: 'checkpoint', description: 'x', input_schema: mockSchema }];
     const result = applyPlanHarness({
       boundTaskCtx: { taskId: 'task-1', errorBudget: { resumable: true }, progress: {}, tags: [] },
       workingToolDefs: tools,
       getToolDefinitions: () => [{ name: PLAN_SKILL_NAME, description: 'plan', input_schema: mockSchema }],
-      effectiveSystemPrompt: 'Base prompt',
     });
 
-    expect(result.effectiveSystemPrompt).toBe('Base prompt');
+    expect(result.planGuidance).toBeNull();
     expect(result.workingToolDefs).toBe(tools);
   });
 });

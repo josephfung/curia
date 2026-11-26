@@ -1,10 +1,11 @@
 // Agent assembly (#1966): the one path from agent YAML to AgentRuntime config,
 // shared by src/index.ts, the test-mode stack and the render script.
 //
-// The key test is "rendered string equals what the runtime sends": it drives a real
+// The key test is "stable system equals what the runtime sends": it drives a real
 // AgentRuntime with the builder's runtimeConfig and compares the system message the
-// provider receives against buildBaseSystemPrompt(runtimeConfig). If someone adds a
-// block to the runtime without going through system-prompt.ts, it fails.
+// provider receives against buildStableSystemPromptPrefix(runtimeConfig). Per-turn
+// blocks ride on the latest user message (#2774). If someone adds a system-role
+// block in the runtime without going through the stable builder, it fails.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
@@ -13,7 +14,11 @@ import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
 import { ModelRouter } from '../../../src/agents/llm/model-router.js';
-import { buildBaseSystemPrompt, formatTaskTailBlocks } from '../../../src/agents/system-prompt.js';
+import {
+  buildBaseSystemPrompt,
+  buildStableSystemPromptPrefix,
+  formatTaskTailBlocks,
+} from '../../../src/agents/system-prompt.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../../src/agents/prompts/date-resolve-guardrail.js';
 import { BULLPEN_REPLY_RULE } from '../../../src/agents/prompts/bullpen-reply-rule.js';
 import { DAILY_DEBRIEF_RECAP_INSTRUCTION } from '../../../src/agents/prompts/debrief-recap-instruction.js';
@@ -507,8 +512,10 @@ describe('rendered coordinator system string', () => {
     const ctx = buildContext(provider, configs);
     const coordinator = assembleAgent(configs[0]!, ctx);
 
-    const rendered = await buildBaseSystemPrompt(coordinator.runtimeConfig, { now: FIXED_NOW, logger: ctx.logger })
-      + formatTaskTailBlocks({ channelId: 'cli', conversationId: 'conv-fixture', hasToolAllowlist: false });
+    const stable = await buildStableSystemPromptPrefix(coordinator.runtimeConfig, {
+      now: FIXED_NOW,
+      logger: ctx.logger,
+    });
 
     ctx.bus.subscribe('agent.response', 'dispatch', () => {});
     new AgentRuntime(coordinator.runtimeConfig).register();
@@ -522,12 +529,12 @@ describe('rendered coordinator system string', () => {
     }));
 
     expect(provider.chat).toHaveBeenCalled();
-    const sent = provider.chat.mock.calls[0]![0].messages[0]!;
+    const call = provider.chat.mock.calls[0]![0];
+    const sent = call.messages[0]!;
     expect(sent.role).toBe('system');
-    expect(sent.content).toBe(rendered);
+    expect(sent.content).toBe(stable);
 
-    // And it carries every block production sends, in order.
-    // Both contact blocks sit in the preamble, ahead of the YAML body (trim plan PR 11).
+    // Stable system carries the cacheable blocks in order (no per-turn).
     const order = [
       '## Identity',
       '## Security',
@@ -537,23 +544,29 @@ describe('rendered coordinator system string', () => {
       'You are the coordinator.',
       '## Available Specialists',
       '## Skills',
-      // Date guardrail is stable (#2764); autonomy is per-turn after it.
       DATE_RESOLVE_GUARDRAIL.split('\n')[0]!,
-      'Spot', // autonomy band label
     ];
     let cursor = -1;
     for (const marker of order) {
-      const at = rendered.indexOf(marker);
+      const at = (sent.content as string).indexOf(marker);
       expect(at, `missing or out of order: ${marker}`).toBeGreaterThan(cursor);
       cursor = at;
     }
+    expect(sent.content as string).not.toContain('## Autonomy Level');
+    expect(sent.content as string).not.toContain('## Current Date & Time');
+
+    const user = call.messages[call.messages.length - 1]!;
+    expect(user.role).toBe('user');
+    expect(user.content as string).toContain('## Current turn context');
+    expect(user.content as string).toContain('Spot'); // autonomy band
+    expect(user.content as string).toContain('## Current Date & Time');
+    expect(user.content as string).toContain('What is on my plate today?');
   });
 });
 
-// #1959: trigger guidance moved out of the always-on prompt goes into the user message,
-// tool results and job payloads, never the system string. Prompt caching matches on exact
-// prefixes, so a system string that varied by trigger would split the cached prefix (and,
-// on providers that place tools after the system content, the tools too). This renders
+// #1959 / #2774: trigger guidance and every other per-turn block stay out of the system
+// role. Prompt caching matches on exact prefixes; on providers that place tools after
+// the system content, a system-role byte change also busts the tool cache. This renders
 // the coordinator request through the shared assembly for no trigger and for each one,
 // and requires the same system string every time.
 describe('stable system prefix across trigger guidance (#1959)', () => {
@@ -628,18 +641,31 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
   ];
 
   async function renderRequests(): Promise<{
-    base: string;
-    sent: Array<{ name: string; channelId: string; messages: Array<{ role: string; content: unknown }> }>;
+    stable: string;
+    sent: Array<{
+      name: string;
+      channelId: string;
+      messages: Array<{ role: string; content: unknown }>;
+      tools: unknown;
+    }>;
   }> {
     const provider = textProvider();
     const configs = [coordinatorYaml(), specialistYaml()];
     const ctx = buildContext(provider, configs);
     const coordinator = assembleAgent(configs[0]!, ctx);
-    const base = await buildBaseSystemPrompt(coordinator.runtimeConfig, { now: FIXED_NOW, logger: ctx.logger });
+    const stable = await buildStableSystemPromptPrefix(coordinator.runtimeConfig, {
+      now: FIXED_NOW,
+      logger: ctx.logger,
+    });
     ctx.bus.subscribe('agent.response', 'dispatch', () => {});
     new AgentRuntime(coordinator.runtimeConfig).register();
 
-    const sent: Array<{ name: string; channelId: string; messages: Array<{ role: string; content: unknown }> }> = [];
+    const sent: Array<{
+      name: string;
+      channelId: string;
+      messages: Array<{ role: string; content: unknown }>;
+      tools: unknown;
+    }> = [];
     for (const c of cases) {
       const before = provider.chat.mock.calls.length;
       await ctx.bus.publish('dispatch', createAgentTask({
@@ -652,24 +678,36 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
         parentEventId: 'parent-fixture',
       }));
       for (const call of provider.chat.mock.calls.slice(before)) {
-        sent.push({ name: c.name, channelId: c.channelId, messages: call[0].messages });
+        sent.push({
+          name: c.name,
+          channelId: c.channelId,
+          messages: call[0].messages,
+          tools: call[0].tools,
+        });
       }
     }
-    return { base, sent };
+    return { stable, sent };
   }
 
-  it('sends a byte-identical stable prefix for no trigger and every trigger', async () => {
-    const { base, sent } = await renderRequests();
+  it('sends a byte-identical stable system message for no trigger and every trigger', async () => {
+    const { stable, sent } = await renderRequests();
     expect(new Set(sent.map((s) => s.name)).size).toBe(cases.length);
     for (const s of sent) {
       const system = s.messages[0]!;
       expect(system.role).toBe('system');
-      // Everything up to the per-turn tail is the stable prefix. Only a scheduler run adds
-      // a tail (its scope fence), and that tail does not depend on trigger guidance.
-      expect(system.content, s.name).toBe(
-        base + formatTaskTailBlocks({ channelId: s.channelId, conversationId: `conv-${s.name}`, hasToolAllowlist: false }),
-      );
-      expect((system.content as string).startsWith(base), s.name).toBe(true);
+      // System role is the stable prefix only (#2774). Scheduler task tails ride
+      // on the user message with the other per-turn blocks.
+      expect(system.content, s.name).toBe(stable);
+      const user = s.messages[s.messages.length - 1]!;
+      const taskTail = formatTaskTailBlocks({
+        channelId: s.channelId,
+        conversationId: `conv-${s.name}`,
+        hasToolAllowlist: false,
+      });
+      if (taskTail.trim()) {
+        expect(user.content as string, s.name).toContain(taskTail.trim());
+        expect(system.content as string, s.name).not.toContain(taskTail.trim());
+      }
     }
   });
 
@@ -684,6 +722,76 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
       expect(user.content as string, c.name).toContain(expected);
       expect(request.messages[0]!.content as string, c.name).not.toContain(expected);
     }
+  });
+
+  it('keeps system message and tools byte-identical across now, autonomy and task blocks (#2774)', async () => {
+    const provider = textProvider();
+    const configs = [coordinatorYaml(), specialistYaml()];
+    const ctx = buildContext(provider, configs);
+    const autonomyState = { score: 40 };
+    ctx.autonomyService = {
+      getConfig: async () => ({
+        score: autonomyState.score,
+        band: autonomyState.score >= 80 ? 'spot-check' : 'restricted',
+        updatedAt: FIXED_NOW,
+        updatedBy: 'test',
+      }),
+    } as unknown as AutonomyService;
+    const coordinator = assembleAgent(configs[0]!, ctx);
+    ctx.bus.subscribe('agent.response', 'dispatch', () => {});
+    new AgentRuntime(coordinator.runtimeConfig).register();
+
+    const snapshots: Array<{ system: string; tools: string; user: string }> = [];
+    // Same channel / skill set on both turns so tools stay identical; only per-turn
+    // inputs (clock, autonomy, intent anchor) change.
+    const turns: Array<{
+      now: Date;
+      score: number;
+      content: string;
+      intentAnchor?: string;
+    }> = [
+      {
+        now: new Date('2026-10-01T14:30:00Z'),
+        score: 40,
+        content: 'What is on my plate?',
+      },
+      {
+        now: new Date('2026-10-02T09:15:00Z'),
+        score: 85,
+        content: 'Sweep the backlog.',
+        intentAnchor: 'Keep the inbox clear of low-priority noise.',
+      },
+    ];
+
+    for (const [i, turn] of turns.entries()) {
+      autonomyState.score = turn.score;
+      vi.setSystemTime(turn.now);
+      const before = provider.chat.mock.calls.length;
+      await ctx.bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: `conv-cache-${i}`,
+        channelId: 'cli',
+        senderId: 'principal',
+        content: turn.content,
+        ...(turn.intentAnchor ? { intentAnchor: turn.intentAnchor } : {}),
+        parentEventId: 'parent-fixture',
+      }));
+      const call = provider.chat.mock.calls[before]![0];
+      snapshots.push({
+        system: call.messages[0]!.content as string,
+        tools: JSON.stringify(call.tools ?? []),
+        user: call.messages[call.messages.length - 1]!.content as string,
+      });
+    }
+
+    expect(snapshots[0]!.system).toBe(snapshots[1]!.system);
+    expect(snapshots[0]!.tools).toBe(snapshots[1]!.tools);
+    expect(snapshots[0]!.user).not.toBe(snapshots[1]!.user);
+    expect(snapshots[0]!.user).toContain('Restricted');
+    expect(snapshots[1]!.user).toContain('Spot-check');
+    expect(snapshots[1]!.user).toContain('Keep the inbox clear of low-priority noise.');
+    expect(snapshots[0]!.system).not.toContain('## Current Date & Time');
+    expect(snapshots[0]!.system).not.toContain('## Autonomy Level');
   });
 
   it('keeps the same prefix across a tool round whose result carries next_step', async () => {

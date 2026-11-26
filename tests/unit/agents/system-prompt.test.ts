@@ -6,6 +6,7 @@ import {
   buildBaseSystemPrompt,
   buildPerTurnSystemPromptSuffix,
   buildStableSystemPromptPrefix,
+  formatTurnContextBlock,
   type SystemPromptSources,
 } from '../../../src/agents/system-prompt.js';
 import { createLogger } from '../../../src/logger.js';
@@ -88,6 +89,14 @@ describe('stable vs per-turn system prompt split (#2764)', () => {
 
     const combined = await buildBaseSystemPrompt(src, opts);
     expect(combined).toBe(stable + perTurn);
+  });
+
+  it('formatTurnContextBlock labels joined parts and omits blanks (#2774)', () => {
+    expect(formatTurnContextBlock([])).toBe('');
+    expect(formatTurnContextBlock(['', '  '])).toBe('');
+    expect(formatTurnContextBlock(['## Autonomy Level\nscore 1', '', '## Turn budget\nN'])).toBe(
+      '## Current turn context\n\n## Autonomy Level\nscore 1\n\n## Turn budget\nN',
+    );
   });
 });
 

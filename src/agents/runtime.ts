@@ -74,6 +74,7 @@ import {
   buildPerTurnSystemPromptSuffix,
   buildStableSystemPromptPrefix,
   formatTaskTailBlocks,
+  formatTurnContextBlock,
   resolveMaxTurns,
 } from './system-prompt.js';
 import { TurnDateResolveTracker } from './delegate-brief-date-validation.js';
@@ -639,9 +640,9 @@ export class AgentRuntime {
   /**
    * Shared pre-activation entry point (#2764 / ADR-070): add each skill's tools to
    * `workingToolDefs` (skipping names already there) and return instruction blocks for
-   * the system prompt (placed after the stable prefix until PR 4). A skill the agent
-   * may not activate is logged with `skipMessage` and skipped. Each success publishes
-   * `skill.activated` with `by`.
+   * the after-history turn context (#2774). A skill the agent may not activate is
+   * logged with `skipMessage` and skipped. Each success publishes `skill.activated`
+   * with `by`.
    */
   private async preActivateSkills(
     skillNames: string[],
@@ -1175,18 +1176,21 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Stable prefix first (#2764 PR 4): identity, security, contacts, Who you serve,
-    // YAML, roster, skill list, date guardrail, pinned context. Pre-activated skill
-    // bodies append next; autonomy / verifications / reach / time / turn budget
-    // follow so the provider cache can reuse the prefix across turns. Shared with
-    // the render script and smoke harness (#1966).
+    // System role = stable prefix only (#2774): identity, security, contacts, Who
+    // you serve, YAML, roster, skill list, date guardrail, pinned context. Every
+    // per-turn block (skill bodies, autonomy / verifications / reach / time / turn
+    // budget, other-turns, resumable / plan harness, task tail) goes after
+    // conversation history on the latest user message — OpenRouter/DeepSeek serialize
+    // tool defs after the system message, so a system-role byte change makes ~22k
+    // tool tokens uncacheable. Shared builders with the render script (#1966).
     const promptNow = new Date();
-    let effectiveSystemPrompt = await buildStableSystemPromptPrefix(this.config, {
+    const effectiveSystemPrompt = await buildStableSystemPromptPrefix(this.config, {
       now: promptNow,
       logger,
     });
-    // Concurrent-turn note is appended after the per-turn suffix (below) so it
-    // does not sit inside the cached prefix (#2588).
+    // Collects after-history turn context; order matches the former system-tail order.
+    const turnContextParts: string[] = [];
+    // Concurrent-turn note stays out of the cached system prefix (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
 
     // Initialize the error budget for this task.
@@ -1245,7 +1249,7 @@ export class AgentRuntime {
       // not abort the turn (scheduler/bullpen/spot-check still need to run).
       try {
         const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
-        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        for (const block of blocks) turnContextParts.push(block);
         return blocks.length;
       } catch (err) {
         logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
@@ -1385,12 +1389,13 @@ export class AgentRuntime {
       }
     }
 
-    // Per-turn suffix after pre-activated skill bodies (#2764 PR 4).
-    effectiveSystemPrompt += await buildPerTurnSystemPromptSuffix(this.config, {
+    // Per-turn blocks after skill bodies (#2774) — still after history on the wire.
+    const perTurnSuffix = await buildPerTurnSystemPromptSuffix(this.config, {
       now: promptNow,
       logger,
     });
-    if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
+    if (perTurnSuffix.trim()) turnContextParts.push(perTurnSuffix.trim());
+    if (otherTurns.text) turnContextParts.push(otherTurns.text);
 
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     let resumableNudgeCtx: { resumable: ResumableProgressBlock; circuit: ResumableCircuitState } | null = null;
@@ -1403,13 +1408,13 @@ export class AgentRuntime {
       if (existingCheckpoint && circuit) {
         resumableNudgeCtx = { resumable: existingCheckpoint, circuit };
       }
-      effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
+      turnContextParts.push(buildResumableTaskGuidanceBlock({
         workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
         workspaceManifestInjected,
         throughputMetrics,
-      });
+      }));
       if (existingCheckpoint) {
-        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
+        turnContextParts.push(buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit }));
       }
     }
 
@@ -1419,9 +1424,8 @@ export class AgentRuntime {
         boundTaskCtx,
         workingToolDefs,
         getToolDefinitions: (names) => executionLayer?.getToolDefinitions(names) ?? [],
-        effectiveSystemPrompt,
       });
-      effectiveSystemPrompt = planHarness.effectiveSystemPrompt;
+      if (planHarness.planGuidance) turnContextParts.push(planHarness.planGuidance);
       workingToolDefs = planHarness.workingToolDefs ?? undefined;
     }
 
@@ -1552,14 +1556,20 @@ export class AgentRuntime {
             ...(failedSkillsOmitted > 0 && { failedSkillsOmitted }),
           };
 
-    // Intent anchor + scheduler fence, last so they stay maximally salient. Shared
-    // with the render script via formatTaskTailBlocks (#1966); '' on a chat turn.
-    effectiveSystemPrompt += formatTaskTailBlocks({
+    // Intent anchor + scheduler fence, last in turn context so they stay salient.
+    // Shared with the render script via formatTaskTailBlocks (#1966); '' on a chat turn.
+    const taskTail = formatTaskTailBlocks({
       intentAnchor: taskEvent.payload.intentAnchor,
       channelId: taskEvent.payload.channelId,
       conversationId,
       hasToolAllowlist: toolAllowlist !== undefined,
     });
+    if (taskTail.trim()) turnContextParts.push(taskTail.trim());
+
+    const turnContext = formatTurnContextBlock(turnContextParts);
+    const userMessageContent = turnContext
+      ? `${turnContext}\n\n${promptContent}`
+      : promptContent;
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.resolvedModel ?? this.config.modelName;
@@ -1590,7 +1600,7 @@ export class AgentRuntime {
     // higher-priority tiers (especially security-relevant sender context) aren't
     // starved by greedy history.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
-    ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
+    ctxBudget.allocateRequired('user_message', [{ role: 'user', content: userMessageContent }]);
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
@@ -2056,9 +2066,9 @@ export class AgentRuntime {
 
     // Append history and user message to complete the messages array.
     // Final order: system prompt → sender context → bullpen → resolved entities
-    // → contact recent history → history → user message.
+    // → contact recent history → history → (turn context +) user message (#2774).
     messages.push(...budgetedHistory);
-    messages.push({ role: 'user', content: promptContent });
+    messages.push({ role: 'user', content: userMessageContent });
 
     const maybeAppendCheckpointBudgetNudge = (target: Message[] = messages): void => {
       if (!resumableActive || checkpointBudgetNudgeSent) return;

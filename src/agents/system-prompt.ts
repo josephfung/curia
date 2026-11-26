@@ -8,19 +8,21 @@
 // differently from the runtime. Anything that needs "the prompt production sends"
 // must call these functions, not rebuild the string.
 //
-// Pieces live here (#2764 PR 4 — stable prefix for provider cache):
+// Pieces live here (#2764 / #2774 — stable system message for provider cache):
 //   - buildStableSystemPromptPrefix(): identity, security, contacts, Who you serve,
 //     YAML, roster, skill list, date guardrail, pinned context. Changes rarely.
+//     This is the sole system-role content on a live turn (#2774).
 //   - buildPerTurnSystemPromptSuffix(): autonomy, live verifications, reach, time,
-//     turn budget. Changes every turn; kept after the stable prefix (and after
-//     pre-activated skill bodies the runtime inserts between the two).
+//     turn budget. Changes every turn; the runtime places this (with skill bodies,
+//     harness and task-tail blocks) after conversation history, labelled on the
+//     latest user message — not in the system role. On DeepSeek via OpenRouter the
+//     ~22k tool defs serialize after the system message, so any per-turn byte in
+//     system makes the tools uncacheable.
 //   - buildBaseSystemPrompt(): stable + per-turn, for render scripts / tests that
-//     want the full task-independent string in one call.
-//   - formatTaskTailBlocks(): intent anchor and scheduler fence (task-dependent; last).
-//
-// What sits between stable and per-turn in the runtime (not here): pre-activated
-// skill bodies. Task-bound harness blocks (resumable guidance, plan) stay inline
-// in runtime.ts after the per-turn suffix.
+//     want the full task-independent string in one call (not the live wire shape).
+//   - formatTaskTailBlocks(): intent anchor and scheduler fence (task-dependent).
+//   - formatTurnContextBlock(): labels the after-history bundle the runtime prepends
+//     to the latest user message.
 
 import type { Logger } from '../logger.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -259,9 +261,10 @@ export async function buildStableSystemPromptPrefix(
 }
 
 /**
- * Per-turn suffix (#2764): blocks that change often enough to bust the prompt
- * cache if placed earlier. Order: autonomy → verifications → reach → time →
- * turn budget. The runtime appends this after pre-activated skill bodies.
+ * Per-turn blocks (#2764 / #2774): change often enough to bust the prompt cache
+ * if placed in the system role. Order: autonomy → verifications → reach → time →
+ * turn budget. The runtime bundles this with skill bodies / harness / task tail
+ * after conversation history (see formatTurnContextBlock).
  */
 export async function buildPerTurnSystemPromptSuffix(
   sources: SystemPromptSources,
@@ -350,9 +353,9 @@ export async function buildPerTurnSystemPromptSuffix(
 }
 
 /**
- * Full task-independent system string (stable prefix + per-turn suffix).
- * Prefer the split helpers in the runtime so pre-activated skill bodies can
- * sit between them for cache (#2764).
+ * Full task-independent string (stable prefix + per-turn). Render scripts and
+ * tests that want one blob; the live runtime keeps only the stable prefix in
+ * the system role (#2774).
  */
 export async function buildBaseSystemPrompt(
   sources: SystemPromptSources,
@@ -364,9 +367,18 @@ export async function buildBaseSystemPrompt(
 }
 
 /**
- * The task-dependent blocks that close the system string: the intent anchor and,
- * for scheduler turns, the scope fence. Returns '' when neither applies (any
- * ordinary chat turn). Appended after the task-bound harness blocks.
+ * Label the after-history turn-context bundle (#2774). Empty when every part is blank.
+ */
+export function formatTurnContextBlock(parts: ReadonlyArray<string>): string {
+  const body = parts.map((p) => p.trim()).filter((p) => p.length > 0).join('\n\n');
+  if (!body) return '';
+  return `## Current turn context\n\n${body}`;
+}
+
+/**
+ * Task-dependent blocks (intent anchor and scheduler fence). Returns '' when
+ * neither applies. Bundled into the after-history turn context (#2774), not the
+ * system role.
  */
 export function formatTaskTailBlocks(task: {
   intentAnchor?: string;
