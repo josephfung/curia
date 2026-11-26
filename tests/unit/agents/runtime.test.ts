@@ -3910,8 +3910,8 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
       expect(r.tools).toContain('record-spot-check');
       expectSkillBodyAfterHistory(r, 'digest');
-      // Spot-check replies reuse the conversation activation path (#2764).
-      expect(r.activated).toEqual([{ skill: 'digest', by: 'conversation' }]);
+      // Spot-check pre-activation records by: trigger (not conversation) (#2764 / #2767).
+      expect(r.activated).toEqual([{ skill: 'digest', by: 'trigger' }]);
     });
   });
 
