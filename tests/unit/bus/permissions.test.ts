@@ -279,6 +279,17 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('agent', 'agent.task.input_injected')).toBe(false);
   });
 
+  it('lets the agent publish skill.activated and only system subscribe (#2764)', () => {
+    expect(canPublish('agent', 'skill.activated')).toBe(true);
+    expect(canPublish('system', 'skill.activated')).toBe(true);
+    expect(canSubscribe('system', 'skill.activated')).toBe(true);
+    for (const layer of ['channel', 'dispatch', 'execution'] as const) {
+      expect(canPublish(layer, 'skill.activated')).toBe(false);
+      expect(canSubscribe(layer, 'skill.activated')).toBe(false);
+    }
+    expect(canSubscribe('agent', 'skill.activated')).toBe(false);
+  });
+
   it('allows only the system layer to publish and subscribe to kg.nodes_merged (#2233)', () => {
     expect(canPublish('system', 'kg.nodes_merged')).toBe(true);
     expect(canSubscribe('system', 'kg.nodes_merged')).toBe(true);

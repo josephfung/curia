@@ -147,6 +147,7 @@ const CHECK_KEYS: Record<string, readonly string[]> = {
   called: ['called', 'agent', 'with', 'contains', 'min', 'max', 'success', 'returns'],
   not_called: ['not_called', 'agent', 'with', 'contains', 'returns'],
   order: ['order', 'agent'],
+  skills_activated: ['skills_activated'],
   reply: ['reply'],
   reply_excludes: ['reply_excludes'],
   reply_excludes_internal_names: ['reply_excludes_internal_names'],
@@ -155,6 +156,7 @@ const CHECK_KEYS: Record<string, readonly string[]> = {
   text: ['text', 'agent', 'max_words', 'excludes'],
   any_of: ['any_of'],
 };
+const SKILLS_ACTIVATED_BY: readonly string[] = ['any', 'model', 'pre'];
 const GATEWAY_CHECK_KEYS: Record<typeof GATEWAY_CHECK_KINDS[number], readonly string[]> = {
   delivered: ['channel', 'to', 'cc_includes', 'contains', 'excludes', 'count', 'own_text', 'quote_contains', 'turn'],
   not_delivered: ['to'],
@@ -319,10 +321,10 @@ function piiLabel(body: Raw, file: string, at: string): string {
 
 function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (!isObject(raw)) throw new CaseError(file, `${where}: check must be a mapping`);
-  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'principal_note', 'text', 'any_of', ...GATEWAY_CHECK_KINDS]
+  const kinds = ['called', 'not_called', 'order', 'skills_activated', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'principal_note', 'text', 'any_of', ...GATEWAY_CHECK_KINDS]
     .filter(k => k in raw);
   if (kinds.length !== 1) {
-    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, principal_note, text, any_of, ${GATEWAY_CHECK_KINDS.join(', ')} (got ${kinds.join(', ') || 'none'})`);
+    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, skills_activated, reply, reply_excludes, reply_excludes_internal_names, briefed, principal_note, text, any_of, ${GATEWAY_CHECK_KINDS.join(', ')} (got ${kinds.join(', ') || 'none'})`);
   }
   const gatewayKind = GATEWAY_CHECK_KINDS.find(k => k === kinds[0]);
   if (gatewayKind) return parseGatewayCheck(gatewayKind, raw, file, where);
@@ -365,6 +367,28 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
       return { kind: 'briefed', agent: str(raw, 'briefed', file, where), contains: strList(raw, 'brief_contains', file, where, true) };
     case 'order':
       return { kind: 'order', tools: strList(raw, 'order', file, where, true), ...(agent !== undefined ? { agent } : {}) };
+    case 'skills_activated': {
+      const body = raw['skills_activated'];
+      if (!isObject(body)) {
+        throw new CaseError(file, `${where}: 'skills_activated' must be a mapping (includes / excludes / by)`);
+      }
+      onlyKeys(body, ['includes', 'excludes', 'by'], file, `${where}.skills_activated`);
+      const includes = strList(body, 'includes', file, `${where}.skills_activated`);
+      const excludes = strList(body, 'excludes', file, `${where}.skills_activated`);
+      const byRaw = optStr(body, 'by', file, `${where}.skills_activated`);
+      if (byRaw !== undefined && !SKILLS_ACTIVATED_BY.includes(byRaw)) {
+        throw new CaseError(file, `${where}: 'by' must be one of ${SKILLS_ACTIVATED_BY.join(', ')}`);
+      }
+      if (includes.length === 0 && excludes.length === 0) {
+        throw new CaseError(file, `${where}: skills_activated needs includes, excludes or both`);
+      }
+      return {
+        kind: 'skills_activated',
+        ...(includes.length > 0 ? { includes } : {}),
+        ...(excludes.length > 0 ? { excludes } : {}),
+        ...(byRaw !== undefined ? { by: byRaw as 'any' | 'model' | 'pre' } : {}),
+      };
+    }
     case 'principal_note': {
       const is = raw['principal_note'];
       if (is !== 'present' && is !== 'absent') {

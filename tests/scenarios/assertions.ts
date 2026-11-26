@@ -131,6 +131,30 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
         ? pass(`called ${order} in order`)
         : miss(`expected ${order} in order; calls: ${describeCalls(calls, caseAgent)}`);
     }
+    case 'skills_activated': {
+      const activations = run.skillActivations ?? [];
+      const byFilter = check.by ?? 'any';
+      const matching = activations.filter(a =>
+        byFilter === 'any' ? true
+          : byFilter === 'model' ? a.by === 'model'
+            : a.by !== 'model');
+      const names = new Set(matching.map(a => a.skill));
+      const missing = (check.includes ?? []).filter(s => !names.has(s));
+      const forbidden = (check.excludes ?? []).filter(s => names.has(s));
+      if (missing.length === 0 && forbidden.length === 0) {
+        const shown = matching.length === 0
+          ? 'none'
+          : matching.map(a => `${a.skill}(${a.by})`).join(', ');
+        return pass(`skills activated (${byFilter}): ${shown}`);
+      }
+      const parts: string[] = [];
+      if (missing.length > 0) parts.push(`missing ${missing.join(', ')}`);
+      if (forbidden.length > 0) parts.push(`unexpected ${forbidden.join(', ')}`);
+      const shown = matching.length === 0
+        ? 'none'
+        : matching.map(a => `${a.skill}(${a.by})`).join(', ');
+      return miss(`${parts.join('; ')}; activated (${byFilter}): ${shown}`);
+    }
     case 'reply': {
       if (run.reply === null) return miss(`${caseAgent === COORDINATOR ? 'the coordinator' : caseAgent} produced no reply`);
       const isNoReply = run.reply.trim() === NO_REPLY;

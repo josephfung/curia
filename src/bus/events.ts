@@ -1089,6 +1089,43 @@ interface ContextBudgetPayload {
   historyTurnsIncluded: number;
 }
 
+/**
+ * How a skill's body and member tools entered the turn (#2764).
+ * `model` = skill-activate; the rest are code pre-activation paths (PR 2 adds
+ * job / conversation / bullpen / trigger; PR 1 only emits model | wake | onboarding).
+ */
+export type SkillActivationBy =
+  | 'model'
+  | 'wake'
+  | 'job'
+  | 'job-learned'
+  | 'bullpen'
+  | 'conversation'
+  | 'onboarding'
+  | 'trigger';
+
+export const SKILL_ACTIVATION_BY: readonly SkillActivationBy[] = [
+  'model',
+  'wake',
+  'job',
+  'job-learned',
+  'bullpen',
+  'conversation',
+  'onboarding',
+  'trigger',
+] as const;
+
+// SkillActivatedPayload — one skill whose tools/instructions entered the turn.
+// Written by every activation path so scenario checks and the #2765 intent check
+// can see code pre-activation as well as skill-activate. Ids and labels only.
+interface SkillActivatedPayload {
+  agentId: string;
+  skill: string;
+  by: SkillActivationBy;
+  taskEventId: string;
+  conversationId: string;
+}
+
 // SecretAccessedPayload — emitted by the execution layer whenever a skill calls ctx.secret().
 // Records which skill accessed which secret, from which agent/task — never the secret value.
 // This is the primary audit trail for secrets isolation (spec 06, Secrets Isolation).
@@ -2020,6 +2057,14 @@ export interface ContextBudgetEvent extends BaseEvent {
   payload: ContextBudgetPayload;
 }
 
+// SkillActivatedEvent — published by the agent layer when a skill's tools/instructions
+// enter the turn (#2764). parentEventId is the agent.task.
+export interface SkillActivatedEvent extends BaseEvent {
+  type: 'skill.activated';
+  sourceLayer: 'agent';
+  payload: SkillActivatedPayload;
+}
+
 // HumanDecisionEvent — published by the dispatch layer when a human resolves an approval gate.
 // parentEventId references the event (e.g., outbound.message, message.held) that triggered the gate.
 export interface HumanDecisionEvent extends BaseEvent {
@@ -2510,6 +2555,7 @@ export type BusEvent =
   | LlmErrorEvent            // #434: failed LLM call — used by HealthService for tier health tracking
   | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
+  | SkillActivatedEvent       // #2764: skill body + tools entered the turn (by path)
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | AuthorizationDecisionEvent // Spec 09 / #1379: authorization gate allow/deny/escalate audit
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
@@ -3133,6 +3179,20 @@ export function createContextBudget(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'context.budget',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createSkillActivated(
+  payload: SkillActivatedPayload & { parentEventId: string },
+): SkillActivatedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'skill.activated',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,
