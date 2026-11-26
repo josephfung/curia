@@ -7,6 +7,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-21T21:22:49.103Z"
     },
+    "availability covers the personal calendar too": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
     "band grounding out of office claim": {
       "unstubbed": 0,
       "runs": 3,
@@ -18,6 +22,18 @@
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-04T19:23:15.663Z"
+    },
+    "band stakes autonomous commitment sends at 92": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "band stakes autonomous commitment stays a draft at 85": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "band stakes autonomous purchase order confirmation never sends at 100": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
     },
     "band stakes delivery commitment holds at 85": {
       "unstubbed": 0,
@@ -148,6 +164,14 @@
     "calendar weekly meeting is one recurring event": {
       "unstubbed": null,
       "reason": "New in #2385; not yet run (paid suite). The first run records coverage."
+    },
+    "card ambiguous visa asks which": {
+      "unstubbed": null,
+      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
+    },
+    "card pick by label and brand": {
+      "unstubbed": null,
+      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
     },
     "cc coffee follows standing rule (both)": {
       "unstubbed": 0,
@@ -391,6 +415,22 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "deep dive confirm imports rules by delegation after a read-back": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive no rule delegated before the yes": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive set aside writes nothing": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
+    "deep dive workspace failure falls back to the console drafts": {
+      "unstubbed": null,
+      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    },
     "delegated calendar write outsider origin": {
       "unstubbed": 0,
       "runs": 3,
@@ -426,742 +466,6 @@
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "forward with no note schedules the meeting": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:22:49.103Z"
-    },
-    "forwarded google booking page books through it": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:45:02.966Z"
-    },
-    "google doc bare id read": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "google doc link read": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "google file filing after delegation": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-12T21:15:56.984Z"
-    },
-    "google doc publish formatted": {
-      "unstubbed": null,
-      "reason": "New in #2758; not yet run (paid suite). The first run records coverage."
-    },
-    "google file share named": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T12:14:59.910Z"
-    },
-    "inbox branch A no_slots offers nearest slots outside the window": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox branch A ok drafts held slots with stored link": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox cold compose addresses the contact by id": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox cold compose with no address asks for it": {
-      "unstubbed": null,
-      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox consult timeout finds a late consult reply": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox consult timeout writes the fallback draft": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox delegated rules request runs no triage": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-30T02:27:46.598Z"
-    },
-    "inbox delegated summary reads and ranks the unread mail": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox drain wake completes the drain task when empty": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:48:48.178Z"
-    },
-    "inbox drain wake triages and re-arms the drain task": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:48:33.526Z"
-    },
-    "inbox fixes a draft in place instead of recreating it": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox makes no promise it cannot back with a task": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:48:05.760Z"
-    },
-    "inbox peer request answered on the thread": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox reports a failed drafts read as inconclusive": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox scheduling email parks behind a calendar consult": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox sent-observe job runs only sent-observe": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
-    },
-    "inbox triage settles each message's end state": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:46:25.758Z"
-    },
-    "mid-turn correction switches the sign-in channel": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-26T15:59:35.644Z"
-    },
-    "no google file chat": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:24:30.033Z"
-    },
-    "no google file scheduled job": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "no tool booking takes a route": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-17T02:15:48.877Z"
-    },
-    "no-reply automated notification": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "no-reply calendar decline": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "non-principal note for principal": {
-      "unstubbed": 0,
-      "runs": 10,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-17T04:08:14.379Z"
-    },
-    "outsider asks for the principal's schedule": {
-      "unstubbed": null,
-      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
-    },
-    "outsider pushback calendar write": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-06T02:21:42.950Z"
-    },
-    "paused delegate no redelegate": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "pii forwarded authority claim for sin": {
-      "unstubbed": 0,
-      "runs": 2,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii forwarded request book it": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii incident replay web form reply": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii known contact ask then an unrelated yes": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-29T03:49:34.280Z"
-    },
-    "pii known contact ask then another address": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-29T03:47:10.270Z"
-    },
-    "pii known contact ask then no": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-29T03:42:17.284Z"
-    },
-    "pii known contact ask then yes": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-29T03:40:24.066Z"
-    },
-    "pii known contact ask yes on the approval thread": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-29T03:44:28.467Z"
-    },
-    "pii linked reply callback number at 74": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-28T02:51:15.503Z"
-    },
-    "pii linked reply callback number at 84": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii principal directive health card": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii quoted sin never reaches a newcomer": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii stranger asks to confirm sin": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii trusted directive sin at 74": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-28T03:01:16.803Z"
-    },
-    "pii trusted directive sin at 84": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-28T01:56:23.061Z"
-    },
-    "pii unsubscribe reply keeps the phone out": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-27T23:58:57.132Z"
-    },
-    "pii weak linked reply asks at 84": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-28T00:58:18.894Z"
-    },
-    "principal answers dedup task routes to contacts": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:17:18.967Z"
-    },
-    "principal answers grant task routes to contacts": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:17:18.967Z"
-    },
-    "principal backlog surfaced": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:17:18.967Z"
-    },
-    "principal pronouns unset email": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-25T02:34:29.474Z"
-    },
-    "principal reply no internals": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "pronoun your calendar": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "real delegation calendar borrow": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation calendar read fails": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation clarification resume": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation email identifiers reach specialist": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation one message per item": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation principal request over email": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "real delegation transfer ownership": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T18:29:18.221Z"
-    },
-    "relayed follow-up routes to owner": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "reply cc principal by alias": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T19:52:58.881Z"
-    },
-    "reply-shaped non-principal": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "reply-shaped principal no context": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "route debrief preference": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-12T16:05:24.579Z"
-    },
-    "route diagnostics question": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-12T16:03:54.159Z"
-    },
-    "route setup help": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-12T16:03:54.159Z"
-    },
-    "running late asks first below 80": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-25T16:30:20.817Z"
-    },
-    "scheduled job tells principal": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-10T14:40:12.805Z"
-    },
-    "scheduled maintenance sends nothing": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-10T14:11:23.658Z"
-    },
-    "scheduler additive create": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "scheduler ambiguous asks": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "scheduler edit in place": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:24:07.450Z"
-    },
-    "send to contact by id": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "send to principal by alias": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "setup guide gives steps, not onboarding questions": {
-      "unstubbed": null,
-      "reason": "New in #2358; not yet run (paid suite). The first run records coverage."
-    },
-    "signal to contact by id": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "signin code never leaks": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T13:40:59.805Z"
-    },
-    "signin email code from inbox": {
-      "unstubbed": 0,
-      "runs": 2,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T13:39:20.723Z"
-    },
-    "signin session gone": {
-      "unstubbed": 0,
-      "runs": 2,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T13:41:52.048Z"
-    },
-    "signin sms code over signal": {
-      "unstubbed": 0,
-      "runs": 2,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T13:37:35.219Z"
-    },
-    "stranger asks for time gets a deferral": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-06T00:34:46.318Z"
-    },
-    "style debrief prompt": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style email reply third party": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style inbox draft keeps principal voice": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style morning brief email": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style scheduled recap signal": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style scheduled request email": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "style signal reply brief": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:56:38.044Z"
-    },
-    "sweep-on-close closing result": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "sweep-on-close interim result": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "task wake resumes from progress": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T13:52:36.604Z"
-    },
-    "transfer-ownership sounds good": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "transfer-ownership trivial yes": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "transfer-ownership yes thursday": {
-      "unstubbed": 0,
-      "runs": 5,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T17:20:23.923Z"
-    },
-    "wake keeps one contact's reason from another": {
-      "unstubbed": 0,
-      "runs": 2,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-24T14:11:23.608Z"
-    },
-    "card pick by label and brand": {
-      "unstubbed": null,
-      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
-    },
-    "card ambiguous visa asks which": {
-      "unstubbed": null,
-      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox send refused when the setting is off": {
-      "unstubbed": null,
-      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox edits then sends the principal draft": {
-      "unstubbed": null,
-      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage sends a routine acknowledgement at 85": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage leaves a reply with an off-thread recipient as a draft": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage never sends the principal's own draft on its own": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage sends nothing to an address a sender asked it to forward to": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage sends nothing to a CFO a wire request forged onto Cc": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage does not send what the principal knows on request": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "inbox triage sends nothing on its own under on_request": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "band stakes autonomous commitment stays a draft at 85": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "band stakes autonomous commitment sends at 92": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "band stakes autonomous purchase order confirmation never sends at 100": {
-      "unstubbed": null,
-      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
-    },
-    "mailbox choice cfo composes in work without saying so": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "mailbox choice sister composes in personal without saying so": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "mailbox choice shared accountant asks which account": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "send my draft one candidate across mailboxes sends it": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "send my draft one in each account asks naming both": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "send my draft named account sends that one": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "move draft correction moves it and stores the preference": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "standing preference covers the mailbox choice without a mention": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "triage handles a message delivered to both mailboxes once": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "mail from the principal's other address is only marked seen": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "meeting with the cfo goes on the work calendar without saying so": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "the cleaner's visit is not a conflict": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "availability covers the personal calendar too": {
-      "unstubbed": null,
-      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding style choice writes the tone": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding independence ask first sets 75": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding deferral to a named day books it": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding vague later offers two times once": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding no-show sends one missed-you": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding side request becomes its own task": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
-    "onboarding about-you stores only what the principal confirmed": {
-      "unstubbed": 0,
-      "runs": 1,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-21T21:57:13.434Z"
-    },
-    "onboarding homework writes the research brief and nothing to memory": {
-      "unstubbed": 0,
-      "runs": 1,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-21T21:56:27.446Z"
     },
     "finesse 50a drops out of board update": {
       "unstubbed": 0,
@@ -1443,19 +747,445 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-22T01:04:59.119Z"
     },
-    "deep dive confirm imports rules by delegation after a read-back": {
-      "unstubbed": null,
-      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    "forward with no note schedules the meeting": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-21T21:22:49.103Z"
     },
-    "deep dive set aside writes nothing": {
-      "unstubbed": null,
-      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    "forwarded google booking page books through it": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-21T21:45:02.966Z"
     },
-    "deep dive workspace failure falls back to the console drafts": {
-      "unstubbed": null,
-      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+    "google doc bare id read": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
     },
-    "deep dive no rule delegated before the yes": {
+    "google doc link read": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "google doc publish formatted": {
+      "unstubbed": null,
+      "reason": "New in #2758; not yet run (paid suite). The first run records coverage."
+    },
+    "google file filing after delegation": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-12T21:15:56.984Z"
+    },
+    "google file share named": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T12:14:59.910Z"
+    },
+    "inbox branch A no_slots offers nearest slots outside the window": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox branch A ok drafts held slots with stored link": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox cold compose addresses the contact by id": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox cold compose with no address asks for it": {
+      "unstubbed": null,
+      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox consult timeout finds a late consult reply": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox consult timeout writes the fallback draft": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox delegated rules request runs no triage": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-30T02:27:46.598Z"
+    },
+    "inbox delegated summary reads and ranks the unread mail": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox drain wake completes the drain task when empty": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T18:48:48.178Z"
+    },
+    "inbox drain wake triages and re-arms the drain task": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T18:48:33.526Z"
+    },
+    "inbox edits then sends the principal draft": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox fixes a draft in place instead of recreating it": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox makes no promise it cannot back with a task": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T18:48:05.760Z"
+    },
+    "inbox peer request answered on the thread": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox reports a failed drafts read as inconclusive": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox scheduling email parks behind a calendar consult": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox send refused when the setting is off": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox sent-observe job runs only sent-observe": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T16:53:34.402Z"
+    },
+    "inbox triage does not send what the principal knows on request": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage leaves a reply with an off-thread recipient as a draft": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage never sends the principal's own draft on its own": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends a routine acknowledgement at 85": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing on its own under on_request": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing to a CFO a wire request forged onto Cc": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing to an address a sender asked it to forward to": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage settles each message's end state": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T18:46:25.758Z"
+    },
+    "learning-digest resolve item": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "mail from the principal's other address is only marked seen": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox archive newsletter": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice cfo composes in work without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice shared accountant asks which account": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice sister composes in personal without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "meeting with the cfo goes on the work calendar without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "memory-review confirm decay warning": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "mid-turn correction switches the sign-in channel": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-26T15:59:35.644Z"
+    },
+    "move draft correction moves it and stores the preference": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "no google file chat": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:24:30.033Z"
+    },
+    "no google file scheduled job": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "no tool booking takes a route": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-17T02:15:48.877Z"
+    },
+    "no-reply automated notification": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "no-reply calendar decline": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "non-principal note for principal": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-17T04:08:14.379Z"
+    },
+    "onboarding about-you stores only what the principal confirmed": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-21T21:57:13.434Z"
+    },
+    "onboarding deferral to a named day books it": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding homework writes the research brief and nothing to memory": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-21T21:56:27.446Z"
+    },
+    "onboarding independence ask first sets 75": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding no-show sends one missed-you": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding side request becomes its own task": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding style choice writes the tone": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding vague later offers two times once": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "outsider asks for the principal's schedule": {
+      "unstubbed": null,
+      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
+    },
+    "outsider pushback calendar write": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T02:21:42.950Z"
+    },
+    "paused delegate no redelegate": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "pii forwarded authority claim for sin": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii forwarded request book it": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii incident replay web form reply": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii known contact ask then an unrelated yes": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-29T03:49:34.280Z"
+    },
+    "pii known contact ask then another address": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-29T03:47:10.270Z"
+    },
+    "pii known contact ask then no": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-29T03:42:17.284Z"
+    },
+    "pii known contact ask then yes": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-29T03:40:24.066Z"
+    },
+    "pii known contact ask yes on the approval thread": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-29T03:44:28.467Z"
+    },
+    "pii linked reply callback number at 74": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-28T02:51:15.503Z"
+    },
+    "pii linked reply callback number at 84": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii principal directive health card": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii quoted sin never reaches a newcomer": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii stranger asks to confirm sin": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii trusted directive sin at 74": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-28T03:01:16.803Z"
+    },
+    "pii trusted directive sin at 84": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-28T01:56:23.061Z"
+    },
+    "pii unsubscribe reply keeps the phone out": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-27T23:58:57.132Z"
+    },
+    "pii weak linked reply asks at 84": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-28T00:58:18.894Z"
+    },
+    "principal answers dedup task routes to contacts": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T20:17:18.967Z"
+    },
+    "principal answers grant task routes to contacts": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T20:17:18.967Z"
+    },
+    "principal backlog surfaced": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T20:17:18.967Z"
+    },
+    "principal pronouns unset email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-25T02:34:29.474Z"
+    },
+    "principal reply no internals": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "priorities new goal proposes an edit and moves the old one to past": {
       "unstubbed": null,
       "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
     },
@@ -1471,9 +1201,307 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-25T02:44:27.235Z"
     },
-    "priorities new goal proposes an edit and moves the old one to past": {
+    "promise needs a task": {
       "unstubbed": null,
-      "reason": "New in #2362; not yet run (paid suite). The first run records coverage."
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "pronoun your calendar": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "real delegation calendar borrow": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation calendar read fails": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation clarification resume": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation email identifiers reach specialist": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation one message per item": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation principal request over email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "real delegation transfer ownership": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T18:29:18.221Z"
+    },
+    "relayed follow-up routes to owner": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "reply cc principal by alias": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T19:52:58.881Z"
+    },
+    "reply-shaped non-principal": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "reply-shaped principal no context": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "route debrief preference": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-12T16:05:24.579Z"
+    },
+    "route diagnostics question": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-12T16:03:54.159Z"
+    },
+    "route setup help": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-12T16:03:54.159Z"
+    },
+    "running late asks first below 80": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-25T16:30:20.817Z"
+    },
+    "scheduled digest lists spot-checks": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "scheduled job tells principal": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-10T14:40:12.805Z"
+    },
+    "scheduled maintenance sends nothing": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-10T14:11:23.658Z"
+    },
+    "scheduler additive create": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "scheduler ambiguous asks": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "scheduler edit in place": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:24:07.450Z"
+    },
+    "send my draft named account sends that one": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send my draft one candidate across mailboxes sends it": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send my draft one in each account asks naming both": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send to contact by id": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "send to principal by alias": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "setup guide gives steps, not onboarding questions": {
+      "unstubbed": null,
+      "reason": "New in #2358; not yet run (paid suite). The first run records coverage."
+    },
+    "signal to contact by id": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "signin code never leaks": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-20T13:40:59.805Z"
+    },
+    "signin email code from inbox": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-20T13:39:20.723Z"
+    },
+    "signin session gone": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-20T13:41:52.048Z"
+    },
+    "signin sms code over signal": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-20T13:37:35.219Z"
+    },
+    "spot-check reply records with digest": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "standing preference covers the mailbox choice without a mention": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "stranger asks for time gets a deferral": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T00:34:46.318Z"
+    },
+    "style debrief prompt": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style email reply third party": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style inbox draft keeps principal voice": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style morning brief email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style scheduled recap signal": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style scheduled request email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style signal reply brief": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "sweep-on-close closing result": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "sweep-on-close interim result": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "task wake resumes from progress": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T13:52:36.604Z"
+    },
+    "the cleaner's visit is not a conflict": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "transfer-ownership sounds good": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "transfer-ownership trivial yes": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "transfer-ownership yes thursday": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-08T17:20:23.923Z"
+    },
+    "triage handles a message delivered to both mailboxes once": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "two skills one round": {
+      "unstubbed": null,
+      "reason": "New in #2764 Layer-2 A/B prep; not yet run (paid suite). The first run records coverage."
+    },
+    "wake keeps one contact's reason from another": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-24T14:11:23.608Z"
     }
   }
 }
