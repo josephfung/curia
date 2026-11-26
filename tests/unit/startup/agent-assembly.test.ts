@@ -234,6 +234,38 @@ describe('assembleAgent', () => {
     expect(rc.principalIdentities).toBe(ctx.principalIdentities);
   });
 
+  it('counts listed skill member send tools toward principalReach (#2764)', async () => {
+    // Sends live in messaging; without listing their members in reach, on-demand
+    // would drop the principal-reach block even though the agent can still send.
+    const configs = [coordinatorYaml({ pinned_skills: ['messaging'] })];
+    const ctx = buildContext(textProvider(), configs);
+    ctx.toolRegistry.register(toolManifest('email-send'), noopHandler);
+    ctx.skillRegistry.register(
+      {
+        name: 'messaging',
+        description: 'Send to people on their channels',
+        tools: ['email-send'],
+        instructions: '## Messaging\nSend carefully.',
+      },
+      '/fixture/messaging',
+    );
+    const seen: string[][] = [];
+    ctx.principalReach = (tools) => {
+      seen.push([...tools]);
+      return { channels: ['email'] };
+    };
+
+    const coordinator = assembleAgent(configs[0]!, ctx);
+    expect(coordinator.runtimeConfig.principalReach).toBeTypeOf('function');
+    const reach = await coordinator.runtimeConfig.principalReach!();
+    expect(reach).toEqual({ channels: ['email'] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('email-send');
+    // Tool is listed, not boot-pinned.
+    expect(coordinator.pinnedToolNames).not.toContain('email-send');
+    expect(coordinator.runtimeConfig.skillList?.map((s) => s.name)).toEqual(['messaging']);
+  });
+
   it('withholds coordinator-only blocks from specialists and resolves their placeholders', () => {
     const configs = [coordinatorYaml(), specialistYaml({ inject_specialists: true })];
     const ctx = buildContext(textProvider(), configs);
