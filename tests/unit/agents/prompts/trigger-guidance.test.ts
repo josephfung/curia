@@ -197,10 +197,11 @@ describe('spot-check-reply guidance', () => {
   // The block is hard-wrapped, so phrase checks run on the text with line breaks folded.
   const flat = text.replace(/\s+/g, ' ');
 
-  it('points the coordinator at skill-activate reports, then record-spot-check', () => {
-    expect(text).toContain('skill-activate');
-    expect(text).toContain('`reports`');
-    expect(text.indexOf('skill-activate')).toBeLessThan(text.indexOf('record-spot-check'));
+  it('points the coordinator at the pre-loaded reports skill, then record-spot-check', () => {
+    // #2764: spot-check turns pre-activate `reports` instead of telling the model to skill-activate.
+    expect(flat).toContain('the reports skill is already loaded');
+    expect(text).toContain('record-spot-check');
+    expect(flat.indexOf('already loaded')).toBeLessThan(flat.indexOf('record-spot-check'));
   });
 
   it('says to ask rather than guess', () => {

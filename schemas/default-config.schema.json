@@ -136,6 +136,14 @@
         }
       }
     },
+    "conversationActiveSkills": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idleTtlHours": { "type": "number", "minimum": 0 },
+        "cap": { "type": "integer", "minimum": 1 }
+      }
+    },
     "workingMemory": {
       "type": "object",
       "additionalProperties": false,

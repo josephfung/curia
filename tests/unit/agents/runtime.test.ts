@@ -3311,10 +3311,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
   };
 
-  it('splices instruction block into streaming transcript so the next LLM round sees it (#1563)', async () => {
-    // skill-activate writes into ctx.messages (the primitive's workingMessages),
-    // not the outer messages array. This test fails if that splice targets the
-    // wrong array — the following openStream/chat round would miss the block.
+  it('delivers instruction block append-only in the tool result so the next LLM round sees it (#1563, #2764)', async () => {
+    // skill-activate no longer splices a system message; bodies ride in the tool_result
+    // (ADR-070). This test fails if applySkillActivationToTurn does not append them.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
@@ -3400,25 +3399,29 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(secondTools).toContain('task-create');
     expect(secondTools).toContain('task-list');
 
-    // Instruction block must appear in the FOLLOWING LLM round's messages —
-    // proof the splice landed on the streaming working transcript (ctx.messages),
-    // which openStream snapshots for chatWithRetry.
+    // Instruction block must appear in a tool_result on the FOLLOWING LLM round —
+    // proof append-only delivery landed on the working transcript.
     const secondMessages = chatCalls[1]!.messages as Array<{ role: string; content: unknown }>;
-    const instructionMsg = secondMessages.find(
-      (m) => m.role === 'system'
-        && typeof m.content === 'string'
-        && m.content.includes('[Activated skill: tasks]')
-        && m.content.includes('Task Management'),
-    );
-    expect(instructionMsg).toBeDefined();
-    // First round must NOT yet have the activation block (splice happens mid-tool).
+    const toolResultHasInstructions = secondMessages.some((m) => {
+      if (m.role !== 'user' || !Array.isArray(m.content)) return false;
+      return (m.content as Array<{ type?: string; content?: string }>).some(
+        (block) => block.type === 'tool_result'
+          && typeof block.content === 'string'
+          && block.content.includes('[Activated skill: tasks]')
+          && block.content.includes('Task Management'),
+      );
+    });
+    expect(toolResultHasInstructions).toBe(true);
+    // First round must NOT yet have the activation block (activation happens mid-tool).
     const firstMessages = chatCalls[0]!.messages as Array<{ role: string; content: unknown }>;
     expect(
-      firstMessages.some(
-        (m) => m.role === 'system'
-          && typeof m.content === 'string'
-          && m.content.includes('[Activated skill: tasks]'),
-      ),
+      firstMessages.some((m) => {
+        if (typeof m.content === 'string') return m.content.includes('[Activated skill: tasks]');
+        if (!Array.isArray(m.content)) return false;
+        return (m.content as Array<{ content?: string }>).some(
+          (block) => typeof block.content === 'string' && block.content.includes('[Activated skill: tasks]'),
+        );
+      }),
     ).toBe(false);
   });
 
