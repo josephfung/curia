@@ -119,28 +119,43 @@ At startup, the framework connects to each MCP server, discovers tools via `tool
 
 ## Skill Discovery & Activation
 
-Vocabulary (ADR-031): a **tool** is the callable atom; a **skill** is a bundle of tools +
-optional `SKILL.md` instructions. Agents pin **skills** (`pinned_skills`); discovery and
-activation also operate at the skill level.
+Vocabulary (ADR-031, ADR-070): a **tool** is the callable atom; a **skill** is a bundle of
+tools + optional `SKILL.md` instructions. Agents pin **skills** or **tools**
+(`pinned_skills`); discovery and activation operate at the skill level.
 
-Two orthogonal axes (design §6 / #1495):
+Two pin kinds only ([ADR-070](../adr/070-skills-load-on-demand.md)):
 
-| Axis | Options |
-|------|---------|
-| **Availability** | pinned (curated, always in toolkit) vs discoverable (`allow_discovery`) |
-| **Instruction-loading** | eager (bootstrap) vs lazy (on activation). Pinned ≠ eager for future imports; today pinned skills load instructions at bootstrap. |
+| Pin | Always in context | Loads on activation |
+|-----|-------------------|---------------------|
+| **Skill pin** | Name + description in the `## Skills` list | SKILL.md body + member tools |
+| **Tool pin** | That one tool's definition | — (already loaded) |
 
-### Tiered lookup
+Synthetic singleton skills expand as tool pins. There is no eager skill-body mode.
 
-1. **Tier 0 — pinned skills** — expanded at bootstrap via `resolvePinnedSkills` (member tools + instruction blocks). Unchanged by activation.
-2. **Tier 1 — task-active skills** — recorded in `tasks.progress.activeSkills`. On each wake, re-loaded as a strong prior: skills with no whole-token overlap (≥3 chars) against the current step are dropped when any other active skill still matches; if none match, MRU fills up to the cap (default 5). Unchanged sets are not re-written (no `updated_at` / bus churn).
-3. **Tier 2 — discovery** — only when Tiers 0/1 miss and the agent has `allow_discovery: true`.
+### Lookup and pre-activation
 
-### Pinned skills (Tier 0)
-Explicitly listed in agent config (`pinned_skills`). Always available to the agent, always included in the LLM's tool list; instruction bodies are appended to the system prompt at bootstrap.
+1. **Listed skills** — skill pins appear in `## Skills` after the specialist roster. Bodies
+   and member tools are not in the always-on toolkit until activation.
+2. **Tool pins** — always in the working tool list (domain tools for specialists; a small
+   always-on set for the coordinator).
+3. **Code pre-activation** — at turn start, `preActivateSkills` loads skills for wakes
+   (every skill on the task, cap 8, no relevance filter), conversation carry (unused ≤24h,
+   at most 8, MRU), declared/learned job skills, Bullpen, onboarding, spot-check digest,
+   and `job-report` on scheduler turns. Each writes `skill.activated` with a `by` path.
+4. **Discovery** — when listed and pre-activated skills miss and the agent has
+   `allow_discovery: true`, `tool-registry` search can surface more skills to activate.
 
-### Discoverable tools & skills (Tier 2)
-All registered tools and non-synthetic skills are searchable via the built-in `tool-registry` tool. Agents with `allow_discovery: true` automatically receive `tool-registry` and `skill-activate` in their tool list. When the LLM needs a capability not in its pinned set:
+### Skill pins
+Explicitly listed in agent config (`pinned_skills`). The model sees name + description and
+must call `skill-activate` (or rely on code pre-activation) before using member tools.
+Every agent with at least one listed skill receives `skill-activate`; `allow_discovery`
+gates `tool-registry` only. `principalReach` counts tools from tool pins **and** member
+tools of listed skills, so send tools inside skills do not silently cut reach.
+
+### Discoverable tools & skills
+All registered tools and non-synthetic skills are searchable via the built-in `tool-registry`
+tool. Agents with `allow_discovery: true` receive `tool-registry` in their tool list. When
+the LLM needs a capability not yet loaded:
 
 ```text
 tool-registry({ query: "send email" })
@@ -157,11 +172,14 @@ returns the `tasks` skill, not the atom alone — so the discipline block cannot
 
 ```text
 skill-activate({ skill: "tasks" })
+# or several at once:
+skill-activate({ skills: ["tasks", "documents"] })
 ```
 
-Activation loads member tools into the working toolkit and injects the skill's `SKILL.md`
-body into the turn. It **never widens authority** — member tools still pass `allowed_callers`
-and `action_risk` at invoke time; disallowed members are listed in `skippedTools` and omitted.
+Activation appends member tools to the working toolkit and returns the skill's `SKILL.md`
+body inside the tool result (append-only — the system-prompt prefix stays cacheable). It
+**never widens authority** — member tools still pass `allowed_callers` and `action_risk` at
+invoke time; disallowed members are listed in `skippedTools` and omitted.
 
 ### Imported Anthropic skills (Phase 3 / #1490)
 
@@ -179,7 +197,7 @@ drop the folder into the skills directory, install+enable in the registry, resta
   allowed to call — instructions only steer.
 
 When a task is bound, activation also appends the skill to `progress.activeSkills` (MRU,
-capped) so park/resume wakes restore Tier 1.
+capped at 8) so park/resume wakes pre-activate every skill recorded on the task.
 
 Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list.
 `tool-registry` and `skill-activate` are excluded from search results to avoid circular
