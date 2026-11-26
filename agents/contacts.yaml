@@ -239,7 +239,15 @@ system_prompt: |
   complete it).
 
 pinned_skills:
-  - contacts
+  # Everyday contacts as tool pins (#2764 §6); trust/upkeep stay listed skills.
+  - contact-lookup
+  - contact-create
+  - contact-update
+  - contact-rename
+  - contact-set-role
+  - contact-link-identity
+  - contact-unlink-identity
+  - contact-list
   # Trust + upkeep (#2764): listed for on-demand; pinned eagerly until switch-over.
   - contact-trust
   - contact-upkeep
@@ -258,7 +266,7 @@ pinned_skills:
   - calendar-list-events
   # Scheduler observability — required for all scheduled tasks.
   - scheduler-report
-  # Task backlog (heartbeat-eligible) + document workspace
+  # Shared bundles listed for on-demand (#2764); still eager-expanded until switch-over.
   - tasks
   - documents
   - context-bridge
