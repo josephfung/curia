@@ -49,12 +49,14 @@ const APP_PROPERTY_DOC_ID = 'curiaDocumentId';
 const MAX_COMMENT_PAGES = 10;
 /** Per-request bound on every Drive call, cut further to what is left of the call's budget. */
 const REQUEST_TIMEOUT_MS = 20_000;
+/** Budget kept for recording the result and returning it, after the last Drive call. */
+const RECORD_RESERVE_MS = 5_000;
 /**
- * Budget a write must have left when it starts: the write, the export after it and the record.
- * A publish short of it stops before writing, so it never times out between changing the Doc
- * and recording that it did.
+ * Budget a write must have left when it starts: a full request for the write, one for the export
+ * after it, and the record reserve. A publish short of it stops before writing, so it never
+ * times out between changing the Doc and recording that it did.
  */
-const WRITE_RESERVE_MS = 30_000;
+const WRITE_RESERVE_MS = 2 * REQUEST_TIMEOUT_MS + RECORD_RESERVE_MS;
 /** Drive 403 reasons that are quota or rate limits, not missing access. */
 const QUOTA_REASONS = new Set(['storageQuotaExceeded', 'userRateLimitExceeded', 'rateLimitExceeded', 'dailyLimitExceeded']);
 
@@ -112,9 +114,12 @@ function outcomeUnknown(err: unknown): boolean {
   return status === undefined || status >= 500;
 }
 
-/** Request options for one Drive call: cancelled with the tool call, and never past its deadline. */
-function requestOptions(budget: CallBudget): { timeout: number; signal?: AbortSignal } {
-  const timeout = Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remainingMs(budget)));
+/**
+ * Request options for one Drive call: cancelled with the tool call, and ending `reserveMs` before
+ * its deadline at the latest.
+ */
+function requestOptions(budget: CallBudget, reserveMs = 0): { timeout: number; signal?: AbortSignal } {
+  const timeout = Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remainingMs(budget) - reserveMs));
   return { timeout, ...(budget.signal ? { signal: budget.signal } : {}) };
 }
 
@@ -140,18 +145,20 @@ function defaultTitle(doc: WorkingDocRow): string {
 }
 
 interface OpenComments {
-  /** Open (unresolved, undeleted) comment ids, sorted. */
-  ids: string[];
-  /** Their last-modified times (epoch ms; NaN when Drive gave none). */
+  /** `id@modifiedTime` of each open (unresolved, undeleted) comment, sorted. A reply or an edit
+   *  moves a comment's modifiedTime, so this changes with any new feedback, not only new comments. */
+  states: string[];
+  /** Their last-modified times (epoch ms). */
   times: number[];
 }
 
 /**
- * The Doc's open comments, or null when there are more pages than MAX_COMMENT_PAGES (the
- * caller then treats the comment state as unknown and fails closed).
+ * The Doc's open comments, or null when their state can't be read in full: more pages than
+ * MAX_COMMENT_PAGES, or an open comment Drive returns without an id or a time. The caller then
+ * fails closed.
  */
 async function openComments(drive: Drive, fileId: string, budget: CallBudget): Promise<OpenComments | null> {
-  const ids: string[] = [];
+  const states: string[] = [];
   const times: number[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
@@ -163,17 +170,19 @@ async function openComments(drive: Drive, fileId: string, budget: CallBudget): P
     }, requestOptions(budget));
     for (const c of res.data.comments ?? []) {
       if (c.resolved || c.deleted) continue;
-      ids.push(c.id ?? '');
-      times.push(c.modifiedTime ? Date.parse(c.modifiedTime) : NaN);
+      const at = c.modifiedTime ? Date.parse(c.modifiedTime) : NaN;
+      if (!c.id || Number.isNaN(at)) return null;
+      states.push(`${c.id}@${c.modifiedTime}`);
+      times.push(at);
     }
     pageToken = res.data.nextPageToken ?? undefined;
-    if (!pageToken) return { ids: [...ids].sort(), times };
+    if (!pageToken) return { states: [...states].sort(), times };
   }
   return null;
 }
 
-async function exportMarkdown(drive: Drive, fileId: string, budget: CallBudget): Promise<string> {
-  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { ...requestOptions(budget), responseType: 'text' });
+async function exportMarkdown(drive: Drive, fileId: string, budget: CallBudget, reserveMs = 0): Promise<string> {
+  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { ...requestOptions(budget, reserveMs), responseType: 'text' });
   return String(res.data);
 }
 
@@ -186,7 +195,7 @@ function shortHash(text: string): string {
  * publish with it goes through only while neither has changed since the caller read it back.
  */
 function docVersionOf(markdown: string, comments: OpenComments): string {
-  return shortHash(`${markdown}\n\u0000open-comments:${comments.ids.join(',')}`);
+  return shortHash(`${markdown}\n\u0000open-comments:${comments.states.join(',')}`);
 }
 
 export class DocPublishGoogleHandler implements ToolHandler {
@@ -448,7 +457,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
     }
     if (comments === null) {
       ctx.log.info({ path: doc.path, fileId: record.id }, `${TOOL}: refused, too many comments to check`);
-      return { success: false, error: `Not published: the Doc (${record.url}) has more open comments than Curia can check. Ask the principal to resolve the ones that are done, or whether to publish with overwrite: true.` };
+      return { success: false, error: `Not published: Curia could not read the Doc's open comments in full (${record.url}): there are more than it checks, or Drive left out a comment's id or time. Ask the principal to resolve the ones that are done, or whether to publish with overwrite: true.` };
     }
     const version = docVersionOf(markdown, comments);
 
@@ -465,8 +474,8 @@ export class DocPublishGoogleHandler implements ToolHandler {
     const changes: string[] = [];
     if (record.content_hash === UNKNOWN_CONTENT_HASH) changes.push('Curia could not tell whether it was edited');
     else if (shortHash(markdown) !== record.content_hash) changes.push('it was edited');
-    // A comment with no usable time on either side counts as new (fail closed).
-    if (comments.times.some((at) => Number.isNaN(at) || Number.isNaN(cutoff) || at > cutoff)) changes.push('it has new open comments');
+    // An unreadable cutoff counts every open comment as new (fail closed).
+    if (comments.times.some((at) => Number.isNaN(cutoff) || at > cutoff)) changes.push('it has new or answered open comments');
     if (changes.length === 0) return null;
     ctx.log.info({ path: doc.path, fileId: record.id, changes }, `${TOOL}: refused, Doc changed since last publish`);
     return {
@@ -489,8 +498,12 @@ export class DocPublishGoogleHandler implements ToolHandler {
    * write already succeeded, and an unknown hash only makes the next publish ask for a read-back.
    */
   private async contentHashAfterWrite(ctx: ToolContext, drive: Drive, fileId: string): Promise<string | null> {
+    if (remainingMs(ctx) - RECORD_RESERVE_MS <= 0) {
+      ctx.log.warn({ fileId }, `${TOOL}: no time left to read the Doc back after the write; recording an unknown hash`);
+      return null;
+    }
     try {
-      return shortHash(await exportMarkdown(drive, fileId, ctx));
+      return shortHash(await exportMarkdown(drive, fileId, ctx, RECORD_RESERVE_MS));
     } catch (err) {
       ctx.log.warn({ err, fileId }, `${TOOL}: could not export the Doc after the write; the next publish will ask for doc_version`);
       return null;
