@@ -81,7 +81,7 @@ describe('probeFrameContent', () => {
   // Prod loads skills via tsx (esbuild keepNames: true), which wraps named inner functions in
   // __name(...), a helper that does not exist in the page. Same guard as dom-extract.test.ts.
   it('stays self-contained when serialized into a page after a keepNames transpile', async () => {
-    const srcPath = resolve(process.cwd(), 'skills/web/tools/web-browser/settle-probe.ts');
+    const srcPath = resolve(process.cwd(), 'skills/browser/tools/web-browser/settle-probe.ts');
     const { code } = await transformWithEsbuild(readFileSync(srcPath, 'utf8'), srcPath, {
       keepNames: true, loader: 'ts', format: 'cjs',
     });

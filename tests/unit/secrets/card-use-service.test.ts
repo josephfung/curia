@@ -1,5 +1,5 @@
 // card-use-service.test.ts — decline, and the row helper (#1358). request/confirm are covered
-// beside the tools in skills/web/tools/card-use-*/handler.test.ts.
+// beside the tools in skills/browser/tools/card-use-*/handler.test.ts.
 
 import { describe, it, expect, vi } from 'vitest';
 import { CardUseService, cardUseRequestIdOf } from '../../../src/secrets/card-use-service.js';

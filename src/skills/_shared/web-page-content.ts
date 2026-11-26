@@ -1,7 +1,7 @@
 // web-page-content.ts — the layout of web-browser's page text, and the part of it that
 // counts as an identifier source (#2498, ADR-047).
 //
-// web-browser builds its `content` from these markers (skills/web/tools/web-browser/
+// web-browser builds its `content` from these markers (skills/browser/tools/web-browser/
 // handler.ts, getCleanedContent): the top frame's prose, then each other frame's prose
 // under a frame marker, then the interactable-element list, all inside the untrusted-data
 // wrapper. Provenance reads it back with mainFrameProse below, so the builder and the

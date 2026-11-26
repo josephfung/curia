@@ -154,11 +154,13 @@ pinned_context:
 pinned_skills:
   # Bundles (ADR-031 / #1494)
   - web
+  - browser
   # google-workspace (MCP-projected, ADR-032) is NOT pinned (#2024): its ~50 tool
   # definitions (~85-100 KB) rode on every call, and 0.7% of tasks used them. The
   # "Google Workspace" prompt section has the coordinator skill-activate it instead.
   - executive-profile
   - email
+  - mailbox
   # Tool pins, not the context-bridge bundle: its keep-open tool is for delegated
   # specialists only (#1972), so the coordinator takes just release and clear.
   - context-bridge-release

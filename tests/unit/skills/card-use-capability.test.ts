@@ -10,13 +10,13 @@ import { ExecutionLayer, CARD_USE_ALLOWED_TOOLS } from '../../../src/skills/exec
 import { discoverToolManifests } from '../../../src/skills/loader.js';
 import type { CardUseCapability } from '../../../src/secrets/card-use-service.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
-import { CardUseConfirmHandler, CARD_USE_CONFIRM_REFUSAL } from '../../../skills/web/tools/card-use-confirm/handler.js';
-import { CardUseRequestHandler } from '../../../skills/web/tools/card-use-request/handler.js';
+import { CardUseConfirmHandler, CARD_USE_CONFIRM_REFUSAL } from '../../../skills/browser/tools/card-use-confirm/handler.js';
+import { CardUseRequestHandler } from '../../../skills/browser/tools/card-use-request/handler.js';
 
 const logger = pino({ level: 'silent' });
 
 function manifestOf(tool: string): ToolManifest {
-  const path = resolve(import.meta.dirname, `../../../skills/web/tools/${tool}/tool.json`);
+  const path = resolve(import.meta.dirname, `../../../skills/browser/tools/${tool}/tool.json`);
   return JSON.parse(readFileSync(path, 'utf-8')) as ToolManifest;
 }
 

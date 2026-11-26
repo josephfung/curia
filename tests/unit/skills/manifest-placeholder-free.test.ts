@@ -165,30 +165,32 @@ const EMAIL_ACCOUNT_PROVENANCE =
 const EXAMPLE_MAILBOX = /e\.g\.\s*'[^']+'|\b(?:curia|joseph)\b/i;
 
 describe('email account inputs cite console provenance', () => {
-  it('every email tool account input names the console path and no example mailbox', () => {
+  it('every email/mailbox tool account input names the console path and no example mailbox', () => {
     const withAccount = MANIFESTS.filter(m => {
-      if (!m.relative.startsWith(`email${path.sep}tools${path.sep}`)) return false;
+      const underEmail = m.relative.startsWith(`email${path.sep}tools${path.sep}`);
+      const underMailbox = m.relative.startsWith(`mailbox${path.sep}tools${path.sep}`);
+      if (!underEmail && !underMailbox) return false;
       if (typeof m.manifest !== 'object' || m.manifest === null) return false;
       const inputs = (m.manifest as { inputs?: unknown }).inputs;
       if (typeof inputs !== 'object' || inputs === null) return false;
       return typeof (inputs as { account?: unknown }).account === 'string';
     });
 
-    // All thirteen email tools that take `account`. A new one must cite the same path.
+    // All thirteen compose + mailbox tools that take `account`. A new one must cite the same path.
     expect(withAccount.map(m => m.relative).sort()).toEqual([
-      'email/tools/email-archive/tool.json',
-      'email/tools/email-create-folder/tool.json',
-      'email/tools/email-download-attachment/tool.json',
       'email/tools/email-draft-save/tool.json',
-      'email/tools/email-get-thread/tool.json',
-      'email/tools/email-get/tool.json',
-      'email/tools/email-label/tool.json',
-      'email/tools/email-list-folders/tool.json',
-      'email/tools/email-list/tool.json',
-      'email/tools/email-mark-read/tool.json',
       'email/tools/email-reply/tool.json',
       'email/tools/email-send/tool.json',
       'email/tools/send-draft/tool.json',
+      'mailbox/tools/email-archive/tool.json',
+      'mailbox/tools/email-create-folder/tool.json',
+      'mailbox/tools/email-download-attachment/tool.json',
+      'mailbox/tools/email-get-thread/tool.json',
+      'mailbox/tools/email-get/tool.json',
+      'mailbox/tools/email-label/tool.json',
+      'mailbox/tools/email-list-folders/tool.json',
+      'mailbox/tools/email-list/tool.json',
+      'mailbox/tools/email-mark-read/tool.json',
     ]);
 
     const violations: string[] = [];
