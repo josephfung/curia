@@ -72,7 +72,7 @@ function memoryActionLog() {
 }
 
 function manifestFrom(tool: string): ToolManifest {
-  return JSON.parse(readFileSync(path.join(REPO, 'skills/autonomy/tools', tool, 'tool.json'), 'utf-8')) as ToolManifest;
+  return JSON.parse(readFileSync(path.join(REPO, 'skills/approvals/tools', tool, 'tool.json'), 'utf-8')) as ToolManifest;
 }
 
 type RunState = CaseAttempt & { scope: SeedScope };
