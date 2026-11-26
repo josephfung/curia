@@ -6,9 +6,9 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pino from 'pino';
 import { ArchiveExtractHandler } from './handler.js';
 import { FileParseHandler } from '../file-parse/handler.js';
-import { TempFileStore } from '../../src/skills/temp-file-store.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
+import { TempFileStore } from '../../../../src/skills/temp-file-store.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { InfraLlm, InfraLlmResult } from '../../../../src/skills/infra-llm.js';
 
 const TEMPFILES_BASE = '/tmp/curia-tempfiles';
 const DMARC_XML_URL = new URL('./__fixtures__/dmarc-report.xml', import.meta.url);

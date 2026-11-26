@@ -14,10 +14,10 @@
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type { Node, HTMLElement as HtmlElement } from 'node-html-parser';
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { InfraLlm } from '../../src/skills/infra-llm.js';
-import { DOCUMENT_MIME_TYPES, effectiveDocumentMime, filenameExtension } from '../_shared/document-types.js';
-import { resolveTempFileUrl } from '../_shared/temp-file-url.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { InfraLlm } from '../../../../src/skills/infra-llm.js';
+import { DOCUMENT_MIME_TYPES, effectiveDocumentMime, filenameExtension } from '../../../_shared/document-types.js';
+import { resolveTempFileUrl } from '../../../_shared/temp-file-url.js';
 
 // CJS-only deps: load via createRequire so the CJS build is used reliably under
 // Node ESM + tsx/vitest (Vite's ESM/CJS interop can lose named exports).

@@ -166,6 +166,8 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       'context-bridge',
       'executive-profile',
       'setup',
+      'files',
+      'secrets',
     ]) {
       const raw = readFileSync(resolve(skillsDir, name, 'SKILL.md'), 'utf-8');
       const parsed = parseSkillMd(raw);

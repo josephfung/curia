@@ -60,6 +60,8 @@ function loadOnDiskSkills(registry: SkillRegistry): void {
     'context-bridge',
     'executive-profile',
     'setup',
+    'files',
+    'secrets',
   ]) {
     const raw = readFileSync(resolve(skillsDir, name, 'SKILL.md'), 'utf-8');
     const parsed = parseSkillMd(raw);
@@ -246,12 +248,18 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(resolveAgentListed('coordinator.yaml')).toContain('memory');
   });
 
-  it('coordinator pins list-user-secrets alongside secret-capture-request (#1497)', () => {
+  it('coordinator lists the secrets skill instead of tool-pinning vault tools (#1497 / #2764)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).toContain('list-user-secrets');
-    expect(config.pinned_skills).toContain('secret-capture-request');
+    expect(config.pinned_skills).toContain('secrets');
+    expect(config.pinned_skills).not.toContain('list-user-secrets');
+    expect(config.pinned_skills).not.toContain('secret-capture-request');
+    expect(resolveAgentListed('coordinator.yaml')).toContain('secrets');
+    expect(resolveAgentListed('coordinator.yaml')).toContain('files');
     const tools = resolveAgentTools('coordinator.yaml');
-    expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
+    expect(tools).not.toContain('list-user-secrets');
+    expect(tools).not.toContain('secret-capture-request');
+    expect(tools).not.toContain('file-parse');
+    expect(tools).not.toContain('archive-extract');
   });
 
   // #1960: unused for the 30-day baseline, so they are reached through discovery
