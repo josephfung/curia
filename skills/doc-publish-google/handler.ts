@@ -414,10 +414,19 @@ export class DocPublishGoogleHandler implements ToolHandler {
       content_hash: contentHash ?? UNKNOWN_CONTENT_HASH,
     });
     if (!recorded.ok) {
+      if (recorded.bindingChanged) {
+        // The record was cleared or replaced meanwhile, so the next publish won't find this Doc:
+        // an unversioned one would start a new Doc.
+        return {
+          success: false,
+          error: `The Doc was updated (${url}), but ${doc.path}'s \`${GOOGLE_DOC_KEY}\` record was cleared or replaced while publishing and was left that way. ` +
+            'Give the principal this link. Do not publish the document again unless the principal wants a new Doc.',
+        };
+      }
       return {
         success: false,
         error: `The Doc was updated (${url}) but the publish could not be recorded on ${doc.path}: ${recorded.error} ` +
-          'The next publish will report the Doc as edited because of this. Compare it with the document (get_doc_as_markdown) before publishing it again with the doc_version that refusal names.',
+          'Read the Doc back with get_doc_as_markdown and compare it with the document before publishing again.',
       };
     }
     ctx.log.info({ path: doc.path, fileId: record.id }, `${TOOL}: updated Doc`);
@@ -519,7 +528,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
     ctx: ToolContext,
     published: WorkingDocRow,
     record: PublishedDocRecord,
-  ): Promise<{ ok: true; note: string | null } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; note: string | null } | { ok: false; error: string; bindingChanged?: true }> {
     const repo = ctx.workingDocs!;
     let target = published;
     try {
@@ -541,7 +550,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
         // Someone cleared or replaced the record meanwhile (a doc-write setting google_doc):
         // that newer choice stands, and is not overwritten by a retry.
         if (JSON.stringify(result.document.frontmatter[GOOGLE_DOC_KEY]) !== JSON.stringify(published.frontmatter[GOOGLE_DOC_KEY])) {
-          return { ok: false, error: `its \`${GOOGLE_DOC_KEY}\` record was changed while publishing, so it was left as it now is.` };
+          return { ok: false, bindingChanged: true, error: `its \`${GOOGLE_DOC_KEY}\` record was changed while publishing, so it was left as it now is.` };
         }
         target = result.document;
       }

@@ -508,6 +508,7 @@ describe('doc-publish-google — publishing again', () => {
     repo.update.mockRejectedValueOnce(new Error('connection reset'));
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
     expect(result).toEqual({ success: false, error: expect.stringContaining('was updated') });
+    expect((result as { error: string }).error).toContain('Read the Doc back');
     expect((result as { error: string }).error).not.toContain('overwrite');
   });
 
@@ -608,7 +609,8 @@ describe('doc-publish-google — publishing again', () => {
     docUnchanged();
     updateOk();
     const controller = new AbortController();
-    const ctx = makeCtx(recordedRepo(), { path: PATH }, { signal: controller.signal, deadline: Date.now() + 45_000 } as Partial<ToolContext>);
+    // Well above the 45 s write reserve, so the clock moving during the test can't trip it.
+    const ctx = makeCtx(recordedRepo(), { path: PATH }, { signal: controller.signal, deadline: Date.now() + 80_000 } as Partial<ToolContext>);
     await new DocPublishGoogleHandler().execute(ctx);
     const opts = drive.update.mock.calls[0]![1] as { timeout: number; signal: AbortSignal };
     expect(opts.signal).toBe(controller.signal);
@@ -653,7 +655,9 @@ describe('doc-publish-google — publishing again', () => {
       return { ok: false, conflict: true, document: repo.current };
     });
     const result = await new DocPublishGoogleHandler().execute(makeCtx(repo, { path: PATH }));
-    expect(result).toEqual({ success: false, error: expect.stringContaining('was changed while publishing') });
+    expect(result).toEqual({ success: false, error: expect.stringContaining('cleared or replaced while publishing') });
+    expect((result as { error: string }).error).toContain('Do not publish the document again unless the principal wants a new Doc');
+    expect((result as { error: string }).error).not.toContain('doc_version');
     expect(repo.current!.frontmatter.google_doc).toBeNull();
     expect(repo.updates).toHaveLength(1);
   });

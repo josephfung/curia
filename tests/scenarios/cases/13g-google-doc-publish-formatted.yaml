@@ -106,9 +106,11 @@ expected_behaviors:
       any_of:
         - called: manage_drive_access
           with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er, role: writer }
+        # The batch form: `contains` is a substring match on the stringified argument, so the
+        # needle names the role key, not just the word (an address like writer@… must not pass).
         - called: manage_drive_access
           with: { file_id: 1BrdPrp2758Gq4Lm8Zx2Cv6Bn0Mk3Jh7Fd1Sa5Qw9Er }
-          contains: { recipients: writer }
+          contains: { recipients: '"role":"writer"' }
   - id: sends_the_link
     weight: important
     description: Gives the principal the Doc's link and says it is ready to edit.

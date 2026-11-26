@@ -169,10 +169,11 @@ the auto-pin). The document stays the source of truth; the Doc is a formatted co
   leaves the key out keeps it; `google_doc: null` clears it, so the next publish starts a new Doc.
 - A later publish replaces the recorded Doc's whole content. It overwrites only a Doc whose Drive
   `appProperties` bind it to this document, and, unless the caller passes `overwrite`, only when
-  a hash of the Doc's own Markdown export still matches the record and no comment was opened
-  since the last publish. (Drive's `modifiedTime` can't serve: measured live, it moves on shares
-  and lags edits, while the export ignores comments and shares and changes at once on any text or
-  style edit.) A refusal names a `doc_version` covering the Doc's current content and its open
+  a hash of the Doc's own Markdown export still matches the record and no unresolved, undeleted
+  comment was modified since the last publish: a new comment, or a reply or edit on an older one,
+  both advance the comment's own `modifiedTime`. (The file's `modifiedTime` can't serve for the
+  content: measured live, it moves on shares and lags edits, while the export ignores comments and
+  shares and changes at once on any text or style edit.) A refusal names a `doc_version` covering the Doc's current content and its open
   comments; after reading the Doc back and folding its changes in, a publish with that
   `doc_version` goes through while neither has changed. Content is read last, just before the
   write; an edit in the second between them is still overwritten, since a Markdown upload takes
