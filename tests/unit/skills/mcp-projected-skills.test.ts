@@ -56,12 +56,25 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
       ['atproto-mcp', ['create_post']],
     ]);
     // atproto tool not loaded — pin resolution will skip missing members
-    const added = registerMcpProjectedSkills(projected, skills, logger);
+    const added = registerMcpProjectedSkills(
+      projected,
+      skills,
+      logger,
+      undefined,
+      new Map([
+        [
+          'google-workspace',
+          'Drive, Docs and Sheets. Load when a request involves a Google file.',
+        ],
+      ]),
+    );
     expect(added).toBe(2);
 
     const gw = skills.get('google-workspace');
     expect(gw?.synthetic).toBeUndefined();
+    expect(gw?.manifest.description).toContain('Load when');
     expect(gw?.manifest.tools).toEqual(['create_doc', 'search_drive_files']);
+    expect(skills.get('atproto-mcp')?.manifest.description).toMatch(/^MCP server 'atproto-mcp'/);
 
     // Synthetic singletons must not wrap tools owned by the projected skill.
     registerSyntheticSingletonSkills(tools, skills);

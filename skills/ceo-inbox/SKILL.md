@@ -1,7 +1,9 @@
 ---
 name: ceo-inbox
 description: >
-  The principal's personal inbox tools — list/read/search/draft/send/archive/label/mark plus sent-observe and shadow-draft. Per-tool action_risk preserved.
+  The principal's personal mailbox: list, read, search, draft, send, archive, label,
+  mark, sent-observe, and shadow-draft. Load for inbox triage and personal-mail work;
+  office mail stays on email/mailbox.
 version: "0.2.0"
 tools:
   - ceo-inbox-list

@@ -1,8 +1,9 @@
 ---
 name: tasks
 description: >
-  Defer, track, and resume multi-step work with task-create/list/update/complete,
-  plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
+  Defer, track, and resume multi-step work (create/list/update/complete, plan,
+  checkpoint). Load whenever a promise needs a task, work spans turns, or you ask
+  what is open; heartbeat-eligible agents need this skill listed.
 version: "0.2.3"
 heartbeat: true
 tools:

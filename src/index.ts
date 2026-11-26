@@ -1787,7 +1787,18 @@ async function main(): Promise<void> {
   // ADR-032: each connected MCP server projects a skill into SkillRegistry so
   // agents can pin `google-workspace` (etc.) instead of listing every MCP tool.
   // Must run before synthetic singletons so projected members are not re-wrapped.
-  const mcpSkillCount = registerMcpProjectedSkills(mcpProjectedTools, skillRegistry, logger, skillsDir);
+  const mcpDescriptions = new Map(
+    (mcpConfig.servers ?? [])
+      .filter((s): s is typeof s & { description: string } => typeof s.description === 'string' && s.description.trim() !== '')
+      .map((s) => [s.name, s.description.trim()]),
+  );
+  const mcpSkillCount = registerMcpProjectedSkills(
+    mcpProjectedTools,
+    skillRegistry,
+    logger,
+    skillsDir,
+    mcpDescriptions,
+  );
   if (mcpSkillCount > 0) {
     logger.info({ mcpSkillCount }, 'MCP servers projected as skills');
   }

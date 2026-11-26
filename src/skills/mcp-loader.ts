@@ -839,6 +839,8 @@ export function registerMcpProjectedSkills(
   skillRegistry: SkillRegistry,
   logger: Logger,
   skillsDir?: string,
+  /** Optional per-server descriptions from `config/skills.yaml` (#2764). */
+  descriptions?: ReadonlyMap<string, string>,
 ): number {
   let added = 0;
   for (const [serverName, tools] of projectedTools) {
@@ -870,10 +872,15 @@ export function registerMcpProjectedSkills(
         resources = null;
       }
     }
+    const configured = descriptions?.get(serverName)?.trim();
+    const description =
+      configured && configured.length > 0
+        ? configured
+        : `MCP server '${serverName}' — ${membership.length} tool${membership.length === 1 ? '' : 's'} projected as a skill (ADR-032)`;
     skillRegistry.register(
       {
         name: serverName,
-        description: `MCP server '${serverName}' — ${membership.length} tool${membership.length === 1 ? '' : 's'} projected as a skill (ADR-032)`,
+        description,
         version: '1.0.0',
         tools: membership,
         instructions: '',

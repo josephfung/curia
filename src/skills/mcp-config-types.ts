@@ -27,6 +27,12 @@ export interface McpStdioServerEntry {
   action_risk: ActionRisk;
   sensitivity?: 'normal' | 'elevated';
   timeout_ms?: number;
+  /**
+   * Optional skill description for the MCP projection (#2764). Shown in the
+   * agent's skill list / discovery; falls back to a generic "MCP server …"
+   * string when omitted.
+   */
+  description?: string;
   command: string;
   args?: string[];
   /** Non-secret env var literals only. Use secrets[] + inject:{env:} for vault-backed values. */
@@ -44,6 +50,8 @@ export interface McpSseServerEntry {
   action_risk: ActionRisk;
   sensitivity?: 'normal' | 'elevated';
   timeout_ms?: number;
+  /** Optional skill description for the MCP projection (#2764). */
+  description?: string;
   url: string;
   headers?: Record<string, string>;
   fixed_inputs?: Record<string, string>;
