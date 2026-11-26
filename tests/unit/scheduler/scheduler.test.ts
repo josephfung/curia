@@ -1416,6 +1416,46 @@ describe('Scheduler', () => {
       expect(taskEvent.payload.metadata).toBeUndefined();
     });
 
+    it('stamps preActivateSkills from declared payload skills and learned runs (#2764)', async () => {
+      const row = fakeDbRow({
+        originator: null,
+        task_payload: { task: 'weekly contacts dedup', skills: ['contact-upkeep', 'tasks'] },
+        last_run_context: {
+          activatedSkillsRuns: [['mailbox'], ['digest', 'mailbox']],
+        },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.preActivateSkills).toEqual({
+        declared: ['contact-upkeep', 'tasks'],
+        learned: ['mailbox', 'digest'],
+      });
+    });
+
+    it('auto-declares digest on coordinator debrief recap fires (#2764)', async () => {
+      const row = fakeDbRow({
+        agent_id: 'coordinator',
+        agent_task_id: 'task-debrief',
+        intent_anchor: 'daily_debrief',
+        task_payload: { task: 'end-of-day debrief' },
+        originator: null,
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.preActivateSkills).toEqual({
+        declared: ['digest'],
+        learned: [],
+      });
+    });
+
     it('threads boundTask metadata for task-bound fires (#1173)', async () => {
       const row = fakeDbRow({
         agent_task_id: 'task-resumable-1',
