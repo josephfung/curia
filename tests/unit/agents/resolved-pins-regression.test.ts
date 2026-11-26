@@ -158,14 +158,28 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).not.toContain('scheduler-create');
   });
 
-  it('contacts does not gain entity-context via the contacts bundle', () => {
+  it('contacts tool-pins everyday contacts tools and lists trust/upkeep (#2764)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'contacts.yaml'));
-    expect(config.pinned_skills).toContain('contacts');
+    expect(config.pinned_skills).not.toContain('contacts');
+    expect(config.pinned_skills).toContain('contact-lookup');
+    expect(config.pinned_skills).toContain('contact-trust');
+    expect(config.pinned_skills).toContain('contact-upkeep');
     expect(config.pinned_skills).toContain('entity-context');
     const tools = resolveAgent('contacts.yaml');
     expect(tools).toContain('entity-context');
     expect(tools).toContain('contact-lookup');
     expect(tools).toContain('contact-grant-permission');
+  });
+
+  it('calendar and ceo-inbox tool-pin their domain members (#2764)', () => {
+    const calendar = loadAgentConfig(resolve(agentsDir, 'calendar.yaml'));
+    expect(calendar.pinned_skills).not.toContain('calendar');
+    expect(calendar.pinned_skills).toContain('calendar-list-events');
+    expect(calendar.pinned_skills).toContain('calendar-holds-sweep');
+    const ceo = loadAgentConfig(resolve(agentsDir, 'ceo-inbox.yaml'));
+    expect(ceo.pinned_skills).not.toContain('ceo-inbox');
+    expect(ceo.pinned_skills).toContain('ceo-inbox-list');
+    expect(ceo.pinned_skills).toContain('ceo-inbox-shadow-draft');
   });
 
   it('ceo-inbox learning producers do not pull digest review tools', () => {

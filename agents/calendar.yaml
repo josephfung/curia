@@ -443,9 +443,19 @@ system_prompt: |
   rules match), list the candidates and ask which one they mean.
 
 pinned_skills:
-  # Calendar CRUD + holds (skill bundle — expands to per-tool atoms; action_risk stays per-tool)
-  - calendar
-  # Polymorphic / standalone pins
+  # Domain as tool pins (#2764 §6): always loaded; calendar skill is not listed.
+  - calendar-list-calendars
+  - calendar-register
+  - calendar-list-events
+  - calendar-create-event
+  - calendar-update-event
+  - calendar-delete-event
+  - calendar-respond-to-invite
+  - calendar-find-free-time
+  - calendar-check-conflicts
+  - calendar-create-hold
+  - calendar-holds-sweep
+  # Shared / polymorphic pins
   - contact-lookup
   - entity-context
   - date-resolve

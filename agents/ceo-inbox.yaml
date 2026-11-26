@@ -42,7 +42,22 @@ pinned_context:
       description: '{"<mailbox id>": "archive" | "leave_in_inbox"}; unlisted = archive. leave_in_inbox: triage marks mail read instead of archiving it (code applies it).'
 
 pinned_skills:
-  - ceo-inbox
+  # Domain as tool pins (#2764 §6): always loaded; ceo-inbox skill is not listed.
+  - ceo-inbox-list
+  - ceo-inbox-read
+  - ceo-inbox-search
+  - ceo-inbox-download-attachment
+  - ceo-inbox-draft-reply
+  - ceo-inbox-draft-compose
+  - ceo-inbox-draft-edit
+  - ceo-inbox-send-draft
+  - ceo-inbox-archive
+  - ceo-inbox-update-folders
+  - ceo-inbox-label
+  - ceo-inbox-mark-read
+  - ceo-inbox-mark-starred
+  - ceo-inbox-sent-observe
+  - ceo-inbox-shadow-draft
   - file-parse
   - archive-extract
   # Email-observation learning producers (#1419) — polymorphic tool pins so the
@@ -60,6 +75,7 @@ pinned_skills:
   - date-resolve
   - scheduler-report
   - context-bridge
+  # Shared bundles listed for on-demand (#2764); still eager-expanded until switch-over.
   - tasks
   - documents
 
