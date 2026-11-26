@@ -5,7 +5,7 @@ const RECORD = {
   id: 'gdoc-1',
   url: 'https://docs.google.com/document/d/gdoc-1/edit',
   published_at: '2026-11-25T15:00:00.000Z',
-  modified_time: '2026-11-25T15:00:01.000Z',
+  content_hash: '3f2a9c1e0b7d4a55',
 };
 
 describe('readPublishedDocRecord', () => {
@@ -22,7 +22,7 @@ describe('readPublishedDocRecord', () => {
   it('flags a value that is not a complete record', () => {
     expect(readPublishedDocRecord({ google_doc: 'gdoc-1' })).toEqual({ invalid: true });
     expect(readPublishedDocRecord({ google_doc: [RECORD] })).toEqual({ invalid: true });
-    expect(readPublishedDocRecord({ google_doc: { ...RECORD, modified_time: '' } })).toEqual({ invalid: true });
+    expect(readPublishedDocRecord({ google_doc: { ...RECORD, content_hash: '' } })).toEqual({ invalid: true });
     expect(readPublishedDocRecord({ google_doc: { ...RECORD, url: undefined } })).toEqual({ invalid: true });
   });
 });

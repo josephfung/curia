@@ -521,7 +521,7 @@ describe('DocWriteHandler', () => {
   });
 
   describe('published-Doc record (#2758)', () => {
-    const RECORD = { id: 'gdoc-1', url: 'https://docs.google.com/document/d/gdoc-1/edit', published_at: 'a', modified_time: 'b' };
+    const RECORD = { id: 'gdoc-1', url: 'https://docs.google.com/document/d/gdoc-1/edit', published_at: 'a', content_hash: 'b' };
 
     function replaceWith(frontmatter: Record<string, unknown> | undefined) {
       const stored = makeDoc({ version: 2, frontmatter: { title: 'Brief', google_doc: RECORD } });

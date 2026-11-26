@@ -165,12 +165,14 @@ the auto-pin). The document stays the source of truth; the Doc is a formatted co
   so Google's own Markdown import formats it. Reading a Doc back uses the matching Markdown
   export (`get_doc_as_markdown`), and the text returns to the document through `doc-write`.
 - The first publish records the Doc in frontmatter under `google_doc` (`id`, `url`,
-  `published_at`, `modified_time`; `src/google/published-doc.ts`). A `doc-write` replace that
+  `published_at`, `content_hash`; `src/google/published-doc.ts`). A `doc-write` replace that
   leaves the key out keeps it; `google_doc: null` clears it, so the next publish starts a new Doc.
 - A later publish replaces the recorded Doc's whole content. It overwrites only a Doc whose Drive
   `appProperties` bind it to this document, and, unless the caller passes `overwrite`, only when
-  the Doc's `modifiedTime` still matches the record and no comment was opened since the last
-  publish. A refusal names the Doc's current `modifiedTime` as `doc_version`; after reading the Doc
+  a hash of the Doc's own Markdown export still matches the record and no comment was opened
+  since the last publish. (Drive's `modifiedTime` can't serve: measured live, it moves on shares
+  and lags edits, while the export ignores comments and shares and changes at once on any text or
+  style edit.) A refusal names the current export hash as `doc_version`; after reading the Doc
   back and folding its changes in, a publish with that `doc_version` goes through while the Doc
   is still at it. A recorded Doc that is gone or out of reach is never replaced by a new one
   silently: the record must be cleared first.

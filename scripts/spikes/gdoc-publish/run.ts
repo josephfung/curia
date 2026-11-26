@@ -18,6 +18,7 @@
 //
 // Results go to stdout as plain text; paste them into the PR.
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { google, type docs_v1 } from 'googleapis';
 import { getDriveClient } from '../../../src/google/drive-auth.js';
@@ -71,6 +72,9 @@ const modifiedTime = async (fileId: string): Promise<string> =>
 const exportMarkdown = async (fileId: string): Promise<string> =>
   String((await drive.files.export({ fileId, mimeType: 'text/markdown' }, { responseType: 'text' })).data);
 
+const exportHash = async (fileId: string): Promise<string> =>
+  createHash('sha256').update(await exportMarkdown(fileId)).digest('hex').slice(0, 12);
+
 const about = await drive.about.get({ fields: 'importFormats' });
 out('1. import formats for text/markdown', about.data.importFormats?.['text/markdown'] ?? 'NOT LISTED');
 
@@ -90,14 +94,17 @@ try {
 
   out('3. export text/markdown vs fixture (- fixture, + export)', lineDiff(FIXTURE, await exportMarkdown(id)));
 
-  const steps: Record<string, string> = { before: await modifiedTime(id) };
+  const snap = async () => `${await modifiedTime(id)} export=${await exportHash(id)}`;
+  const steps: Record<string, string> = { right_after_create: `${created.data.modifiedTime} export=${await exportHash(id)}` };
+  await new Promise((r) => setTimeout(r, 3000));
+  steps.after_3s = await snap();
   const comment = await drive.comments.create({ fileId: id, fields: 'id', requestBody: { content: 'spike comment' } });
-  steps.after_comment = await modifiedTime(id);
+  steps.after_comment = await snap();
   const permission = await drive.permissions.create({ fileId: id, requestBody: { type: 'anyone', role: 'reader' }, fields: 'id' });
-  steps.after_share = await modifiedTime(id);
+  steps.after_share = await snap();
   await drive.permissions.delete({ fileId: id, permissionId: permission.data.id! });
-  steps.after_unshare = await modifiedTime(id);
-  out('4. modifiedTime across non-edits (should all match "before")', steps);
+  steps.after_unshare = await snap();
+  out('4. modifiedTime and export hash across non-edits (export should not move)', steps);
 
   const republished = await drive.files.update({
     fileId: id,
@@ -109,9 +116,14 @@ try {
   const comments = await drive.comments.list({ fileId: id, includeDeleted: true, fields: 'comments(id,deleted,resolved,anchor)' });
   out('5. the open comment after republish', (comments.data.comments ?? []).filter((c) => c.id === comment.data.id));
 
-  const beforeEdit = await modifiedTime(id);
+  const beforeEdit = await snap();
+  const republishHash = await exportHash(id);
   await docs.documents.batchUpdate({ documentId: id, requestBody: { requests: [{ insertText: { location: { index: 1 }, text: 'Edited. ' } }] } });
-  out('4. modifiedTime after a text edit (must differ)', { before: beforeEdit, after: await modifiedTime(id) });
+  const afterEdit = await snap();
+  await new Promise((r) => setTimeout(r, 5000));
+  out('4. after a text edit (export must differ at once)', { before: beforeEdit, immediately: afterEdit, after_5s: await snap(), republish_export: republishHash });
+  await docs.documents.batchUpdate({ documentId: id, requestBody: { requests: [{ updateTextStyle: { range: { startIndex: 1, endIndex: 7 }, textStyle: { bold: true }, fields: 'bold' } }] } });
+  out('4. after a style-only edit (bold): does the export move?', await snap());
 } finally {
   if (fileId) {
     await drive.files.delete({ fileId });

@@ -8,8 +8,8 @@
 /** Frontmatter key holding the record. */
 export const GOOGLE_DOC_KEY = 'google_doc';
 
-/** `modified_time` when Drive reported none after the write: the next publish asks for a read-back. */
-export const UNKNOWN_MODIFIED_TIME = 'unknown';
+/** `content_hash` when the Doc could not be exported after the write: the next publish asks for a read-back. */
+export const UNKNOWN_CONTENT_HASH = 'unknown';
 
 export interface PublishedDocRecord {
   id: string;
@@ -17,11 +17,13 @@ export interface PublishedDocRecord {
   /** When the Doc was last written from the store (ISO 8601, UTC). */
   published_at: string;
   /**
-   * The Doc's Drive `modifiedTime` right after that write. A later Drive `modifiedTime` means
-   * someone changed the Doc since, so republishing would overwrite their edits.
-   * `UNKNOWN_MODIFIED_TIME` when Drive reported none.
+   * Hash of the Doc's own Markdown export right after that write. A different hash later means
+   * someone edited the Doc since, so republishing would overwrite their edits. Measured live
+   * (#2758 spike): comments, shares and the post-create settle leave the export unchanged, and
+   * a text or style edit changes it at once, whereas Drive's `modifiedTime` moves on shares and
+   * lags edits. `UNKNOWN_CONTENT_HASH` when the export failed.
    */
-  modified_time: string;
+  content_hash: string;
 }
 
 /**
@@ -36,7 +38,7 @@ export function readPublishedDocRecord(
   if (raw === undefined || raw === null) return { record: null };
   if (typeof raw !== 'object' || Array.isArray(raw)) return { invalid: true };
   const value = raw as Record<string, unknown>;
-  const fields = ['id', 'url', 'published_at', 'modified_time'] as const;
+  const fields = ['id', 'url', 'published_at', 'content_hash'] as const;
   if (!fields.every((field) => typeof value[field] === 'string' && (value[field] as string).length > 0)) {
     return { invalid: true };
   }
@@ -45,7 +47,7 @@ export function readPublishedDocRecord(
       id: value.id as string,
       url: value.url as string,
       published_at: value.published_at as string,
-      modified_time: value.modified_time as string,
+      content_hash: value.content_hash as string,
     },
   };
 }

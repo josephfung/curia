@@ -14,17 +14,20 @@
 //   - it must be the Doc this tool created for this document (Drive appProperties), so a
 //     hand-edited `google_doc` record cannot point a republish at some other Doc;
 //   - it must be unchanged since the last publish and have no comments opened since then.
-//     After a refusal the caller reads the Doc back, folds the changes into the document and
-//     publishes with the `doc_version` the refusal named: that goes through only while the Doc
-//     is still at that version. `overwrite` skips the check altogether.
+//     "Unchanged" compares a hash of the Doc's Markdown export with the one taken after the last
+//     write; Drive's modifiedTime moves on shares and lags edits (#2758 spike), so it can't be
+//     used. After a refusal the caller reads the Doc back, folds the changes into the document
+//     and publishes with the `doc_version` (that hash) the refusal named: that goes through only
+//     while the Doc still exports to it. `overwrite` skips the check altogether.
 
+import { createHash } from 'node:crypto';
 import { google, type drive_v3 } from 'googleapis';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { WorkingDocRow } from '../../src/db/working-docs-repo.js';
 import { getDriveClient } from '../../src/google/drive-auth.js';
 import {
   GOOGLE_DOC_KEY,
-  UNKNOWN_MODIFIED_TIME,
+  UNKNOWN_CONTENT_HASH,
   readPublishedDocRecord,
   type PublishedDocRecord,
 } from '../../src/google/published-doc.js';
@@ -48,7 +51,9 @@ const QUOTA_REASONS = new Set(['storageQuotaExceeded', 'userRateLimitExceeded', 
 
 type Drive = drive_v3.Drive;
 
-const UNKNOWN_TIME_NOTE = 'Drive did not report when the Doc was last changed, so the next publish will ask you to read it back first.';
+const UNKNOWN_HASH_NOTE = 'Curia could not read the Doc back after writing it, so the next publish will ask you to read it back first.';
+/** Hex characters of the export hash kept as the record and the doc_version. */
+const HASH_LENGTH = 16;
 
 interface PublishInput {
   path: string;
@@ -138,6 +143,12 @@ async function hasNewOpenComments(drive: Drive, fileId: string, since: string): 
   return true;
 }
 
+/** Short sha256 of the Doc's Markdown export: what the edit check compares. */
+async function exportHash(drive: Drive, fileId: string): Promise<string> {
+  const res = await drive.files.export({ fileId, mimeType: MARKDOWN_MIME }, { responseType: 'text' });
+  return createHash('sha256').update(String(res.data)).digest('hex').slice(0, HASH_LENGTH);
+}
+
 export class DocPublishGoogleHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const parsed = parseInput(ctx.input);
@@ -170,7 +181,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
       return {
         success: false,
         error: `${path} has a malformed \`${GOOGLE_DOC_KEY}\` frontmatter value, so its Doc can't be identified. ` +
-          `Restore it as doc-publish-google wrote it (id, url, published_at, modified_time), or set it to null with a doc-write replace to publish to a new Doc.`,
+          `Restore it as doc-publish-google wrote it (id, url, published_at, content_hash), or set it to null with a doc-write replace to publish to a new Doc.`,
       };
     }
 
@@ -206,7 +217,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
           appProperties: { [APP_PROPERTY_DOC_ID]: doc.id },
         },
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
-        fields: 'id,webViewLink,mimeType,modifiedTime',
+        fields: 'id,webViewLink,mimeType',
       });
       file = res.data;
     } catch (err) {
@@ -236,12 +247,12 @@ export class DocPublishGoogleHandler implements ToolHandler {
     }
 
     const url = file.webViewLink ?? `https://docs.google.com/document/d/${file.id}/edit`;
-    const modifiedTime = await this.settledModifiedTime(ctx, drive, file.id, file.modifiedTime);
+    const contentHash = await this.contentHashAfterWrite(ctx, drive, file.id);
     const recorded = await this.record(ctx, doc, {
       id: file.id,
       url,
       published_at: new Date().toISOString(),
-      modified_time: modifiedTime ?? UNKNOWN_MODIFIED_TIME,
+      content_hash: contentHash ?? UNKNOWN_CONTENT_HASH,
     });
     if (!recorded.ok) {
       return {
@@ -251,7 +262,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
       };
     }
     ctx.log.info({ path: doc.path, fileId: file.id }, `${TOOL}: created Doc`);
-    const note = [recorded.note, modifiedTime ? null : UNKNOWN_TIME_NOTE].filter((n): n is string => n !== null).join(' ');
+    const note = [recorded.note, contentHash ? null : UNKNOWN_HASH_NOTE].filter((n): n is string => n !== null).join(' ');
     return {
       success: true,
       data: { action: 'created', document_id: file.id, url, path: doc.path, ...(note ? { note } : {}) },
@@ -270,7 +281,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
     try {
       const res = await drive.files.get({
         fileId: record.id,
-        fields: 'id,mimeType,trashed,modifiedTime,appProperties,webViewLink',
+        fields: 'id,mimeType,trashed,appProperties,webViewLink',
         supportsAllDrives: true,
       });
       current = res.data;
@@ -301,7 +312,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
       return { success: false, error: `The Doc recorded on ${doc.path} (${record.url}) was not published from this document, so it will not be overwritten. To publish to a new Doc, set the \`${GOOGLE_DOC_KEY}\` frontmatter key to null with a doc-write replace.` };
     }
 
-    const refusal = input.overwrite ? null : await this.changeCheck(ctx, drive, doc, record, current, input.docVersion);
+    const refusal = input.overwrite ? null : await this.changeCheck(ctx, drive, doc, record, input.docVersion);
     if (refusal) return refusal;
 
     let updated: drive_v3.Schema$File;
@@ -310,7 +321,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
         fileId: record.id,
         ...(input.title ? { requestBody: { name: title } } : {}),
         media: { mimeType: MARKDOWN_MIME, body: doc.body },
-        fields: 'id,webViewLink,mimeType,modifiedTime',
+        fields: 'id,webViewLink,mimeType',
         supportsAllDrives: true,
       });
       updated = res.data;
@@ -324,12 +335,12 @@ export class DocPublishGoogleHandler implements ToolHandler {
     }
 
     const url = updated.webViewLink ?? record.url;
-    const modifiedTime = await this.settledModifiedTime(ctx, drive, record.id, updated.modifiedTime);
+    const contentHash = await this.contentHashAfterWrite(ctx, drive, record.id);
     const recorded = await this.record(ctx, doc, {
       id: record.id,
       url,
       published_at: new Date().toISOString(),
-      modified_time: modifiedTime ?? UNKNOWN_MODIFIED_TIME,
+      content_hash: contentHash ?? UNKNOWN_CONTENT_HASH,
     });
     if (!recorded.ok) {
       return {
@@ -339,7 +350,7 @@ export class DocPublishGoogleHandler implements ToolHandler {
       };
     }
     ctx.log.info({ path: doc.path, fileId: record.id }, `${TOOL}: updated Doc`);
-    const note = [recorded.note, modifiedTime ? null : UNKNOWN_TIME_NOTE].filter((n): n is string => n !== null).join(' ');
+    const note = [recorded.note, contentHash ? null : UNKNOWN_HASH_NOTE].filter((n): n is string => n !== null).join(' ');
     return {
       success: true,
       data: { action: 'updated', document_id: record.id, url, path: doc.path, ...(note ? { note } : {}) },
@@ -349,29 +360,34 @@ export class DocPublishGoogleHandler implements ToolHandler {
   /**
    * The refusal for a Doc changed since the last publish, or null to go ahead. With
    * `docVersion` (from an earlier refusal, after the caller read the Doc back and folded its
-   * changes in) the Doc only has to still be at that version.
+   * changes in) the Doc only has to still export to that version.
    */
   private async changeCheck(
     ctx: ToolContext,
     drive: Drive,
     doc: WorkingDocRow,
     record: PublishedDocRecord,
-    current: drive_v3.Schema$File,
     docVersion: string | undefined,
   ): Promise<ToolResult | null> {
-    const now = current.modifiedTime ?? null;
+    let now: string;
+    try {
+      now = await exportHash(drive, record.id);
+    } catch (err) {
+      ctx.log.error({ err, fileId: record.id }, `${TOOL}: could not export the Doc to check it for edits`);
+      return { success: false, error: `Could not read the Doc to check it for edits before overwriting it: ${describeDriveError(err)}` };
+    }
     if (docVersion !== undefined) {
-      if (now !== null && now === docVersion) return null;
+      if (now === docVersion) return null;
       ctx.log.info({ path: doc.path, fileId: record.id, docVersion, now }, `${TOOL}: refused, Doc changed after read-back`);
       return {
         success: false,
-        error: `Not published: the Doc changed again after it was read back (${record.url}). Read it back again with get_doc_as_markdown, fold the new changes into the document, then publish with doc_version: "${now ?? 'unknown'}".`,
+        error: `Not published: the Doc changed again after it was read back (${record.url}). Read it back again with get_doc_as_markdown, fold the new changes into the document, then publish with doc_version: "${now}".`,
       };
     }
 
     const changes: string[] = [];
-    if (record.modified_time === UNKNOWN_MODIFIED_TIME) changes.push('Curia could not tell whether it was edited');
-    else if (now !== record.modified_time) changes.push('it was edited');
+    if (record.content_hash === UNKNOWN_CONTENT_HASH) changes.push('Curia could not tell whether it was edited');
+    else if (now !== record.content_hash) changes.push('it was edited');
     try {
       if (await hasNewOpenComments(drive, record.id, record.published_at)) changes.push('it has new open comments');
     } catch (err) {
@@ -384,21 +400,18 @@ export class DocPublishGoogleHandler implements ToolHandler {
       success: false,
       error: `Not published: since the last publish ${changes.join(' and ')} (${record.url}), and publishing replaces the whole Doc. ` +
         'Read it back with get_doc_as_markdown (it shows the comments), fold the changes into the document with doc-write, ' +
-        `then publish again with doc_version: "${now ?? 'unknown'}". Publishing with overwrite: true discards the changes instead; ask the principal first.`,
+        `then publish again with doc_version: "${now}". Publishing with overwrite: true discards the changes instead; ask the principal first.`,
     };
   }
 
-  /** Drive's modifiedTime after a write: the response's, else read back once; null if neither has it. */
-  private async settledModifiedTime(ctx: ToolContext, drive: Drive, fileId: string, fromWrite: string | null | undefined): Promise<string | null> {
-    if (fromWrite) return fromWrite;
+  /** The Doc's export hash after a write, or null (logged) when the export fails. */
+  private async contentHashAfterWrite(ctx: ToolContext, drive: Drive, fileId: string): Promise<string | null> {
     try {
-      const res = await drive.files.get({ fileId, fields: 'modifiedTime', supportsAllDrives: true });
-      if (res.data.modifiedTime) return res.data.modifiedTime;
+      return await exportHash(drive, fileId);
     } catch (err) {
-      ctx.log.warn({ err, fileId }, `${TOOL}: could not read modifiedTime after the write`);
+      ctx.log.warn({ err, fileId }, `${TOOL}: could not export the Doc after the write; the next publish will ask for doc_version`);
+      return null;
     }
-    ctx.log.warn({ fileId }, `${TOOL}: Drive reported no modifiedTime; the next publish will ask for doc_version`);
-    return null;
   }
 
   /**
