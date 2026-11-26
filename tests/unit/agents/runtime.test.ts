@@ -3467,6 +3467,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     bus.subscribe('context.budget', 'system', (event) => {
       budgetEvents.push((event as { payload: { tiers: Array<{ name: string; included: boolean }> } }).payload);
     });
+    const activated: Array<{ skill: string; by: string }> = [];
+    bus.subscribe('skill.activated', 'system', (e) => {
+      const p = (e as { payload: { skill: string; by: string } }).payload;
+      activated.push({ skill: p.skill, by: p.by });
+    });
 
     const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
     const provider: LLMProvider = {
@@ -3595,12 +3600,18 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(skillSysIdx).toBeLessThan(lastUserIdx);
     // Bodies were reserved before history so telemetry still accounts for them.
     expect(budgetEvents[0]!.tiers.some((t) => t.name === 'skill_bodies' && t.included)).toBe(true);
+    expect(activated).toContainEqual({ skill: 'tasks', by: 'wake' });
   });
 
   it('pre-activates conversation-carried skills with by: conversation (#2764)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
+    const activated: Array<{ skill: string; by: string }> = [];
+    bus.subscribe('skill.activated', 'system', (e) => {
+      const p = (e as { payload: { skill: string; by: string } }).payload;
+      activated.push({ skill: p.skill, by: p.by });
+    });
 
     const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
     const provider: LLMProvider = {
@@ -3689,6 +3700,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     );
     expect(skillSysIdx).toBeGreaterThan(0);
     expect(skillSysIdx).toBeLessThan(lastUserIdx);
+    expect(activated).toEqual([{ skill: 'browser', by: 'conversation' }]);
   });
 
   describe('code pre-activation paths (#2764 §5)', () => {
@@ -3707,6 +3719,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
       bus.subscribe('agent.response', 'dispatch', () => {});
+      const activated: Array<{ skill: string; by: string }> = [];
+      bus.subscribe('skill.activated', 'system', (e) => {
+        const p = (e as { payload: { skill: string; by: string } }).payload;
+        activated.push({ skill: p.skill, by: p.by });
+      });
       const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
       const provider: LLMProvider = {
         id: 'mock',
@@ -3786,6 +3803,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         system,
         user: lastUserContent(call.messages),
         messages: call.messages,
+        activated,
       };
     }
 
@@ -3827,6 +3845,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('bullpen', 'coordinator');
       expect(r.tools).toContain('bullpen-post');
       expectSkillBodyAfterHistory(r, 'bullpen');
+      expect(r.activated).toEqual([{ skill: 'bullpen', by: 'bullpen' }]);
     });
 
     it('pre-activates job-report plus declared and learned job skills on scheduler turns', async () => {
@@ -3868,6 +3887,12 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expectSkillBodyAfterHistory(r, 'job-report');
       expect(r.system).toContain('[Activated skill: digest]');
       expect(r.system).toContain('[Activated skill: mailbox]');
+      expect(r.activated).toEqual(expect.arrayContaining([
+        { skill: 'job-report', by: 'job' },
+        { skill: 'digest', by: 'job' },
+        { skill: 'mailbox', by: 'job-learned' },
+      ]));
+      expect(r.activated).toHaveLength(3);
     });
 
     it('pre-activates digest when turn guidance is spot-check-reply', async () => {
@@ -3885,6 +3910,8 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
       expect(r.tools).toContain('record-spot-check');
       expectSkillBodyAfterHistory(r, 'digest');
+      // Spot-check replies reuse the conversation activation path (#2764).
+      expect(r.activated).toEqual([{ skill: 'digest', by: 'conversation' }]);
     });
   });
 
@@ -3908,6 +3935,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
       bus.subscribe('agent.response', 'dispatch', () => {});
+      const activated: Array<{ skill: string; by: string }> = [];
+      bus.subscribe('skill.activated', 'system', (e) => {
+        const p = (e as { payload: { skill: string; by: string } }).payload;
+        activated.push({ skill: p.skill, by: p.by });
+      });
       const chatCalls: Array<{ tools: string[]; messages: Array<{ role: string; content: unknown }> }> = [];
       const provider: LLMProvider = {
         id: 'mock',
@@ -3959,6 +3991,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         system: call.messages.filter((m) => m.role === 'system').map(text).join('\n'),
         user: call.messages.filter((m) => m.role === 'user').map(text).join('\n'),
         messages: call.messages,
+        activated,
       };
     }
 
@@ -3981,6 +4014,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       );
       expect(skillSysIdx).toBeGreaterThan(0);
       expect(skillSysIdx).toBeLessThan(lastUserIdx);
+      expect(r.activated).toEqual([{ skill: 'onboarding', by: 'onboarding' }]);
     });
 
     it('puts the block under the turn-guidance header, with the principal message last', async () => {
