@@ -3,7 +3,7 @@ name: tasks
 description: >
   Defer, track, and resume multi-step work (create/list/update/complete, plan,
   checkpoint). Load whenever a promise needs a task, work spans turns, or you ask
-  what is open; heartbeat-eligible agents need this skill listed.
+  what is open.
 version: "0.2.3"
 heartbeat: true
 tools:

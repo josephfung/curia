@@ -103,9 +103,10 @@ servers:
     # the email skill. Activate when a request or specialist result involves a
     # Google file; pass reference drive-files.md to move, share, attach, or export.
     description: >
-      Drive, Docs and Sheets for Curia's Google account. Load when a request involves
-      a Google file (find, read, edit, share, move). Pass reference drive-files.md to
-      move, rename, share, upload, attach to email, or export. Email stays on email tools.
+      Drive, Docs and Sheets for Curia's Google account. Load when a request or a
+      specialist's result involves a Google file (find, read, edit, share, move). Pass
+      reference drive-files.md to move, rename, share, upload, attach to email, or
+      export. Email stays on email tools.
     command: scripts/workspace-mcp.sh
     args:
       - --tool-tier

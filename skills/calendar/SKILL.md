@@ -2,8 +2,7 @@
 name: calendar
 description: >
   Principal calendar: list calendars/events, create/update/delete, free/busy, conflicts,
-  RSVPs, and tentative holds. Load for any scheduling work; email compose for meetings
-  stays with the specialist's own prompt rules.
+  RSVPs, and tentative holds. Load for any scheduling work.
 version: "0.1.1"
 tools:
   - calendar-list-calendars
