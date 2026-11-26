@@ -1718,11 +1718,20 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
         ? [...missing, NO_MAIL_CLIENT]
         : missing;
     };
+    // Include member tools of listed skills (#2764): on-demand pins leave those
+    // tools out of boot-time toolDefs, but the agent can still activate and call
+    // them — the harness must know which of those would fail capability checks.
     const disabledTools: TestModeStack['disabledTools'] = {};
     for (const assembled of agents) {
-      const disabled = assembled.toolDefs
-        .map(def => ({ tool: def.name, missing: unservableCapabilities(def.name) }))
-        .filter(entry => entry.missing.length > 0);
+      const toolNames = new Set(assembled.toolDefs.map((def) => def.name));
+      for (const listed of assembled.pinResolution.listedSkills) {
+        const skill = skillRegistry.get(listed.name);
+        if (!skill) continue;
+        for (const t of skill.manifest.tools) toolNames.add(t);
+      }
+      const disabled = [...toolNames]
+        .map((tool) => ({ tool, missing: unservableCapabilities(tool) }))
+        .filter((entry) => entry.missing.length > 0);
       if (disabled.length > 0) disabledTools[assembled.agentConfig.name] = disabled;
     }
 
