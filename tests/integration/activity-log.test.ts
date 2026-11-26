@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
 import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
-import { ActivityLogHandler } from '../../skills/activity-log/handler.js';
+import { ActivityLogHandler } from '../../skills/job-report/tools/activity-log/handler.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 const { Pool } = pg;

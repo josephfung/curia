@@ -1,11 +1,11 @@
-// skills/activity-log/handler.test.ts
+// skills/job-report/tools/activity-log/handler.test.ts
 
 import { describe, it, expect, vi } from 'vitest';
 import { ActivityLogHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { AuditLogRepo, AuditLogRow } from '../../src/audit/audit-log-repo.js';
-import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
-import { createSilentLogger } from '../../src/logger.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { AuditLogRepo, AuditLogRow } from '../../../../src/audit/audit-log-repo.js';
+import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
+import { createSilentLogger } from '../../../../src/logger.js';
 
 function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {

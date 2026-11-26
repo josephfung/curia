@@ -76,6 +76,23 @@ describe('OutboundContentFilter', () => {
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
     });
 
+    it('blocks a leaked SKILL.md body line when skill markers are registered (#2764)', async () => {
+      // Design §8: markers from every SKILL.md body must trip Stage 1 the same way
+      // prompt lines do. A tasks-body sentence in an outbound draft must be caught.
+      const tasksLine =
+        'Every promise the principal hears needs a task before or alongside the reply.';
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: [tasksLine],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content: `By the way: ${tasksLine}`,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
+    });
+
     it('does not echo the matched marker text in the finding detail', async () => {
       // Markers are live system-prompt lines; the detail is logged and can reach
       // block notifications, so it must not re-disclose the prompt content. It

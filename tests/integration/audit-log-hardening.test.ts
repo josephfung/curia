@@ -14,7 +14,7 @@ import {
   toHashTimestamp,
 } from '../../src/audit/hash-chain.js';
 import { createSilentLogger } from '../../src/logger.js';
-import { ActivityLogHandler } from '../../skills/activity-log/handler.js';
+import { ActivityLogHandler } from '../../skills/job-report/tools/activity-log/handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 

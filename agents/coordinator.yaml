@@ -208,7 +208,7 @@ pinned_skills:
   - files
   - secrets
   - tool-registry
-  - activity-log
+  # activity-log lives in job-report (pre-activated on scheduler turns) (#2764).
 allow_discovery: true
 error_budget:
   max_turns: 40
