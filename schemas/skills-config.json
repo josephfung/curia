@@ -39,6 +39,12 @@
           "minLength": 1,
           "description": "Unique identifier for this MCP server. Used in log messages and as a namespace prefix for discovered tool names."
         },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Optional skill-list / discovery copy for the MCP-projected skill (#2764). When set, replaces the generic 'MCP server …' description."
+        },
         "transport": {
           "type": "string",
           "enum": ["stdio", "sse"],
