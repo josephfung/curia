@@ -2,7 +2,7 @@
 # google-workspace is that the other ~99% of turns stop carrying its tool definitions, so
 # an over-eager "activate for anything document-shaped" would undo it. "Draft" is the
 # mild lure: the principal wants text in the chat, not a Doc. Rule:
-# agents/coordinator.yaml, "Google Workspace" (only when a request involves a Google file).
+# config/skills.yaml, google-workspace description (only when a request involves a Google file).
 name: no google file chat
 description: >
   The principal asks for two sentences declining a podcast invitation, pasted into the

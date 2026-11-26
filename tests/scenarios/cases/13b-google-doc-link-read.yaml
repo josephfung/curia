@@ -1,6 +1,6 @@
 # Case 13b (#2024): the principal sends a Google Docs link and asks about it. The Docs
 # tools are no longer pinned, so the coordinator activates google-workspace and reads the
-# Doc with a Docs tool. Rule: agents/coordinator.yaml, "Google Workspace".
+# Doc with a Docs tool. Rule: config/skills.yaml, google-workspace description.
 #
 # web-fetch and web-browser have no Google credentials. Since prompt trim PR 6 they refuse
 # a Google file URL and point to skill-activate (src/skills/_shared/google-workspace-url.ts)

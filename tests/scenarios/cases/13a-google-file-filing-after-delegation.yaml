@@ -3,7 +3,7 @@
 # skill first, then moving it into the folder the result names and making sure the
 # principal can edit it. In production this was 8 of the 15 tasks that used these tools
 # over 60 days, and the principal never mentioned a Google file. Rule:
-# agents/coordinator.yaml, "Google Workspace" (a specialist's result that involves a
+# config/skills.yaml, google-workspace description (a specialist's result that involves a
 # Google file → skill-activate google-workspace).
 name: google file filing after delegation
 description: >
