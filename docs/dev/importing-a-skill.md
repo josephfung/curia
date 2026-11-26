@@ -10,7 +10,7 @@ This is Phase 3 of the tools/skills rework (#1490). Design:
 
 | Payload | Behavior |
 |---------|----------|
-| `SKILL.md` (name + description + body) | Discovered and activatable. Body injected on `skill-activate` (or at bootstrap if pinned). |
+| `SKILL.md` (name + description + body) | Discovered and activatable. Description is listed when pinned; body arrives in the `skill-activate` tool result ([ADR-070](../adr/070-skills-load-on-demand.md)). |
 | `references/*.md`, `assets/*` | Listed at activation. **Text files** load on demand via `skill-activate({ skill, reference })`; **binary assets** stay listed but are rejected when requested (never injected into context). |
 | `scripts/` | **Warned at import, never run.** Instructions + assets still load. |
 
@@ -37,8 +37,8 @@ Same install channel as custom deploy skills (`curia-deploy/custom/skills/` or t
    ```
 4. **Restart again** so the enabled skill is loaded into `SkillRegistry`.
 5. Give a relevant agent access:
-   - **Discoverable (typical):** set `allow_discovery: true` on the agent (e.g. coordinator). It receives `tool-registry` + `skill-activate`.
-   - **Pinned (optional):** add the skill name to `pinned_skills` for always-on instructions.
+   - **Discoverable (typical):** set `allow_discovery: true` on the agent (e.g. coordinator). It receives `tool-registry` (and `skill-activate` whenever it lists any skill).
+   - **Pinned (optional):** add the skill name to `pinned_skills` so its description appears in `## Skills`; the body still loads only on activation.
 
 ### Example activation
 
@@ -53,7 +53,7 @@ skill-activate({ skill: "not-a-lawyer", reference: "common-clauses.md" })
 # → loads references/common-clauses.md into the turn
 ```
 
-Tiered lookup (pinned → task-active → discovery) and wake persistence are the Phase 3a activation runtime (#1495); imported skills are ordinary consumers of that path.
+Listed skills, code pre-activation, and discovery are the activation paths ([ADR-070](../adr/070-skills-load-on-demand.md)); imported skills are ordinary consumers of that path.
 
 ## Scripts warning
 
