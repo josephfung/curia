@@ -152,6 +152,8 @@ pinned_skills:
   - executive-profile
   - email
   - mailbox
+  # Everyday people work (#2764 §2): listed skill; create/update are no longer tool pins.
+  - contacts
   # Tool pins, not the context-bridge bundle: its keep-open tool is for delegated
   # specialists only (#1972), so the coordinator takes just release and clear.
   - context-bridge-release
@@ -194,16 +196,13 @@ pinned_skills:
   # contact_id it returns, in one turn (#2041).
   - bullpen
   - delegate
-  # Opens a verification the moment a sign-in shows a code screen (#2017).
+  # Sign-in code screens / task outreach (#2764 §2): listed single-tool skills.
   - verification
-  # Records a web form or call made for a task, so the reply can find it (#2312).
   - record-outreach
   # Channel sends (#2764): messaging bundle covers the principal-reach channels.
   - messaging
   - config-store
   - date-resolve
-  - contact-update
-  - contact-create
   # Attachments / vault (#2764 §2): listed skills, not always-on tool pins.
   - files
   - secrets

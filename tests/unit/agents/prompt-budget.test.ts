@@ -141,8 +141,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2764 files+secrets skills (measured 2026-11-26): file-parse/archive-extract/list-user-secrets/
   // secret-capture-request leave always-on tool pins → listed skills. Tools 14,149 bytes / 15;
   // ## Skills ~743 tokens. Budgets = measurement + ~3% headroom.
-  // activity-log moved into job-report (#2764): ~13,289 bytes / 14 tools after unpin.
-  { agent: 'coordinator', alwaysOnPromptTokens: 2_100, localToolDefinitionBytes: 13_700, skillListTokens: 770, allowMcpPins: false, rosterTokens: 500 },
+  // After §2 folds (#2764): contacts/verification/record-outreach listed; activity-log
+  // in job-report. ~9,521 tool bytes / 10 tools; skill list ~884 tokens.
+  { agent: 'coordinator', alwaysOnPromptTokens: 2_100, localToolDefinitionBytes: 9_800, skillListTokens: 920, allowMcpPins: false, rosterTokens: 500 },
   // calendar: domain tool-pinned; bullpen listed. ~5,652 prompt tokens; 29,136 bytes / 20 tools; skill list ~85.
   { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_500, skillListTokens: 100, allowMcpPins: false },
   // ceo-inbox: domain tool-pinned; tasks/documents/bullpen/context-bridge listed.
