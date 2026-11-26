@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { SchedulerService } from './scheduler-service.js';
+import { learnedSkillsFromRuns } from './activated-skills-runs.js';
 import type { AgentYamlConfig } from '../agents/loader.js';
 import {
   createScheduleFired,
@@ -1249,19 +1250,7 @@ export class Scheduler {
       if (recapInstruction !== undefined && !declared.includes('digest')) {
         declared.push('digest');
       }
-      const learnedRaw = job.lastRunContext?.activatedSkillsRuns;
-      const learned: string[] = [];
-      if (Array.isArray(learnedRaw)) {
-        const seen = new Set<string>();
-        for (const run of learnedRaw.slice(-3)) {
-          if (!Array.isArray(run)) continue;
-          for (const s of run) {
-            if (typeof s !== 'string' || !s.trim() || seen.has(s)) continue;
-            seen.add(s);
-            learned.push(s);
-          }
-        }
-      }
+      const learned = learnedSkillsFromRuns(job.lastRunContext?.activatedSkillsRuns);
       if (declared.length > 0 || learned.length > 0) {
         metadata = {
           ...(metadata ?? {}),
