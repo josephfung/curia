@@ -651,14 +651,19 @@ describe('collectPinnedByBundle (#1898)', () => {
 });
 
 describe('on-disk contacts bundle guards', () => {
-  it('does not list entity-context as a contacts member', () => {
-    const raw = readFileSync(
-      resolve(import.meta.dirname, '../../../skills/contacts/SKILL.md'),
-      'utf-8',
+  it('keeps everyday identity tools and leaves grants in contact-trust (#2764)', () => {
+    const contacts = parseSkillMd(
+      readFileSync(resolve(import.meta.dirname, '../../../skills/contacts/SKILL.md'), 'utf-8'),
     );
-    const parsed = parseSkillMd(raw);
-    expect(parsed.tools).not.toContain('entity-context');
-    expect(parsed.tools).toEqual(expect.arrayContaining(['contact-lookup', 'contact-grant-permission']));
+    const trust = parseSkillMd(
+      readFileSync(resolve(import.meta.dirname, '../../../skills/contact-trust/SKILL.md'), 'utf-8'),
+    );
+    expect(contacts.tools).not.toContain('entity-context');
+    expect(contacts.tools).not.toContain('contact-grant-permission');
+    expect(contacts.tools).toEqual(
+      expect.arrayContaining(['contact-lookup', 'contact-create', 'contact-list']),
+    );
+    expect(trust.tools).toEqual(expect.arrayContaining(['contact-grant-permission']));
   });
 });
 
