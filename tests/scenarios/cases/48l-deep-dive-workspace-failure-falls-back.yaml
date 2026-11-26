@@ -167,8 +167,11 @@ expected_behaviors:
     check:
       any_of:
         - called: doc-publish-google
+          success: true
         - called: create_doc
+          success: true
         - called: create_drive_file
+          success: true
   - id: raises_delivery_notice
     weight: critical
     description: Raises the deep_dive_delivery_failed operator notice with onboarding-progress.

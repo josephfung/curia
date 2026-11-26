@@ -157,8 +157,10 @@ expected_behaviors:
     check:
       any_of:
         - called: task-create
+          success: true
           with: { parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001, owner: ceo }
         - called: task-update
+          success: true
           with: { owner: ceo }
   - id: completes_acme_debrief
     weight: critical
@@ -179,8 +181,10 @@ expected_behaviors:
     check:
       any_of:
         - called: context-bridge-clear
+          success: true
           contains: { subjects: Acme partnership review }
         - called: context-bridge-clear
+          success: true
           contains: { subject: Acme partnership review }
   - id: clears_only_acme
     weight: critical

@@ -1,0 +1,53 @@
+// Layer-2 A/C cases must set `success` on every `called` check (#2764 §10 / Layer 1).
+// A plain `called: tool` counts a runtime refusal as a hit; `success: true` does not.
+import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { leafChecks } from '../../scenarios/assertions.js';
+import { loadScenarioCases } from '../../scenarios/loader.js';
+
+const CASES_DIR = path.resolve(import.meta.dirname, '../../scenarios/cases');
+
+/** Basename prefixes for design §10 A (activation-needed) + C (specialists) + D (new). */
+const LAYER2_CALLED_SUCCESS_PREFIXES = [
+  // A
+  '05a-', '05b-', '06-', '06b-', '13a-', '13b-', '13c-', '13d-', '13f-',
+  '14a-', '14b-', '14d-', '14e-', '15b-', '15c-', '15d-', '17a-', '17b-',
+  '18-', '20-', '22-', '23-', '24a-', '24b-', '25k-', '25m-', '25n-', '26-',
+  '32f-', '34c-', '34k-', '34l-', '34n-', '34o-', '36a-', '40c-', '40f-', '40g-',
+  '42a-', '46g-', '48b-', '48d-', '48f-', '48g-', '48h-', '48i-', '48j-', '48l-',
+  '54a-',
+  // C
+  '30a-', '30i-', '30z-', '30af-', '30ag-',
+  '31a-', '31b-', '31c-', '31d-', '31m-',
+  '32b-', '32c-', '32d-',
+  '33a-', '33b-', '33c-', '33d-', '33e-', '33f-', '33g-', '33h-', '33i-', '33j-', '33k-',
+  // D
+  '60a-', '60b-', '60c-', '60d-', '60e-', '60f-', '60g-',
+] as const;
+
+describe('Layer-2 called checks require success (#2764)', () => {
+  const cases = loadScenarioCases(CASES_DIR).filter((c) => {
+    const base = path.basename(c.sourceFile);
+    return LAYER2_CALLED_SUCCESS_PREFIXES.some((p) => base.startsWith(p));
+  });
+
+  it('covers the targeted A/C/D basename set', () => {
+    expect(cases.length).toBeGreaterThanOrEqual(40);
+  });
+
+  it('every called leaf sets success (true or false)', () => {
+    const missing: string[] = [];
+    for (const c of cases) {
+      for (const b of c.expectedBehaviors) {
+        if (!b.check) continue;
+        for (const leaf of leafChecks(b.check)) {
+          if (leaf.kind !== 'called') continue;
+          if (leaf.success === undefined) {
+            missing.push(`${path.basename(c.sourceFile)} :: ${b.id}`);
+          }
+        }
+      }
+    }
+    expect(missing, missing.join('\n')).toEqual([]);
+  });
+});

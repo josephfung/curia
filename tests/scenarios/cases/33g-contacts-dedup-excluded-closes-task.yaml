@@ -84,8 +84,10 @@ expected_behaviors:
     check:
       any_of:
         - called: contact-dedup-exclude
+          success: true
           with: { contact_a_id: "{{contact:nora}}", contact_b_id: "{{contact:nquinn}}" }
         - called: contact-dedup-exclude
+          success: true
           with: { contact_a_id: "{{contact:nquinn}}", contact_b_id: "{{contact:nora}}" }
   - id: no_merge
     weight: critical

@@ -107,8 +107,10 @@ expected_behaviors:
     check:
       any_of:
         - called: memory-store
+          success: true
           contains: { value: toronto }
         - called: contact-update
+          success: true
           contains: { fields: toronto }
   # Judged: storing "has never run a marathon" records what Avery said and is fine; storing
   # the race result as Avery's is the failure. A substring check can't tell them apart.

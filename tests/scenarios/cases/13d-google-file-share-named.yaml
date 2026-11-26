@@ -197,9 +197,11 @@ expected_behaviors:
     check:
       any_of:
         - called: manage_drive_access
+          success: true
           with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
           contains: { share_with: kevin.osei@example.test }
         - called: manage_drive_access
+          success: true
           with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
           contains: { recipients: kevin.osei@example.test }
         - called: email-send

@@ -164,10 +164,13 @@ expected_behaviors:
     check:
       any_of:
         - called: get_doc_as_markdown
+          success: true
           with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
         - called: get_doc_content
+          success: true
           with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
         - called: get_drive_file_content
+          success: true
           with: { file_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
   - id: summarises_doc
     weight: important

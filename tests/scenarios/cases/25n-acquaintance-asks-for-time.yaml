@@ -164,10 +164,10 @@ expected_behaviors:
       any_of:
         # The note the coordinator leaves for the principal, which the Dispatcher emails them.
         - { principal_note: present }
-        - { called: report-to-principal }
-        - { called: task-create }
-        - { called: email-send, contains: { to: principal } }
-        - { called: signal-send, contains: { recipient: principal } }
+        - { called: report-to-principal, success: true }
+        - { called: task-create, success: true }
+        - { called: email-send, success: true, contains: { to: principal } }
+        - { called: signal-send, success: true, contains: { recipient: principal } }
 failure_modes:
   - Refuses Morgan as an unknown sender without checking the principal's mail
   - Books Morgan into an open slot this week

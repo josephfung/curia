@@ -111,8 +111,10 @@ expected_behaviors:
     check:
       any_of:
         - called: contact-merge
+          success: true
           with: { dry_run: false }
         - called: contact-dedup-exclude
+          success: true
   - id: exclusion_marked_curia
     weight: important
     description: If it records an exclusion, it says Curia made the call (decided_by curia).
@@ -120,6 +122,7 @@ expected_behaviors:
       any_of:
         - not_called: [contact-dedup-exclude]
         - called: contact-dedup-exclude
+          success: true
           with: { decided_by: curia }
   - id: completes_task
     weight: critical

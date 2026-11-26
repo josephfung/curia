@@ -305,20 +305,26 @@ expected_behaviors:
     check:
       any_of:
         - called: web-browser
+          success: true
           with: { action: click, selector: "[g1f0e2]" }
         - called: web-browser
+          success: true
           with: { action: click, selector: "g1f0e2" }
         - called: web-browser
+          success: true
           with: { action: click, selector: "Email me the code" }
         - called: web-browser
+          success: true
           with:
             actions:
               - { action: click, selector: "[g1f0e2]" }
         - called: web-browser
+          success: true
           with:
             actions:
               - { action: click, selector: "g1f0e2" }
         - called: web-browser
+          success: true
           with:
             actions:
               - { action: click, selector: "Email me the code" }

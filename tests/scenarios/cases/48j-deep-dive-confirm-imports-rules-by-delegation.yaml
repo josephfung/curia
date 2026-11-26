@@ -236,9 +236,11 @@ expected_behaviors:
     check:
       any_of:
         - called: delegate
+          success: true
           with: { agent: ceo-inbox }
           contains: { task: newsletter }
         - called: delegate
+          success: true
           with: { agent: ceo-inbox }
           contains: { task: promotion }
   - id: rules_to_calendar_specialist
