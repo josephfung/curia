@@ -314,31 +314,37 @@ const GET_TIME_PATTERN = new RegExp(
 // The guidance says to act without asking, so these fail closed to an ordinary turn.
 const NOT_A_REQUEST = /\b(?:did|wants?|wanted|asks?|asked|asking|should\s+(?:i|we)|is\s+it\s+(?:possible|worth|better)|would\s+it|whether)\b/i;
 
-// Where a negation's reach ends besides CLAUSE_END: "I can't make my 2pm so move it to Friday"
-// and "Not urgent: reschedule the 2pm" are requests. The break is inserted as a period. A colon
-// counts only before a space (not "1:1" or "10:30"), and not after a reporting verb: "Priya
-// texted: can we move our 2pm?" stays Priya's.
-const REQUEST_CLAUSE_BREAK = new RegExp(
-  String.raw`(?<!${REPORTED_SPEECH.source}(?:\s+(?:me|us|him|her|them))?\s*):(?=\s|$)|\b(?=(?:so|but|and|then)\b)`,
-  'gi',
-);
+// Someone else doing it: "Priya will reschedule our 1:1", "Dana can move the review". A name or a
+// third-person pronoun before a modal, earlier in the clause. Case-sensitive, so a capitalised
+// name is told from an ordinary word; the principal's own "I", "We" and "You" are not actors here.
+const THIRD_PARTY_ACTOR = /\b(?!(?:I|We|You|Can|Could|Would|Please)\b)(?:[Hh]e|[Ss]he|[Tt]hey|[A-Z][a-z]+)(?:['’]ll|\s+(?:will|(?:is|are)\s+(?:going\s+to|gonna)|plans?\s+to|can|could|might|may))\b/;
+
+// Where a negation's reach ends besides CLAUSE_END: "I can't make my 2pm so move it to Friday" and
+// "Not urgent: reschedule the 2pm" are requests. A colon counts only before a space (not "1:1" or
+// "10:30"). Each break replaces one character with a period, so indices stay aligned with the
+// text the patterns run on. Only negation stops there: reported speech, a question and someone
+// else acting reach the whole clause ("Priya asked me to find time with Josh and book a call with
+// Rina" is all Priya's; "Priya texted: can we move our 2pm?" too).
+const NEGATION_CLAUSE_BREAK = /:(?=\s|$)|\s(?=(?:so|but|and|then)\b)/gi;
 
 /**
  * The principal's own words, ready to match: quoted `>` lines dropped (a caller may hand over raw
- * text), quoted spans dropped ("Priya asked 'can we move our 2pm?'" is Priya's), and the request
- * clause breaks marked.
+ * text) and quoted spans blanked ("Priya asked 'can we move our 2pm?'" is Priya's).
  */
 function ownLines(text: string): string {
   return text.split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n')
-    .replace(QUOTED_SPAN, ' ')
-    .replace(REQUEST_CLAUSE_BREAK, (m) => (m === ':' ? '.' : '. '));
+    .replace(QUOTED_SPAN, ' ');
 }
 
+const NOT_A_REQUEST_OR_REPORTED = new RegExp(`${NOT_A_REQUEST.source}|${REPORTED_SPEECH.source}`, 'i');
+
 function matchesUndenied(text: string, patterns: readonly RegExp[]): boolean {
-  const denied = clauseMarkerCheck(text, new RegExp(`${CLAUSE_NEGATION.source}|${NOT_A_REQUEST.source}|${REPORTED_SPEECH.source}`, 'i'));
+  const negated = clauseMarkerCheck(text.replace(NEGATION_CLAUSE_BREAK, '.'), CLAUSE_NEGATION);
+  const notARequest = clauseMarkerCheck(text, NOT_A_REQUEST_OR_REPORTED);
+  const someoneElse = clauseMarkerCheck(text, THIRD_PARTY_ACTOR);
   return patterns.some((p) => {
     for (const match of text.matchAll(new RegExp(p.source, `${p.flags.replace('g', '')}g`))) {
-      if (!denied(match.index)) return true;
+      if (!negated(match.index) && !notARequest(match.index) && !someoneElse(match.index)) return true;
     }
     return false;
   });
@@ -347,8 +353,8 @@ function matchesUndenied(text: string, patterns: readonly RegExp[]): boolean {
 /**
  * Whether the principal's own words ask to move one of their meetings or cut one short ("I need
  * to move my Thursday 2pm with Priya", "I have to leave the Catherine meeting at 2:30 instead of
- * 3"). A refusal ("don't move my 2pm") or a status question ("did Priya move the review?") is
- * not a request.
+ * 3"). A refusal ("don't move my 2pm"), a status question ("did Priya move the review?") or
+ * someone else doing it ("Priya will reschedule our 1:1") is not a request.
  */
 export function looksLikeReschedule(text: string): boolean {
   return matchesUndenied(ownLines(text), RESCHEDULE_PATTERNS);

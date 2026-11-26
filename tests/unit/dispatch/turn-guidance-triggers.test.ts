@@ -346,6 +346,13 @@ describe('looksLikeReschedule and looksLikeGetTime (#2608)', () => {
     'Should I move my 2pm with Priya?',
     'Is it possible to move my 2pm to Friday?',
     'Hannah asked to set up a call with Josh',
+    // Reported speech reaches past "and" (CodeRabbit, #2760).
+    'Priya asked me to find time with Josh and book a call with Rina.',
+    // Someone else doing it (CodeRabbit, #2760), the whole class: names, pronouns, modals.
+    'Priya will reschedule our 1:1 tomorrow. Please just tell me when it is.',
+    'Dana can move the board meeting if she needs to',
+    "She'll push my 2pm, no need to do anything",
+    'They are going to reschedule the review',
     // Someone else's hard stop.
     'Priya has a hard stop at 3, so keep it tight',
     // Spot-check verdicts and replies.
@@ -354,6 +361,20 @@ describe('looksLikeReschedule and looksLikeGetTime (#2608)', () => {
   ])('neither: %s', (text) => {
     expect(looksLikeReschedule(text)).toBe(false);
     expect(looksLikeGetTime(text)).toBe(false);
+  });
+
+  it('scans long whitespace runs before a colon in linear time (CodeRabbit, #2760)', () => {
+    const start = Date.now();
+    expect(looksLikeReschedule(`said${' '.repeat(100_000)}: x`)).toBe(false);
+    expect(looksLikeGetTime(`${' \t'.repeat(50_000)}:`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('keeps direct requests that read like the excluded ones', () => {
+    expect(looksLikeReschedule('Please reschedule with Priya')).toBe(true);
+    expect(looksLikeReschedule('Can you move my 2pm with Priya to Friday?')).toBe(true);
+    expect(looksLikeReschedule('We need to move the board meeting')).toBe(true);
+    expect(looksLikeGetTime('Find time with Josh and book a call with Rina')).toBe(true);
   });
 
   it('scans a long clause without a break in linear time', () => {
