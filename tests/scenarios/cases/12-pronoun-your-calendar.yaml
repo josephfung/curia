@@ -65,6 +65,12 @@ expected_behaviors:
     description: Does not search for or activate calendar tools itself.
     check:
       not_called: [tool-registry, skill-activate]
+  - id: no_browser_activated
+    weight: important
+    description: Does not activate the browser skill for a calendar pronoun ask (#2764 B).
+    check:
+      skills_activated:
+        excludes: [browser]
   - id: no_identifiers
     weight: important
     description: The reply names no tool, agent or system.
@@ -74,3 +80,4 @@ failure_modes:
   - '"My calendar is clear tomorrow"'
   - Searches tool-registry for a calendar tool and reports it can't find one
   - Relays "my calendar specialist says..."
+  - Activates browser for a calendar question
