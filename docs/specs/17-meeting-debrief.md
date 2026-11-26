@@ -358,7 +358,7 @@ These are out of scope for this feature but identified during design:
 | `src/dispatch/outbound-context.ts` | `OutboundContextService` + `ScopedOutboundContext`: register, query active, release, cleanup |
 | `skills/context-bridge/tools/context-bridge-release/` | Skill to mark entries as released (coordinator-only until #1972; now any agent, for unhinted or owned entries) |
 | `src/dispatch/context-bridge-parse.ts` | Shared helper module to normalize `context_bridge` JSON inputs |
-| Updates to `skills/signal-send/`, `skills/email/tools/email-send/`, `skills/email/tools/email-reply/` | Unconditional registration on success; honor optional `context_bridge` param |
+| Updates to `skills/messaging/tools/signal-send/`, `skills/email/tools/email-send/`, `skills/email/tools/email-reply/` | Unconditional registration on success; honor optional `context_bridge` param |
 | Update to `src/dispatch/dispatcher.ts` | Read path queries `outbound_context` for `[ACTIVE OUTBOUND CONTEXT]` injection |
 | Update to `agents/coordinator.yaml` | Delegation-hint guidance for outbound context entries |
 
