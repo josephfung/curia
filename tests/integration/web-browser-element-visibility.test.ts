@@ -18,7 +18,7 @@ import type { BrowserContext } from 'playwright';
 import { BrowserService } from '../../src/browser/browser-service.js';
 import { createSilentLogger } from '../../src/logger.js';
 import type { ToolContext } from '../../src/skills/types.js';
-import { WebBrowserHandler } from '../../skills/web/tools/web-browser/handler.js';
+import { WebBrowserHandler } from '../../skills/browser/tools/web-browser/handler.js';
 
 // The fixture hosts (*.example.test) do not resolve; the private-address guard (#2521)
 // resolves every host it lets through, so answer with a public address.

@@ -48,7 +48,7 @@ describe('bundle tool membership', () => {
 
   it('finds nested bundle tools at all', () => {
     // Without this, a layout change that matched nothing would leave the check above vacuous.
-    expect(nestedTools().has('web/card-use-request')).toBe(true);
+    expect(nestedTools().has('browser/card-use-request')).toBe(true);
   });
 
   it('keeps every exception pointing at a tool that exists and is still unlisted', () => {

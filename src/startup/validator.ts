@@ -143,7 +143,9 @@ export async function runStartupValidation(opts: {
   // Supports three layouts:
   //   a) skillsDir is a parent containing flat tools and/or skill bundles (production):
   //        skills/web/tools/web-search/tool.json
+  //        skills/browser/tools/web-browser/tool.json
   //        skills/email/tools/email-send/tool.json
+  //        skills/mailbox/tools/email-list/tool.json
   //   b) skillsDir is a single skill directory directly containing tool.json (tests):
   //        skills/valid-skill/tool.json — tests pass path.join(F, 'skills/valid-skill')
   //

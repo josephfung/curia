@@ -12,7 +12,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { OpenVerificationResult, Verification, VerificationDelivery } from '../../src/verification/types.js';
 import { registrableDomain } from '../../src/verification/domain.js';
-import { codeEntryPageUrl } from '../web/tools/web-browser/verification-detect.js';
+import { codeEntryPageUrl } from '../browser/tools/web-browser/verification-detect.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { isUuid } from '../../src/util/uuid.js';
 
