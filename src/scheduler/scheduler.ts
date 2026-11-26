@@ -1229,6 +1229,36 @@ export class Scheduler {
         };
       }
     }
+    // Job skill pre-activation (#2764): declared skills on the payload, plus what
+    // the last three runs activated (stored on last_run_context.activatedSkillsRuns).
+    // Debrief jobs also need `reports` (list-spot-checks) until the digest split in PR 3.
+    {
+      const declared = Array.isArray((job.taskPayload as { skills?: unknown }).skills)
+        ? (job.taskPayload as { skills: unknown[] }).skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : [];
+      if (recapInstruction !== undefined && !declared.includes('reports')) {
+        declared.push('reports');
+      }
+      const learnedRaw = job.lastRunContext?.activatedSkillsRuns;
+      const learned: string[] = [];
+      if (Array.isArray(learnedRaw)) {
+        const seen = new Set<string>();
+        for (const run of learnedRaw.slice(-3)) {
+          if (!Array.isArray(run)) continue;
+          for (const s of run) {
+            if (typeof s !== 'string' || !s.trim() || seen.has(s)) continue;
+            seen.add(s);
+            learned.push(s);
+          }
+        }
+      }
+      if (declared.length > 0 || learned.length > 0) {
+        metadata = {
+          ...(metadata ?? {}),
+          preActivateSkills: { declared, learned },
+        };
+      }
+    }
 
     // A deferred delegation wakes in the conversation that queued it (#1893).
     // Every other job keeps the per-run scheduler thread.
@@ -2136,12 +2166,19 @@ export class Scheduler {
         // protects its DB row from stale-job cleanup regardless of upsert outcome.
         // (A transient DB error during the upsert must not cause a still-declared
         // job's existing pending row to be cancelled on this startup pass.)
-        declaredTuples.push({
-          sourceAgentId: config.name,
-          agentId: targetAgentId,
-          cronExpr: schedule.cron,
-          taskPayload: JSON.stringify({ task: schedule.task }),
-        });
+        {
+          const skills = Array.isArray(schedule.skills)
+            ? schedule.skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+            : [];
+          declaredTuples.push({
+            sourceAgentId: config.name,
+            agentId: targetAgentId,
+            cronExpr: schedule.cron,
+            taskPayload: JSON.stringify(
+              skills.length > 0 ? { task: schedule.task, skills } : { task: schedule.task },
+            ),
+          });
+        }
 
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(

@@ -35,7 +35,7 @@ describe('active-skills-progress', () => {
     block = activateSkillInBlock(block, 'c', '2026-07-21T02:00:00.000Z', 3);
     block = activateSkillInBlock(block, 'd', '2026-07-21T03:00:00.000Z', 3);
     expect(block.skills.map((s) => s.name)).toEqual(['d', 'c', 'b']);
-    expect(ACTIVE_SKILLS_CAP).toBe(5);
+    expect(ACTIVE_SKILLS_CAP).toBe(8);
   });
 
   it('re-activating moves a skill to the front', () => {

@@ -54,8 +54,10 @@ import type { TaskRepo } from '../db/task-repo.js';
 import { DEFAULT_ERROR_BUDGET } from '../errors/types.js';
 import type { VerificationRuntime } from '../verification/index.js';
 
-/** Discovery tools injected for agents with `allow_discovery: true`. */
-const DISCOVERY_TOOLS = ['tool-registry', 'skill-activate'] as const;
+/** Registry search — gated by `allow_discovery` only (#2764). */
+const TOOL_REGISTRY = 'tool-registry';
+/** Skill activation — every agent that lists skills gets it (#2764 / ADR-070). */
+const SKILL_ACTIVATE = 'skill-activate';
 
 /**
  * An agent could not be assembled. `agentName` and `details` carry the structured
@@ -309,6 +311,8 @@ export function resolveSystemPromptSources(
     // Coordinator-only roster block. Specialists that opt in via inject_specialists
     // keep the bootstrap ${available_specialists} placeholder instead.
     availableSpecialists: isCoordinator ? ctx.agentRegistry.specialistSummary() : undefined,
+    // skillList is filled by assembleAgent after pin resolution (on_demand only).
+    skillList: undefined,
     // Coordinator-only own contact ID in "## Your Contact Details". Specialists keep
     // the ${agent_contact_id} bootstrap placeholder.
     agentContactId: isCoordinator ? ctx.agentContactId : undefined,
@@ -374,6 +378,8 @@ export interface AgentAssemblyContext {
   turnLanes?: TurnLanes;
   /** One registry shared by every runtime (#2588). */
   turnActivity?: TurnActivityRegistry;
+  /** Conversation-scoped active skills (#2764). Absent: no cross-message carry. */
+  conversationActiveSkills?: import('../db/conversation-active-skills.js').ConversationActiveSkillsStore;
   /**
    * Reach block for one agent's pinned tools. Absent: no agent is told a
    * default channel order. Called every turn.
@@ -404,13 +410,16 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const { logger, toolRegistry, skillRegistry } = ctx;
   const isCoordinator = agentConfig.role === 'coordinator';
 
-  // Expand pinned_skills (bundles) → member tools + instruction blocks + flags.
+  const skillLoading = agentConfig.skill_loading ?? 'eager';
+  // Expand pinned_skills (bundles) → member tools + instruction blocks + flags
+  // (eager), or listedSkills only (on_demand, #2764 / ADR-070).
   const pinResolution = resolvePinnedSkills(
     agentConfig.pinned_skills ?? [],
     skillRegistry,
     toolRegistry,
     logger,
     agentConfig.name,
+    skillLoading,
   );
   // Scheduled agents with unresolved pins still boot and keep their cron jobs
   // (#1501) — error-level log only, so monitoring can catch reduced toolsets.
@@ -423,27 +432,53 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   reportWithheldPinTools(agentConfig.name, pinResolution, logger);
 
   let systemPrompt = interpolateAgentSystemPrompt(agentConfig, ctx);
-  // Inject pinned skill instruction blocks (e.g. tasks / documents discipline).
-  systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
+  // Eager: inject pinned skill instruction blocks. On_demand: bodies arrive on activation.
+  if (skillLoading === 'eager') {
+    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
+  }
 
   const pinnedToolNames = pinResolution.toolNames;
   const toolDefs = toolRegistry.toToolDefinitions(pinnedToolNames);
 
-  // allow_discovery: true → inject tool-registry + skill-activate into the agent's
-  // tool list. Skipped if already pinned to avoid duplicate tool definitions.
-  // tool-registry discovers tools/skills; skill-activate loads a skill's tools +
-  // SKILL.md instructions into the turn (Phase 3a / #1495).
+  const injectTool = (toolName: string, reason: string): void => {
+    if (pinnedToolNames.includes(toolName) || toolDefs.some((t) => t.name === toolName)) return;
+    const defs = toolRegistry.toToolDefinitions([toolName]);
+    if (defs.length === 0) {
+      logger.error(
+        { agent: agentConfig.name, tool: toolName },
+        `${reason} but ${toolName} is not registered — check startup logs for skill load errors`,
+      );
+    } else {
+      toolDefs.push(...defs);
+    }
+  };
+
+  // allow_discovery gates tool-registry only. skill-activate is offered to every
+  // agent that lists skills (on_demand) or that opts into discovery (eager path
+  // historically bundled both) (#2764).
   if (agentConfig.allow_discovery) {
-    for (const discoveryTool of DISCOVERY_TOOLS) {
-      if (pinnedToolNames.includes(discoveryTool)) continue;
-      const discoveryToolDefs = toolRegistry.toToolDefinitions([discoveryTool]);
-      if (discoveryToolDefs.length === 0) {
-        logger.error(
-          { agent: agentConfig.name, tool: discoveryTool },
-          `allow_discovery is true but ${discoveryTool} is not registered — discovery/activation unavailable; check startup logs for skill load errors`,
-        );
-      } else {
-        toolDefs.push(...discoveryToolDefs);
+    injectTool(TOOL_REGISTRY, 'allow_discovery is true');
+    if (skillLoading === 'eager') {
+      injectTool(SKILL_ACTIVATE, 'allow_discovery is true');
+    }
+  }
+  if (skillLoading === 'on_demand' && pinResolution.listedSkills.length > 0) {
+    injectTool(SKILL_ACTIVATE, 'agent lists skills under on_demand');
+  }
+
+  // principalReach must see tools the agent can eventually send with, including
+  // member tools of listed skills (sends move into skills in PR 3).
+  const reachToolNames = [...pinnedToolNames];
+  if (skillLoading === 'on_demand') {
+    const seen = new Set(reachToolNames);
+    for (const listed of pinResolution.listedSkills) {
+      const skill = skillRegistry.get(listed.name);
+      if (!skill) continue;
+      for (const t of skill.manifest.tools) {
+        if (!seen.has(t)) {
+          seen.add(t);
+          reachToolNames.push(t);
+        }
       }
     }
   }
@@ -479,7 +514,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const runtimeConfig: AgentConfig = {
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
-    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx, pinnedToolNames),
+    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx, reachToolNames),
     provider: binding.provider,
     resolvedModel: binding.resolvedModel,
     tier: binding.tier,
@@ -495,7 +530,10 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     pinnedTools: pinnedToolNames,
     skillToolDefs: toolDefs,
     pinnedSkillNames: pinResolution.resolvedSkills,
+    skillLoading,
+    skillList: pinResolution.listedSkills,
     skillRegistry,
+    conversationActiveSkills: ctx.conversationActiveSkills,
     // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
     modelRegistry: ctx.models.modelRegistry,
     estimateCostUsd: ctx.estimateCostUsd,

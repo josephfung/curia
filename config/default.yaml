@@ -109,6 +109,12 @@ dispatch:
     extraRoundsPerInjection: 2     # ADR-053 §3: added to the host's maxTurns per drained input
     laneWaitTimeoutMs: 1200000     # ADR-053 §6: 20 min, then fail open (log error, run anyway)
 
+# Conversation skill carry (#2764 / ADR-070). Skills activated or used in a
+# conversation stay until idle past idleTtlHours, at most `cap`, MRU first.
+conversationActiveSkills:
+  idleTtlHours: 24
+  cap: 8
+
 workingMemory:
   # TTL for working memory turns. Rows are expired by DreamEngine's nightly purge
   # pass (DELETE WHERE expires_at < now()). The idx_wm_expires partial index makes

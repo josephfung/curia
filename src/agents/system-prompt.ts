@@ -56,6 +56,7 @@ export type SystemPromptSources = Pick<
   | 'officeIdentityService'
   | 'securityContextBlock'
   | 'availableSpecialists'
+  | 'skillList'
   | 'autonomyService'
   | 'timezone'
   | 'channelAccounts'
@@ -70,6 +71,26 @@ export type SystemPromptSources = Pick<
   | 'pinnedContextReader'
   | 'principalReach'
 >;
+
+/**
+ * `## Skills` block for on_demand agents (#2764). One line per listed skill.
+ * Empty when there are no listed skills.
+ */
+export function formatSkillsListBlock(
+  skills: ReadonlyArray<{ name: string; description: string }>,
+): string {
+  if (skills.length === 0) return '';
+  const lines = [
+    '## Skills',
+    'Load a skill with skill-activate before using its tools. Its tools and rules arrive with it.',
+    'Activate every skill you need in one call, alongside your other first calls.',
+  ];
+  for (const s of skills) {
+    const desc = s.description.trim();
+    lines.push(`- ${s.name}: ${desc}`);
+  }
+  return lines.join('\n');
+}
 
 /** Stands in when no reader is wired: every declared entry renders as unavailable. */
 const UNWIRED_PINNED_CONTEXT_READER: PinnedContextReader = {
@@ -196,6 +217,13 @@ export async function buildBaseSystemPrompt(
   // API-editable, strip newlines here (as the ### Principal Contact Details block does).
   if (sources.availableSpecialists) {
     prompt += '\n\n## Available Specialists\n' + sources.availableSpecialists;
+  }
+
+  // On-demand skill list (#2764 / ADR-070): name + description only; bodies load on activation.
+  // After the roster so routing context precedes capability discovery.
+  if (sources.skillList && sources.skillList.length > 0) {
+    const skillsBlock = formatSkillsListBlock(sources.skillList);
+    if (skillsBlock) prompt += '\n\n' + skillsBlock;
   }
 
   // Declared `/shared/` documents and config keys (#2338), read fresh every turn so a

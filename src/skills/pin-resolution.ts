@@ -35,13 +35,27 @@ export interface UnresolvedPin {
   withheldTools?: string[];
 }
 
+/** How skill pins expand (#2764, ADR-070). Tool pins are always loaded. */
+export type SkillLoadingMode = 'eager' | 'on_demand';
+
+/** A skill pin under on_demand: name + description only until activation. */
+export interface ListedSkill {
+  name: string;
+  description: string;
+}
+
 export interface PinResolution {
   /** Deduped tool names to pass to ToolRegistry.toToolDefinitions(). */
   toolNames: string[];
-  /** Instruction bodies to append to the system prompt (non-empty only). */
+  /** Instruction bodies to append to the system prompt (non-empty only). Eager mode. */
   instructionBlocks: string[];
   /** The skill each entry of `instructionBlocks` came from, index for index. */
   instructionBlockSkills: string[];
+  /**
+   * Skill pins under on_demand: listed for the model, body/tools deferred (#2764).
+   * Empty in eager mode.
+   */
+  listedSkills: ListedSkill[];
   /** True when any pinned skill sets heartbeat: true. */
   heartbeatEligible: boolean;
   /** True when any pinned skill sets document_workspace: true. */
@@ -65,7 +79,8 @@ function isSystemOnlyTool(toolRegistry: ToolRegistry, name: string): boolean {
  *
  * Resolution order per pin name:
  * 1. SkillRegistry hit (bundle or MCP-projected skill, including synthetic
- *    singletons) → expand members + instructions/flags.
+ *    singletons) → expand members + instructions/flags (eager), or list only
+ *    (on_demand, #2764 / ADR-070).
  * 2. Else ToolRegistry hit → first-class single-tool pin (ADR-032).
  * 3. Else warn and skip (recorded in unresolvedPins).
  */
@@ -75,11 +90,13 @@ export function resolvePinnedSkills(
   toolRegistry: ToolRegistry,
   logger?: Logger,
   agentName?: string,
+  mode: SkillLoadingMode = 'eager',
 ): PinResolution {
   const toolNames: string[] = [];
   const seenTools = new Set<string>();
   const instructionBlocks: string[] = [];
   const instructionBlockSkills: string[] = [];
+  const listedSkills: ListedSkill[] = [];
   const resolvedSkills: string[] = [];
   const resolvedPins: Array<{ pin: string; kind: PinReferentKind }> = [];
   const unresolvedPins: UnresolvedPin[] = [];
@@ -136,6 +153,12 @@ export function resolvePinnedSkills(
           withheldTools.push(t);
           continue;
         }
+        // on_demand: do not expand member tools into the fixed set — activation loads them
+        // (#2764). Still detect missing tools so bootstrap gaps stay loud.
+        if (mode === 'on_demand') {
+          if (!toolRegistry.get(t)) missingTools.push(t);
+          continue;
+        }
         if (!pushTool(t, pin)) missingTools.push(t);
       }
       if (missingTools.length > 0) {
@@ -145,6 +168,22 @@ export function resolvePinnedSkills(
         unresolvedPins.push({ pin, reason: 'caller_not_allowed', withheldTools });
       }
       if (reservedForOthers) continue;
+      // Flags apply from the pin in both modes (heartbeat / document workspace).
+      if (skill.manifest.heartbeat) heartbeatEligible = true;
+      if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
+      if (mode === 'on_demand') {
+        listedSkills.push({
+          name: skill.manifest.name,
+          description: skill.manifest.description.trim(),
+        });
+        if (!skill.synthetic) {
+          logger?.debug?.(
+            { agent: agentName, pin, kind: 'skill', mode: 'on_demand' },
+            'Listed capability pin (on_demand)',
+          );
+        }
+        continue;
+      }
       // Prefer the shared formatter when the skill has progressive-disclosure
       // files so pinned imports get the references index. Native instruction
       // blocks without references stay as the raw body (no activation wrapper).
@@ -167,8 +206,6 @@ export function resolvePinnedSkills(
           instructionBlockSkills.push(pin);
         }
       }
-      if (skill.manifest.heartbeat) heartbeatEligible = true;
-      if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
       if (!skill.synthetic) {
         logger?.debug?.(
           {
@@ -211,6 +248,7 @@ export function resolvePinnedSkills(
     toolNames,
     instructionBlocks,
     instructionBlockSkills,
+    listedSkills,
     heartbeatEligible,
     documentWorkspaceEnabled,
     resolvedSkills,

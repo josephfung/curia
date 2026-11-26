@@ -1,12 +1,13 @@
 {
   "name": "skill-activate",
-  "description": "Activate a discovered skill (bundle) for this task: load its member tools into your toolkit and inject its SKILL.md instructions. For imported Anthropic skills, pass optional `reference` to load one text file from references/ or assets/ (e.g. \"common-clauses.md\"); binary assets are listed but cannot be loaded into context. Call after tool-registry returns kind:\"skill\". Activation does not grant new authority — member tools still respect allowed_callers and action_risk, and a skill whose tools are all reserved for other agents is refused: delegate to its owner instead. When running on a bound task, the active set is persisted for wake re-load automatically.",
+  "description": "Activate one or more skills (bundles) for this task: load each skill's member tools and SKILL.md instructions. Prefer `skills` to activate several in one call. For imported Anthropic skills, pass optional `reference` with a single `skill` to load one text file from references/ or assets/. Activation does not grant new authority — member tools still respect allowed_callers and action_risk, and a skill whose tools are all reserved for other agents is refused: delegate to its owner instead. When running on a bound task, the active set is persisted for wake re-load automatically.",
   "version": "0.2.2",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "skill": "string (skill bundle name from tool-registry, e.g. tasks or not-a-lawyer)",
-    "reference": "string? (optional path under references/ or assets/, e.g. common-clauses.md)"
+    "skill": "string? (one skill bundle name, e.g. tasks)",
+    "skills": "string[]? (several skill names in one call; preferred when activating more than one)",
+    "reference": "string? (optional path under references/ or assets/, e.g. common-clauses.md; single-skill only)"
   },
   "outputs": {
     "skill": "string",
@@ -15,7 +16,8 @@
     "instructionsLoaded": "boolean",
     "references": "array",
     "assets": "array",
-    "referenceContent": "object?"
+    "referenceContent": "object?",
+    "activations": "array?"
   },
   "permissions": [],
   "secrets": [],

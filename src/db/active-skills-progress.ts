@@ -6,8 +6,8 @@
 
 import { serializedUtf8Bytes } from './resumable-progress.js';
 
-/** Max skills kept active per task (≈ Anthropic's 25k / ~5k-per-skill budget). */
-export const ACTIVE_SKILLS_CAP = 5;
+/** Max skills kept active per task (#2764: raised from 5 so wakes can restore a fuller set). */
+export const ACTIVE_SKILLS_CAP = 8;
 
 /** Max serialized size (UTF-8 bytes) of the entire activeSkills block. */
 export const ACTIVE_SKILLS_BLOCK_MAX_BYTES = 4096;
