@@ -7,12 +7,12 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { SecretCaptureRequestHandler } from './handler.js';
-import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from '../../src/secrets/secret-capture-resume-subscriber.js';
-import { createSecretCaptured } from '../../src/bus/events.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { SecretCaptureMinter, CaptureOrigin } from '../../src/secrets/secret-capture-service.js';
-import type { EventBus } from '../../src/bus/bus.js';
-import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../../src/bus/events.js';
+import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from '../../../../src/secrets/secret-capture-resume-subscriber.js';
+import { createSecretCaptured } from '../../../../src/bus/events.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { SecretCaptureMinter, CaptureOrigin } from '../../../../src/secrets/secret-capture-service.js';
+import type { EventBus } from '../../../../src/bus/bus.js';
+import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../../../../src/bus/events.js';
 
 describe('specialist secret-capture resume flow (#995)', () => {
   it('delegated mint → secret.captured → coordinator re-delegate task (value never leaks)', async () => {

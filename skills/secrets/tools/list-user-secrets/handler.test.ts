@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { ListUserSecretsHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
 
 function makeCtx(
   listUserSecretNames: ToolContext['listUserSecretNames'],

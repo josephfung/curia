@@ -205,12 +205,11 @@ pinned_skills:
   - date-resolve
   - contact-update
   - contact-create
-  - file-parse
-  - archive-extract
+  # Attachments / vault (#2764 §2): listed skills, not always-on tool pins.
+  - files
+  - secrets
   - tool-registry
   - activity-log
-  - secret-capture-request
-  - list-user-secrets
 allow_discovery: true
 error_budget:
   max_turns: 40

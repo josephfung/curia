@@ -44,6 +44,8 @@ skills:
   - setup
   - digest
   - meetings
+  - files
+  - secrets
   # Onboarding (#2360): activated only on onboarding turns; inert until someone starts onboarding.
   - onboarding
   # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
@@ -68,8 +70,7 @@ tools:
   - async-offramp
   - meeting-agenda-load
   - meeting-notes-start
-  - file-parse
-  - archive-extract
+  # file-parse / archive-extract live in the files skill (#2764).
   - request-clarification
   # Cross-conversation hand-off (#2588): coordinator-only. Not pinned; the runtime offers
   # it on a turn whose other-turns note lists a turn that can take a hand-off.
@@ -83,9 +84,7 @@ tools:
   # the google-workspace drive-files.md reference, not pinned.
   - doc-publish-google
   - image-generate
-  # Personal vault (agent-captured user.* secrets)
-  - secret-capture-request
-  - list-user-secrets
+  # Personal vault tools live in the secrets skill (#2764).
   # Mailbox sign-in links (#2361): pinned to setup-wizard, reached by the coordinator through
   # discovery (tool-registry), so the coordinator's always-on prompt does not grow.
   - mailbox-signin-link

@@ -3,8 +3,8 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { SecretCaptureRequestHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { SecretCaptureMinter, MintResult } from '../../../../src/secrets/secret-capture-service.js';
 
 function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[]; detailCalls: unknown[]; cardCalls: unknown[] } {
   const userCalls: unknown[] = [];
@@ -179,7 +179,7 @@ describe('SecretCaptureRequestHandler', () => {
     expect(call.origin.agentId).toBe('coordinator');
     expect(call.origin.originator).toEqual(originator);
     // The resume_token names the specialist to re-delegate to.
-    const { decodeResumeToken } = await import('../../src/agents/resume-token.js');
+    const { decodeResumeToken } = await import('../../../../src/agents/resume-token.js');
     const decoded = decodeResumeToken(call.origin.resumeToken as string)!;
     expect(decoded.agent).toBe('accounts-specialist');
     expect(decoded.original_task).toBe('log into Aeroplan and check balance');

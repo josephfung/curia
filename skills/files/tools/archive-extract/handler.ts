@@ -9,10 +9,10 @@ import fs from 'node:fs/promises';
 import zlib from 'node:zlib';
 import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
-import { mimeTypeFromFilename } from '../_shared/document-types.js';
-import { resolveTempFileUrl } from '../_shared/temp-file-url.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { MAX_TEMP_FILE_BYTES } from '../../../../src/skills/temp-file-store.js';
+import { mimeTypeFromFilename } from '../../../_shared/document-types.js';
+import { resolveTempFileUrl } from '../../../_shared/temp-file-url.js';
 
 const require = createRequire(import.meta.url);
 const yauzl = require('yauzl') as YauzlModule;
