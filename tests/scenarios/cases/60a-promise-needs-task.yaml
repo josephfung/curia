@@ -4,9 +4,9 @@
 # task"; skills_activated makes the activation path visible.
 name: promise needs a task
 description: >
-  The principal asks the coordinator to tell Dana they will send the deck on Friday.
-  The coordinator must create a task for that promise (success: true) and activate the
-  tasks skill. Replying "I'll send it Friday" with no task is a miss.
+  The principal asks the coordinator to tell Dana they will send the board deck by the
+  end of next week. The coordinator must create a task for that promise (success: true)
+  and activate the tasks skill. Replying with a bare promise and no task is a miss.
 tags: [tasks, skill-activation, on-demand]
 release_gate: false
 stub_sets: [human-channels]
@@ -21,7 +21,7 @@ inbound:
   from: principal
   channel: cli
   content: >
-    Tell Dana I'll send the board deck Friday.
+    Tell Dana I'll send the board deck by the end of next week.
 tool_stubs:
   delegate:
     - match: { agent: contacts }
@@ -35,20 +35,17 @@ tool_stubs:
       return:
         task_id: 60a1b2c3-d4e5-4f67-8901-23456789abcd
         status: open
-        title: Send board deck to Dana Whitfield by Friday
+        title: Send board deck to Dana Whitfield by end of next week
   email-send:
     - match: {}
       return: { message_id: msg-60a-deck-promise, status: sent }
   signal-send:
     - match: {}
       return: { message_id: msg-60a-signal, status: sent }
-  skill-activate:
-    - match: {}
-      return: { skill: tasks, tools: [task-create, task-list, task-update, task-complete] }
 expected_behaviors:
   - id: creates_task
     weight: critical
-    description: Creates a task for the Friday deck promise (call succeeds).
+    description: Creates a task for the end-of-next-week deck promise (call succeeds).
     check:
       called: task-create
       success: true
@@ -65,6 +62,6 @@ expected_behaviors:
       skills_activated:
         excludes: [browser]
 failure_modes:
-  - Replies that the deck will go out Friday with no task-create
+  - Replies that the deck will go out next week with no task-create
   - Calls task-create but the call is refused (tool not loaded)
   - Activates browser or other unrelated skills

@@ -29,11 +29,6 @@ tool_stubs:
   scheduler-report:
     - match: {}
       return: { recorded: true }
-  skill-activate:
-    - match: {}
-      return:
-        skill: digest
-        tools: [list-principal-reports, list-spot-checks, record-spot-check, ack-principal-report]
 expected_behaviors:
   - id: lists
     weight: critical

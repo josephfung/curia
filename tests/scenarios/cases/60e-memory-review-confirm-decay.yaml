@@ -35,11 +35,6 @@ tool_stubs:
       return:
         action: confirm
         nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70
-  skill-activate:
-    - match: {}
-      return:
-        skill: memory-review
-        tools: [decay-warnings-list, memory-confirm]
 expected_behaviors:
   - id: confirms
     weight: critical

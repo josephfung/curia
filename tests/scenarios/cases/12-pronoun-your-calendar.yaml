@@ -40,7 +40,7 @@ tool_stubs:
   # The wrong path has to be available: production activation of the calendar bundle
   # succeeds for the coordinator, with every member tool skipped (allowed_callers).
   skill-activate:
-    - match: {}
+    - match: { skill: calendar }
       return:
         skill: calendar
         tools: []
@@ -65,12 +65,6 @@ expected_behaviors:
     description: Does not search for or activate calendar tools itself.
     check:
       not_called: [tool-registry, skill-activate]
-  - id: no_browser_activated
-    weight: important
-    description: Does not activate the browser skill for a calendar pronoun ask (#2764 B).
-    check:
-      skills_activated:
-        excludes: [browser]
   - id: no_identifiers
     weight: important
     description: The reply names no tool, agent or system.

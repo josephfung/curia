@@ -20,11 +20,6 @@ tool_stubs:
       return: { archived: true, message_id: nylas-msg-60b-newsletter }
     - match: {}
       return: { archived: true, message_id: nylas-msg-60b-newsletter }
-  skill-activate:
-    - match: {}
-      return:
-        skill: mailbox
-        tools: [email-list, email-get, email-archive, email-label, email-mark-read]
   delegate:
     - match: {}
       return: { agent: ceo-inbox, response: "Archived in the principal mailbox." }

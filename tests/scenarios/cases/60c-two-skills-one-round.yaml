@@ -41,15 +41,6 @@ tool_stubs:
         path: /projects/acme-series-b/brief.md
         version: 1
         bytes: 240
-  skill-activate:
-    - match: {}
-      return:
-        skill: web
-        tools: [web-search, web-fetch]
-    - match: {}
-      return:
-        skill: documents
-        tools: [doc-read, doc-list, doc-write, doc-search, doc-place]
   delegate:
     - match: {}
       return: { agent: contacts, response: "No contact work needed." }

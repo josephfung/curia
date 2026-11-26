@@ -10,26 +10,21 @@ inbound:
   from: principal
   channel: cli
   content: >
-    Accept learning digest item ld-60f-001 — yes, keep using that phrasing.
+    Confirm task 1 — yes, keep using that phrasing.
 tool_stubs:
   list-learning-digest:
     - match: {}
       return:
-        items:
-          - id: ld-60f-001
-            summary: Prefer "talk soon" over "best regards" in short Signal notes
-            status: open
-        count: 1
+        voice_guide: Prefer "talk soon" over "best regards" in short Signal notes
+        completion_items: []
+        sections_markdown: "1. Prefer talk soon over best regards"
   resolve-learning-digest:
-    - match: { id: ld-60f-001 }
-      return: { id: ld-60f-001, status: accepted }
+    - match: { action: approve_voice, number: 1 }
+      return: { action: approve_voice, number: 1, status: accepted }
+    - match: { action: approve_voice }
+      return: { action: approve_voice, number: 1, status: accepted }
     - match: {}
-      return: { id: ld-60f-001, status: accepted }
-  skill-activate:
-    - match: {}
-      return:
-        skill: learning-digest
-        tools: [list-learning-digest, resolve-learning-digest]
+      return: { action: approve_voice, number: 1, status: accepted }
 expected_behaviors:
   - id: resolves
     weight: critical
