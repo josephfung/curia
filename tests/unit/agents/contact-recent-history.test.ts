@@ -169,6 +169,8 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       && (m.content === 'following up on a new thread' || m.content.endsWith('following up on a new thread')),
     );
     expect(blockAt).toBeGreaterThan(-1);
+    // #2774 option a: contact-recent is a per-turn system message after history
+    // turns and before the latest user prompt.
     expect(blockAt).toBeLessThan(historyAt);
 
     // The turn just written is itself recallable from a later conversation.

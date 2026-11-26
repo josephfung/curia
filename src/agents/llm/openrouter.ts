@@ -468,27 +468,6 @@ export class OpenRouterProvider implements LLMProvider {
     /** The effort the request carries, when it sends one. */
     reasoningEffort?: ReasoningEffort;
   } {
-    // Extract and concatenate all system messages into a single system role
-    // entry. The OpenAI API accepts system messages inline (unlike Anthropic),
-    // but we still merge them for consistency — the runtime injects multiple
-    // role:'system' entries (main prompt, sender context, bullpen context).
-    const systemContent = messages
-      .filter((m) => m.role === 'system')
-      .map((m) => {
-        if (typeof m.content !== 'string') {
-          // System messages must be plain strings. Log at error level so this
-          // is discoverable if a future caller passes structured content.
-          this.logger.error(
-            { contentType: typeof m.content },
-            'System message has non-string content — skipping; caller must pass plain strings for system role',
-          );
-          return '';
-        }
-        return m.content;
-      })
-      .filter(Boolean)
-      .join('\n\n');
-
     // Prefer the explicit model param; fall back to options.model for backward compatibility.
     const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
     const model = modelOverride ?? optionsModel;
@@ -497,16 +476,27 @@ export class OpenRouterProvider implements LLMProvider {
     }
 
     // Build the OpenAI message array from our provider-neutral Message type.
+    // Keep only the *first* system message as the leading entry; pass later
+    // role:'system' messages through inline in their original positions (#2774
+    // maintainer option a). Merging every system message into the leading one
+    // busts DeepSeek/OpenRouter tool+history cache whenever sender/Bullpen/
+    // entities/contact-recent change. Anthropic/Bedrock still merge into their
+    // top-level `system` param because those APIs have no inline system role.
     const conversationMessages: ChatCompletionMessageParam[] = [];
 
-    // Add the merged system message as a single entry at the start.
-    if (systemContent) {
-      conversationMessages.push({ role: 'system', content: systemContent });
-    }
-
-    // Map non-system messages to OpenAI SDK shapes.
     for (const m of messages) {
-      if (m.role === 'system') continue;
+      if (m.role === 'system') {
+        if (typeof m.content !== 'string') {
+          this.logger.error(
+            { contentType: typeof m.content },
+            'System message has non-string content — skipping; caller must pass plain strings for system role',
+          );
+          continue;
+        }
+        if (!m.content) continue;
+        conversationMessages.push({ role: 'system', content: m.content });
+        continue;
+      }
 
       if (typeof m.content === 'string') {
         conversationMessages.push({

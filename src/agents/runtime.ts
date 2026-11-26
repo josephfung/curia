@@ -1611,19 +1611,21 @@ export class AgentRuntime {
       );
     }
 
-    // Start building messages array — history and user message appended after
-    // sender context and bullpen are resolved.
+    // Start building messages array. Stable system prompt alone leads; per-turn
+    // system messages (sender, Bullpen, resolved entities, contact recent) are
+    // staged and appended *after* conversation history so OpenRouter/DeepSeek
+    // can keep system+tools+history cached when only those blocks change (#2774
+    // maintainer option a). History and the latest user message complete the array.
     const messages: Message[] = [
       { role: 'system', content: effectiveSystemPrompt },
     ];
-
-    // Track insertion position for Bullpen context — it must follow sender context (if any)
-    // so the agent reads: system prompt → who is talking → what's pending in Bullpen → history.
+    const perTurnSystemMessages: Message[] = [];
+    // Mid-turn Bullpen refresh insert index — set after history is appended.
     let bullpenInsertAt = 1;
 
     // Inject resolved sender context as a system message so the coordinator
-    // knows who it's talking to. Inserted after the system prompt but before
-    // history, so it's visible but doesn't pollute working memory.
+    // knows who it's talking to. Staged after history (not after messages[0]),
+    // so it's visible but doesn't pollute working memory or the cacheable prefix.
     // Validated once and reused for the delegated-task prompt and ctx.caller.
     // metadata is Record<string, unknown>; a malformed originator must not become
     // audit fields or prompt identity (#1871, #710).
@@ -1751,10 +1753,8 @@ export class AgentRuntime {
         principalUnauthenticated: isUnauthenticatedPrincipal(taskEvent.payload.metadata),
       })}`;
 
-      // Insert after system prompt (index 0) but before history
       if (ctxBudget.allocate('sender_context', [{ role: 'system', content: senderInfo }])) {
-        messages.splice(1, 0, { role: 'system', content: senderInfo });
-        bullpenInsertAt = 2;
+        perTurnSystemMessages.push({ role: 'system', content: senderInfo });
       } else {
         logger.warn(
           { agentId, conversationId, senderInfoLength: senderInfo.length },
@@ -1784,8 +1784,7 @@ export class AgentRuntime {
         const delegatedBlock = renderDelegatedTaskContext(identity);
         const delegatedAddendumApplied = ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }]);
         if (delegatedAddendumApplied) {
-          messages.splice(1, 0, { role: 'system', content: delegatedBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: delegatedBlock });
         } else {
           logger.error(
             { agentId, conversationId, blockLength: delegatedBlock.length },
@@ -1813,8 +1812,7 @@ export class AgentRuntime {
       } else if (taskEvent.payload.channelId === 'internal' && identity) {
         const identityBlock = renderRequesterIdentity(identity);
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: identityBlock }])) {
-          messages.splice(1, 0, { role: 'system', content: identityBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: identityBlock });
         } else {
           logger.error(
             { agentId, conversationId, blockLength: identityBlock.length },
@@ -1856,8 +1854,7 @@ export class AgentRuntime {
         unknownSenderBlock += `\n${renderSenderFacts({ identityVerified: false, messageAuthenticated: senderVerifiedUnknown, messageAuthentication: taskEvent.payload.metadata?.senderAuthentication })
           .split('\n').map(l => `  ${l}`).join('\n')}`;
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: unknownSenderBlock }])) {
-          messages.splice(1, 0, { role: 'system', content: unknownSenderBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: unknownSenderBlock });
         } else {
           // Security-relevant: the LOW-TRUST block could not fit in the context budget.
           // The coordinator will receive this message with no behavioral constraints for the unresolved sender.
@@ -1952,12 +1949,18 @@ export class AgentRuntime {
     }
 
     // Inject pending Bullpen threads as a system message so the agent is aware
-    // of active inter-agent discussions. Inserted after sender context (if any),
-    // before conversation history — matching spec context budget priority order.
+    // of active inter-agent discussions. Staged with other per-turn system
+    // messages after sender context (if any) — matching spec context budget
+    // priority order — and placed after history on the wire (#2774).
     // Refreshed before every chatWithRetry call so the model sees current thread
     // state, not a stale snapshot from the start of the task (#213).
     if (!suppressAmbientBullpen) {
-      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, ambientBullpenThreads);
+      await this.refreshBullpenContext(
+        perTurnSystemMessages,
+        perTurnSystemMessages.length,
+        agentId,
+        ambientBullpenThreads,
+      );
     }
 
     // Record bullpen context in the budget for observability. Match by the
@@ -1965,16 +1968,16 @@ export class AgentRuntime {
     // detection sites can't drift apart. Honour the decision: refresh has
     // already spliced the block in, and a seven-day window makes that block
     // large enough to overrun a small context window if it is sent anyway (#1899).
-    const bullpenMsg = messages.find(
+    const bullpenMsg = perTurnSystemMessages.find(
       m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
     );
     const bullpenFits = ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
     let ambientBullpenDropped = false;
     if (bullpenMsg && !bullpenFits) {
-      const idx = messages.findIndex(
+      const idx = perTurnSystemMessages.findIndex(
         m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
       );
-      if (idx !== -1) messages.splice(idx, 1);
+      if (idx !== -1) perTurnSystemMessages.splice(idx, 1);
       // The block never reached the model. Leave those threads unmarked so a later
       // wake can try again. The woke thread is not in this map; it is still stamped.
       ambientBullpenThreads.clear();
@@ -2004,7 +2007,7 @@ export class AgentRuntime {
       }
       const resolvedBlock = formatResolvedEntitiesBlock(resolvedCards);
       if (resolvedBlock && ctxBudget.allocate(RESOLVED_ENTITIES_TIER, [{ role: 'system', content: resolvedBlock }])) {
-        messages.push({ role: 'system', content: resolvedBlock });
+        perTurnSystemMessages.push({ role: 'system', content: resolvedBlock });
       } else if (!resolvedBlock) {
         ctxBudget.allocate(RESOLVED_ENTITIES_TIER, []);
       } else {
@@ -2056,7 +2059,7 @@ export class AgentRuntime {
         ? [{ role: 'system', content: contactRecent.block }]
         : [];
       if (contactRecent.block && ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, blockMessage)) {
-        messages.push(blockMessage[0]!);
+        perTurnSystemMessages.push(blockMessage[0]!);
       } else if (!contactRecent.block) {
         ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, []);
       } else {
@@ -2067,10 +2070,20 @@ export class AgentRuntime {
       }
     }
 
-    // Append history and user message to complete the messages array.
-    // Final order: system prompt → sender context → bullpen → resolved entities
-    // → contact recent history → history → (turn context +) user message (#2774).
+    // Append history, then per-turn system messages, then the latest user message.
+    // Final order: stable system → history → sender → bullpen → resolved entities
+    // → contact recent → (turn context +) user message (#2774 option a).
     messages.push(...budgetedHistory);
+    const bullpenIdxInPerTurn = perTurnSystemMessages.findIndex(
+      m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
+    );
+    // Mid-turn Bullpen refresh: keep the block in the after-history region.
+    bullpenInsertAt = messages.length + (
+      bullpenIdxInPerTurn >= 0
+        ? bullpenIdxInPerTurn
+        : perTurnSystemMessages.length
+    );
+    messages.push(...perTurnSystemMessages);
     messages.push({ role: 'user', content: userMessageContent });
 
     const maybeAppendCheckpointBudgetNudge = (target: Message[] = messages): void => {
@@ -3966,6 +3979,9 @@ export class AgentRuntime {
    *
    * Called before every chatWithRetry invocation so the model sees current
    * thread state, not a stale snapshot from the start of the task (#213).
+   * The initial call stages into the per-turn system list (after history on
+   * the wire); mid-turn refreshes splice in place in that after-history region
+   * (#2774 option a).
    *
    * - Finds and removes any existing Bullpen system message (identified by
    *   the `[Bullpen —` prefix produced by formatBullpenContext).

@@ -793,6 +793,21 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
     expect(snapshots[1]!.user).toContain('Keep the inbox clear of low-priority noise.');
     expect(snapshots[0]!.system).not.toContain('## Current Date & Time');
     expect(snapshots[0]!.system).not.toContain('## Autonomy Level');
+
+    // Per-turn system messages (sender / Bullpen / …) sit after history, before
+    // the latest user message — OpenRouter keeps them inline (#2774 option a).
+    for (const [i] of turns.entries()) {
+      const msgs = provider.chat.mock.calls[i]![0].messages as Array<{ role: string; content: unknown }>;
+      expect(msgs[0]!.role).toBe('system');
+      const lastUserAt = msgs.length - 1;
+      expect(msgs[lastUserAt]!.role).toBe('user');
+      const laterSystems = msgs
+        .map((m, idx) => ({ m, idx }))
+        .filter(({ m, idx }) => idx > 0 && m.role === 'system');
+      for (const { idx } of laterSystems) {
+        expect(idx).toBeLessThan(lastUserAt);
+      }
+    }
   });
 
   it('keeps the same prefix across a tool round whose result carries next_step', async () => {
