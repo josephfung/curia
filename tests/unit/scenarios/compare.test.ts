@@ -10,6 +10,7 @@ function caseResult(overrides: Partial<CaseResult> & { name: string }): CaseResu
     weightedScore: 1,
     criticalFailures: [],
     requiredPassRate: 0.8,
+    judgeErrors: 0,
     usage: emptyBreakdown(),
     ...overrides,
   };
