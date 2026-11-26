@@ -3618,6 +3618,182 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(sys).toBeDefined();
   });
 
+  describe('code pre-activation paths (#2764 §5)', () => {
+    async function runPreActivateTurn(opts: {
+      channelId: string;
+      content?: string;
+      turnGuidance?: string[];
+      metadata?: Record<string, unknown>;
+      skills: Array<{
+        name: string;
+        tools: string[];
+        instructions: string;
+        toolDefs: Array<{ name: string; description: string; input_schema: { type: 'object'; properties: Record<string, never>; required: string[] } }>;
+      }>;
+    }) {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+      const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: async (params) => {
+          chatCalls.push({
+            tools: params.tools?.map((t) => ({ name: t.name })),
+            messages: params.messages as Array<{ role: string; content: unknown }>,
+          });
+          return {
+            type: 'text' as const,
+            content: 'Done.',
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        },
+      };
+      const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+      const skillRegistry = new SkillRegistry();
+      const allToolDefs = opts.skills.flatMap((s) => s.toolDefs);
+      for (const s of opts.skills) {
+        skillRegistry.register(
+          {
+            name: s.name,
+            description: `${s.name} skill`,
+            tools: s.tools,
+            instructions: s.instructions,
+          },
+          `/tmp/${s.name}`,
+        );
+      }
+      const resolveSkillActivationForAgent = vi.fn((skill: string) => {
+        const found = opts.skills.find((s) => s.name === skill);
+        if (!found) return { error: `unknown skill ${skill}` };
+        return {
+          skill: found.name,
+          tools: found.tools,
+          skippedTools: [],
+          instructions: found.instructions,
+        };
+      });
+      const mockExecution = {
+        invoke: vi.fn(),
+        getToolDefinitions: vi.fn((names: string[]) =>
+          allToolDefs.filter((d) => names.includes(d.name)),
+        ),
+        resolveSkillActivationForAgent,
+      } as unknown as ExecutionLayer;
+      new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [skillActivateToolDef],
+        skillRegistry,
+      }).register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-preact',
+        channelId: opts.channelId,
+        senderId: opts.channelId === 'scheduler' ? 'scheduler' : 'user',
+        content: opts.content ?? 'Go',
+        parentEventId: 'parent-preact',
+        ...(opts.turnGuidance ? { turnGuidance: opts.turnGuidance as never } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      }));
+      const call = chatCalls[0]!;
+      const system = call.messages
+        .filter((m) => m.role === 'system' && typeof m.content === 'string')
+        .map((m) => m.content as string)
+        .join('\n');
+      return {
+        resolveSkillActivationForAgent,
+        tools: call.tools?.map((t) => t.name) ?? [],
+        system,
+      };
+    }
+
+    const tool = (name: string) => ({
+      name,
+      description: name,
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    });
+
+    it('pre-activates bullpen on a bullpen-channel turn', async () => {
+      const r = await runPreActivateTurn({
+        channelId: 'bullpen',
+        skills: [{
+          name: 'bullpen',
+          tools: ['bullpen-post'],
+          instructions: '## Bullpen\nPost updates.',
+          toolDefs: [tool('bullpen-post')],
+        }],
+      });
+      expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('bullpen', 'coordinator');
+      expect(r.tools).toContain('bullpen-post');
+      expect(r.system).toContain('[Activated skill: bullpen]');
+    });
+
+    it('pre-activates job-report plus declared and learned job skills on scheduler turns', async () => {
+      const r = await runPreActivateTurn({
+        channelId: 'scheduler',
+        content: JSON.stringify({ note: 'daily' }),
+        metadata: {
+          preActivateSkills: { declared: ['digest'], learned: ['mailbox'] },
+        },
+        skills: [
+          {
+            name: 'job-report',
+            tools: ['scheduler-report'],
+            instructions: '## Job report\nSummarize the run.',
+            toolDefs: [tool('scheduler-report')],
+          },
+          {
+            name: 'digest',
+            tools: ['list-principal-reports'],
+            instructions: '## Digest\nList reports.',
+            toolDefs: [tool('list-principal-reports')],
+          },
+          {
+            name: 'mailbox',
+            tools: ['email-list'],
+            instructions: '## Mailbox\nRead mail.',
+            toolDefs: [tool('email-list')],
+          },
+        ],
+      });
+      expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('job-report', 'coordinator');
+      expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
+      expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('mailbox', 'coordinator');
+      expect(r.tools).toEqual(expect.arrayContaining([
+        'scheduler-report',
+        'list-principal-reports',
+        'email-list',
+      ]));
+      expect(r.system).toContain('[Activated skill: job-report]');
+      expect(r.system).toContain('[Activated skill: digest]');
+      expect(r.system).toContain('[Activated skill: mailbox]');
+    });
+
+    it('pre-activates digest when turn guidance is spot-check-reply', async () => {
+      const r = await runPreActivateTurn({
+        channelId: 'web',
+        content: '2 bad',
+        turnGuidance: ['spot-check-reply'],
+        skills: [{
+          name: 'digest',
+          tools: ['record-spot-check'],
+          instructions: '## Digest\nRecord the verdict.',
+          toolDefs: [tool('record-spot-check')],
+        }],
+      });
+      expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
+      expect(r.tools).toContain('record-spot-check');
+      expect(r.system).toContain('[Activated skill: digest]');
+    });
+  });
+
   describe('onboarding context on live principal turns (#2360)', () => {
     const progressToolDef = {
       name: 'onboarding-progress',
