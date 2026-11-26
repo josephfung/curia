@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
-import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, reportWithheldPinTools, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
+import { resolvePinnedSkills, reportScheduledPinGaps, reportWithheldPinTools, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import { discoverToolManifests } from '../../../src/skills/loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
