@@ -10,6 +10,7 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
+import { agentCanSend } from '../../../src/agents/principal-reach.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 
 const agentsDir = resolve(import.meta.dirname, '../../../agents');
@@ -264,5 +265,53 @@ describe('resolved pin sets after #1494 bundling', () => {
     const tools = resolveAgent('coordinator.yaml');
     expect(tools).not.toContain('image-generate');
     expect(tools).not.toContain('drive-download-file');
+  });
+
+  it('principalReach still sees listed send tools for every shipped agent (#2764)', () => {
+    // Mirrors agent-assembly's reachToolNames: tool pins ∪ listed skill members.
+    const agents = [
+      'coordinator.yaml',
+      'ceo-inbox.yaml',
+      'calendar.yaml',
+      'contacts.yaml',
+      'meeting-debrief.yaml',
+      'diagnostics.yaml',
+      'research-analyst.yaml',
+      'setup-wizard.yaml',
+    ];
+    const canSendByAgent = new Map<string, boolean>();
+    for (const file of agents) {
+      const resolution = resolveAgent(file);
+      const reachTools = [...resolution.toolNames];
+      const seen = new Set(reachTools);
+      for (const listed of resolution.listedSkills) {
+        // resolveAgent already loaded the skill into a throwaway registry; re-resolve
+        // via a fresh call is expensive — instead expand from on-disk SKILL.md tools
+        // already registered when resolveAgent ran by re-reading listed names.
+        const skillTools = (() => {
+          // Use pin-resolution's listed skill name against a new registry load.
+          const skills = new SkillRegistry();
+          loadOnDiskSkills(skills);
+          return skills.get(listed.name)?.manifest.tools ?? [];
+        })();
+        for (const t of skillTools) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            reachTools.push(t);
+          }
+        }
+      }
+      canSendByAgent.set(file, agentCanSend(reachTools));
+    }
+    // Coordinator reaches the principal via listed messaging (+ email) skills.
+    expect(canSendByAgent.get('coordinator.yaml')).toBe(true);
+    // Specialists do not carry channel-send skills; reach stays off.
+    for (const file of agents) {
+      if (file === 'coordinator.yaml') continue;
+      expect(canSendByAgent.get(file), file).toBe(false);
+    }
+    // Boot tool pins alone must NOT be enough for the coordinator (sends are listed).
+    const bootOnly = resolveAgent('coordinator.yaml');
+    expect(agentCanSend([...bootOnly.toolNames])).toBe(false);
   });
 });
