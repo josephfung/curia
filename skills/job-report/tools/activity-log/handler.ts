@@ -1,15 +1,15 @@
-// skills/activity-log/handler.ts
+// skills/job-report/tools/activity-log/handler.ts
 //
 // Read-only query of audit_log tool.result rows for principal-facing activity recap.
 // Summarizes consequential autonomous actions without returning raw payloads.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { AuditLogRow } from '../../src/audit/audit-log-repo.js';
-import { readAuditToolName } from '../../src/audit/legacy-tool-events.js';
-import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
-import { getRecapEligibleToolNames } from '../../src/skills/recap-skills.js';
-import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
-import { describeToolCall, extractSuccessDetail, extractTarget } from '../../src/activity/describers.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { AuditLogRow } from '../../../../src/audit/audit-log-repo.js';
+import { readAuditToolName } from '../../../../src/audit/legacy-tool-events.js';
+import type { ActionLogRow } from '../../../../src/autonomy/action-log-types.js';
+import { getRecapEligibleToolNames } from '../../../../src/skills/recap-skills.js';
+import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { describeToolCall, extractSuccessDetail, extractTarget } from '../../../../src/activity/describers.js';
 
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
