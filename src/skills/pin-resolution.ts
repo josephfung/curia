@@ -43,13 +43,6 @@ export interface ListedSkill {
 export interface PinResolution {
   /** Deduped tool names to pass to ToolRegistry.toToolDefinitions(). */
   toolNames: string[];
-  /**
-   * Always empty after #2764 switch-on — skill bodies arrive on activation.
-   * Kept so callers that still read the field compile without a parallel rename.
-   */
-  instructionBlocks: string[];
-  /** The skill each entry of `instructionBlocks` came from, index for index. */
-  instructionBlockSkills: string[];
   /** Skill pins listed for the model; body/tools deferred (#2764). */
   listedSkills: ListedSkill[];
   /** True when any pinned skill sets heartbeat: true. */
@@ -91,8 +84,6 @@ export function resolvePinnedSkills(
 ): PinResolution {
   const toolNames: string[] = [];
   const seenTools = new Set<string>();
-  const instructionBlocks: string[] = [];
-  const instructionBlockSkills: string[] = [];
   const listedSkills: ListedSkill[] = [];
   const resolvedSkills: string[] = [];
   const resolvedPins: Array<{ pin: string; kind: PinReferentKind }> = [];
@@ -210,8 +201,6 @@ export function resolvePinnedSkills(
 
   return {
     toolNames,
-    instructionBlocks,
-    instructionBlockSkills,
     listedSkills,
     heartbeatEligible,
     documentWorkspaceEnabled,

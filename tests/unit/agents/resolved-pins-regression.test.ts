@@ -200,9 +200,12 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).not.toContain('resolve-learning-digest');
   });
 
-  it('coordinator pins neither google-workspace nor its MCP tools (activated on demand, #2024)', () => {
+  it('coordinator lists google-workspace for its description; MCP tools stay off the fixed set (#2764)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).not.toContain('google-workspace');
+    expect(config.pinned_skills).toContain('google-workspace');
+    // Listed under on_demand: description only — member tools are not eager pins.
+    expect(resolveAgent('coordinator.yaml')).not.toContain('create_doc');
+    expect(resolveAgent('coordinator.yaml')).not.toContain('search_drive_files');
     expect(config.pinned_skills).not.toContain('create_doc');
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');

@@ -44,9 +44,10 @@ interface AgentBudget {
    */
   skillListTokens?: number;
   /**
-   * Whether the agent may pin an MCP server. Its tools cannot be measured here (they
-   * come from the upstream server), so an agent under budget must not pin one: the
-   * coordinator activates google-workspace on demand instead (#2024). Default true.
+   * Whether the agent may list an MCP server skill. Its member tools cannot be
+   * measured here (they come from the upstream server). The coordinator lists
+   * google-workspace for its ~300-char description (#2764); tools still load on
+   * activation. Default true.
    */
   allowMcpPins?: boolean;
 }

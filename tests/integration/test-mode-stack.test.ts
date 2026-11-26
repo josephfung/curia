@@ -118,7 +118,6 @@ describeIf('test-mode stack', () => {
         expect(rendered).toContain(`- ${skill.name}:`);
       }
       // Bodies load on activation — not spliced into the always-on system string.
-      expect(stack.agent('coordinator').pinResolution.instructionBlocks).toEqual([]);
     });
 
     it('carries the roster, autonomy, date guardrail, own contact details and turn budget', async () => {

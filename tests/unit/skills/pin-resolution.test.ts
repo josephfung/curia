@@ -142,7 +142,6 @@ describe('resolvePinnedSkills', () => {
     expect(r.toolNames).toEqual([]);
     expect(r.heartbeatEligible).toBe(true);
     expect(r.documentWorkspaceEnabled).toBe(true);
-    expect(r.instructionBlocks).toEqual([]);
     expect(r.listedSkills.map((s) => s.name)).toEqual(['tasks', 'documents']);
     expect(r.listedSkills[0]!.description.length).toBeGreaterThan(20);
     expect(r.listedSkills[1]!.description.length).toBeGreaterThan(20);
@@ -177,7 +176,6 @@ describe('resolvePinnedSkills', () => {
       'coordinator',
     );
     expect(r.toolNames).toEqual([]);
-    expect(r.instructionBlocks).toEqual([]);
     expect(r.listedSkills).toEqual([
       { name: 'tasks', description: 'Track work that outlasts this turn.' },
       { name: 'documents', description: 'Read and write workspace documents.' },
@@ -219,7 +217,6 @@ describe('resolvePinnedSkills', () => {
     );
     expect(r.toolNames).toEqual(['delegate', 'date-resolve']);
     expect(r.listedSkills).toEqual([{ name: 'tasks', description: 'Track work.' }]);
-    expect(r.instructionBlocks).toEqual([]);
   });
 
   it('wires heartbeat without documents when only tasks is pinned', () => {
@@ -306,8 +303,6 @@ describe('resolvePinnedSkills', () => {
       const { tools, skills } = calendarFixture(['calendar-list-events'], 'Owner-only calendar playbook');
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
       expect(r.toolNames).toEqual([]);
-      expect(r.instructionBlocks).toEqual([]);
-      expect(r.instructionBlockSkills).toEqual([]);
       expect(r.resolvedSkills).toEqual([]);
       expect(r.resolvedPins).toEqual([]);
       expect(r.unresolvedPins).toEqual([
@@ -327,7 +322,6 @@ describe('resolvePinnedSkills', () => {
       }, '/tmp/infra');
       const r = resolvePinnedSkills(['infra'], skills, tools, undefined, 'social-media');
       expect(r.toolNames).toEqual([]);
-      expect(r.instructionBlocks).toEqual([]);
       expect(r.resolvedSkills).toEqual([]);
       expect(r.unresolvedPins).toEqual([
         { pin: 'infra', reason: 'caller_not_allowed', withheldTools: ['infra-sweep'] },
@@ -337,7 +331,6 @@ describe('resolvePinnedSkills', () => {
     it('lists a partially usable bundle so activation can load the allowed members', () => {
       const { tools, skills } = calendarFixture(['calendar-list-events', 'calendar-open-tool'], 'Shared calendar notes');
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
-      expect(r.instructionBlocks).toEqual([]);
       expect(r.listedSkills).toEqual([{ name: 'calendar', description: 'calendar' }]);
       expect(r.resolvedSkills).toEqual(['calendar']);
     });
@@ -464,7 +457,6 @@ describe('resolvePinnedSkills', () => {
       tools,
     );
     expect(r.toolNames).toEqual(['ceo-inbox-search', 'ceo-inbox-download-attachment']);
-    expect(r.instructionBlocks).toHaveLength(0);
     expect(r.resolvedSkills).toEqual([]);
     expect(r.resolvedPins).toEqual([
       { pin: 'ceo-inbox-search', kind: 'tool' },
@@ -521,8 +513,6 @@ describe('reportScheduledPinGaps (#1501)', () => {
   function emptyResolution(overrides: Partial<ReturnType<typeof resolvePinnedSkills>> = {}) {
     return {
       toolNames: [],
-      instructionBlocks: [],
-      instructionBlockSkills: [],
       listedSkills: [],
       heartbeatEligible: false,
       documentWorkspaceEnabled: false,
@@ -613,8 +603,6 @@ describe('reportWithheldPinTools (#2646)', () => {
   function resolutionWith(unresolvedPins: ReturnType<typeof resolvePinnedSkills>['unresolvedPins']) {
     return {
       toolNames: [],
-      instructionBlocks: [],
-      instructionBlockSkills: [],
       listedSkills: [],
       heartbeatEligible: false,
       documentWorkspaceEnabled: false,

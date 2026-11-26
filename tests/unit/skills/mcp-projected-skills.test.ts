@@ -118,7 +118,6 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
       expect(gw?.manifest.references).toEqual(['drive-files.md']);
       const r = resolvePinnedSkills(['google-workspace'], skills, new ToolRegistry());
       expect(r.listedSkills.map((s) => s.name)).toEqual(['google-workspace']);
-      expect(r.instructionBlocks).toEqual([]);
     });
 
     it('loads drive-files.md through skill-activate', async () => {
