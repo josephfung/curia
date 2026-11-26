@@ -195,6 +195,11 @@ export function registerSnapshotMcpServers(params: {
   for (const server of shadowed) {
     problems.push(`MCP server '${server}' was not projected as a skill: a skill of that name is already registered`);
   }
-  registerMcpProjectedSkills(projected, skillRegistry, logger, skillsDir);
+  const descriptions = new Map(
+    (loadSkillsConfig(configDir).servers ?? [])
+      .filter((s): s is typeof s & { description: string } => typeof s.description === 'string' && s.description.trim() !== '')
+      .map((s) => [s.name, s.description.trim()]),
+  );
+  registerMcpProjectedSkills(projected, skillRegistry, logger, skillsDir, descriptions);
   return { tools, serversWithoutSnapshot, problems };
 }

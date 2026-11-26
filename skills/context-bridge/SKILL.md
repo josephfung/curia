@@ -1,7 +1,8 @@
 ---
 name: context-bridge
 description: >
-  Outbound context-bridge release, clear and keep-open for multi-turn exchanges.
+  Context-bridge release, clear, and keep-open. Load when handing a multi-turn
+  exchange across agents or clearing leftover debrief/context bridges.
 version: "0.2.0"
 tools:
   - context-bridge-release

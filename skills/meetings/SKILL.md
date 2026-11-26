@@ -1,7 +1,9 @@
 ---
 name: meetings
 description: >
-  Park an agenda for an upcoming principal call, and follow up meeting minutes (Curia's own, or minutes from elsewhere) into tasks, drafts and a recap.
+  Park an agenda for an upcoming principal call, and turn meeting minutes into
+  tasks, drafts, and a recap. Load before a planned call or when following up
+  minutes (Curia's own or from elsewhere).
 version: "0.2.1"
 tools:
   - meeting-agenda-park
