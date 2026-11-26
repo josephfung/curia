@@ -1,0 +1,63 @@
+# Case 60g (#2764 Layer 2 D3): a scheduled digesty turn that needs list-spot-checks.
+# Digest should be activated (job declaration or model). Mirrors debrief-recap's need
+# for digest without requiring the full meeting-debrief agent fixture.
+name: scheduled digest lists spot-checks
+description: >
+  A scheduled job asks the coordinator to list open spot-checks and report the count
+  via scheduler-report. Digest must activate and list-spot-checks must succeed. The
+  job does not ask to message the principal.
+tags: [digest, scheduler, skill-activation, on-demand]
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: >
+    List open spot-checks with list-spot-checks, then call scheduler-report once with
+    a one-line summary of how many are open. Do not message the principal.
+tool_stubs:
+  list-spot-checks:
+    - match: {}
+      return:
+        items:
+          - n: 1
+            summary: Sent a draft without asking first
+            status: open
+          - n: 2
+            summary: Booked a hold without confirming the window
+            status: open
+        count: 2
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+  skill-activate:
+    - match: {}
+      return:
+        skill: digest
+        tools: [list-principal-reports, list-spot-checks, record-spot-check, ack-principal-report]
+expected_behaviors:
+  - id: lists
+    weight: critical
+    description: Calls list-spot-checks successfully.
+    check:
+      called: list-spot-checks
+      success: true
+  - id: reports
+    weight: critical
+    description: Calls scheduler-report.
+    check:
+      called: scheduler-report
+      success: true
+  - id: digest_activated
+    weight: critical
+    description: digest is activated.
+    check:
+      skills_activated:
+        includes: [digest]
+  - id: sends_nothing
+    weight: critical
+    description: Does not message the principal.
+    check:
+      not_called: [signal-send, email-send, sms-send, slack-send]
+failure_modes:
+  - Skips list-spot-checks and invents a count
+  - Messages the principal with the spot-check list
