@@ -26,6 +26,7 @@ export type TurnGuidanceKey =
   | 'principal-forward'
   | 'booking-link'
   | 'make-room'
+  | 'reschedule'
   | 'non-principal-reply-shaped'
   | 'principal-colleague'
   | 'principal-correspondent'
@@ -153,6 +154,51 @@ const MAKE_ROOM = [
   '- Below 80: move nothing, and offer nothing over an existing event. Ask the principal',
   '  privately, never on the thread, with one specific proposal: what to move, and to when.',
   '  On the thread, a short holding note to the counterpart (times are coming) is fine.',
+];
+
+/**
+ * The principal asked Curia to move one of their meetings, cut one short, or get them time
+ * with someone (#2608, looksLikeReschedule / looksLikeGetTime). Without this, in finesse 51a–e
+ * Curia wrote to the other person in 1 of 25 runs: it told the calendar specialist to change
+ * nothing and asked the principal which slot to use. The calendar specialist sends only
+ * invites (agents/calendar.yaml), so the note has to come from the coordinator. Who writes and
+ * how follows the casebook's tasks 51 and 53 as revised by the EA review
+ * (docs/wip/2026-11-21-finesse-ea-review-synthesis.md):
+ * - a direct report: move or book it and tell them (51a, 53a), the better of two right calls;
+ *   likewise a new booking at a time the principal named (47d books lunch at the time given);
+ * - anyone else: ask whether the principal's time works or propose times, and move once they
+ *   agree, never as settled (51b, 53e, 57c, 57d);
+ * - through the assistant who runs their calendar, apology first (51c, 51f);
+ * - a draft in the principal's mailbox for whoever a standing preference says hears from the
+ *   principal (investors and customers in the finesse identity) and for a favour from someone
+ *   who barely knows them (51d, 53b, 53c);
+ * - friends casually (51e, 53d), family by a draft with no work detail (57b: the draft named
+ *   "the board offsite" in 5 of 5 runs without that clause).
+ * Below autonomy 80 (the high-risk floor for calendar writes) it asks first, as make-room does.
+ * Kept to the decision: the finesse A/B (#2608) moved decisions with this text, and voice
+ * detail per case (ask lengths, apology wording) was left out as tuning to the benchmark.
+ * "Barely knows them" is scoped to a favour: unscoped, a peer CEO (53e) and a teacher (57c)
+ * got drafts in the principal's mailbox instead of a note from Curia.
+ */
+const RESCHEDULE = [
+  'The principal asked you to move a meeting, cut one short, or get them time with someone. That',
+  'is their approval: use the time they named or pick one from both calendars, never ask them to',
+  'choose, and brief the calendar specialist to act. It cannot message anyone and an updated',
+  'invite is not a note, so you write to the other person. First look them up (with no record,',
+  'search the web), since who they are decides who writes:',
+  '- A direct report or the team, or a booking at a time the principal named: book or move it',
+  '  and tell them briefly.',
+  '- Anyone else (a vendor, a peer, a teacher): you write, offering the principal\'s time or two',
+  '  or three, and move it once they agree.',
+  '- If an assistant runs their calendar, write to the assistant; apologize first to someone senior.',
+  '- Someone a standing preference says hears from the principal, or a favour asked of someone',
+  '  who barely knows them: a draft in the principal\'s mailbox (ceo-inbox); tell them it is ready.',
+  '- A friend: casual. Family: a draft for the principal, with no work detail.',
+  'Leaving early: keep the meeting, ask them now whether the shorter time suits, then shorten the',
+  'invite. Give no reason the principal did not give. If the principal is only asking whether to,',
+  'or passing on someone else\'s request, answer them and ignore this note.',
+  '- Autonomy 80 or above: do it now, without asking the principal first.',
+  '- Below 80: change and send nothing yet. Ask the principal once, with one specific proposal.',
 ];
 
 /**
@@ -411,6 +457,7 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-forward': PRINCIPAL_FORWARD,
   'booking-link': BOOKING_LINK,
   'make-room': MAKE_ROOM,
+  'reschedule': RESCHEDULE,
   'non-principal-reply-shaped': NON_PRINCIPAL_REPLY_SHAPED,
   'principal-colleague': PRINCIPAL_COLLEAGUE,
   'principal-correspondent': PRINCIPAL_CORRESPONDENT,
@@ -442,6 +489,7 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   // After the forward note: a forwarded booking page is booked through, not answered by email.
   'booking-link',
   'make-room',
+  'reschedule',
   'non-principal-reply-shaped',
   // After the reply contract: who this sender is to the principal, then how to weigh a request.
   'principal-colleague',

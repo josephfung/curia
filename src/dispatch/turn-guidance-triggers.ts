@@ -65,6 +65,13 @@ export interface InboundGuidanceFacts {
    * on a live principal turn where Curia is not merely CC'd (#2612).
    */
   runningLate?: boolean;
+  /**
+   * The principal's own words ask to move, shorten or set up a meeting with someone
+   * (looksLikeReschedule, looksLikeGetTime). The dispatcher sets it only when the message
+   * reached Curia alone, as for runningLate. Only honoured on a live principal turn where Curia
+   * is not merely CC'd, and not beside running-late, which wins (#2608). Absent means no.
+   */
+  reschedule?: boolean;
 }
 
 // "Make room" language (#2227): the principal offering to move their own commitments. Plain
@@ -244,6 +251,119 @@ export function looksLikeRunningLate(text: string): boolean {
     }
     return false;
   });
+}
+
+// Reschedule and get-time language (#2608): the principal asking Curia to move one of their
+// meetings, cut one short, or get time with someone. In finesse 51a–e Curia found the slots and
+// then asked the principal to pick one, telling the other person nothing.
+//
+// A meeting is named by a noun or a clock time ("my Thursday 2pm"). The verb must be the bare
+// form, so "Priya moved my 2pm" and "Priya rescheduled" (someone else's change) do not count;
+// "make room" language ("move a few things around", "move my focus block") is looksLikeMakeRoom's.
+// Words that also name things other than a meeting ("the intro" of a draft, "the demo" build, "this
+// chat") are left out.
+const MEETING_NOUN = String.raw`(?:meeting|call|1:1|one-on-one|1-on-1|sync|check-in|catch-?up|review|lunch|coffee|dinner|breakfast|drinks|appointment|conference|walk-?through|visit|interview|session|stand-?up)`;
+const CLOCK_TIME = String.raw`(?:\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)|\d{1,2}:\d{2}|noon)`;
+// What a meeting reference opens with: "my", "the", "Thursday's", "Sam's".
+const MEETING_DETERMINER = String.raw`(?:my|our|the|this|that|[\w-]+['’]s)`;
+// Up to four words between the determiner and a noun: "the parent-teacher conference", "Sam's
+// kitchen walk-through". Lazy, and on one line. A clock time stands for a meeting only straight
+// after the determiner or a day ("my 2pm", "my Thursday 2pm", "tomorrow's 10:30"): with words
+// between, it is a time for something else ("the daily briefing to 7am", "the deadline to 5pm").
+const DAY_WORD = String.raw`(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow|tonight)`;
+// A noun followed by one of these names a thing about the meeting, not the meeting: "move the
+// pipeline review summary you send me to 10am" is a scheduled report.
+const NOT_THE_MEETING = String.raw`(?![^\S\n]+(?:summary|summaries|notes|recording|deck|doc|document|report|digest|reminder|agenda|email|prep)\b)`;
+const MEETING_REF = String.raw`${MEETING_DETERMINER}[^\S\n]+(?:(?:[\w:'’-]+[^\S\n]+){0,4}?${MEETING_NOUN}|(?:${DAY_WORD}[^\S\n]+)?${CLOCK_TIME})(?![\w-])${NOT_THE_MEETING}`;
+
+// Up to three words after the meeting before what is changed: "my 1:1 with Sam short".
+const TRAILING_WORDS = String.raw`(?:[^\S\n]+[\w'’-]+){0,3}?`;
+
+const RESCHEDULE_PATTERNS: readonly RegExp[] = [
+  // "I need to move my Thursday 2pm with Priya", "Can we push the board meeting back?"
+  new RegExp(String.raw`\b(?:move|push|bump|postpone|shift|rebook|reschedule)[^\S\n]+(?:back[^\S\n]+)?${MEETING_REF}`, 'i'),
+  // "I can't make my 2pm, so can you move it to Friday": a meeting named earlier, moved to a day.
+  new RegExp(String.raw`\b(?:move|push|bump|postpone|shift)[^\S\n]+(?:it|that|this[^\S\n]+one)(?:[^\S\n]+back)?[^\S\n]+(?:to|until|till)[^\S\n]+(?:${DAY_WORD}|next\b|later\b|another\b|a[^\S\n]+different\b|the[^\S\n]+\d|\d)`, 'i'),
+  // "Reschedule with Priya", "can you reschedule?": the verb alone is unambiguous.
+  /\b(?:reschedule|rebook)\b/i,
+  // "Ruth's visit on the 14th has to move to the 21st", "the 2pm needs to be pushed"
+  new RegExp(String.raw`(?:${MEETING_NOUN}|${CLOCK_TIME})(?![\w-])${NOT_THE_MEETING}[^.!?\n]{0,40}?\b(?:has|have|needs?|got)[^\S\n]+to[^\S\n]+(?:be[^\S\n]+)?(?:move[ds]?|push(?:ed)?|postponed?|shifted|bumped)\b`, 'i'),
+  // Leaving early: "leave the Catherine meeting at 2:30 instead of 3", "leave the board call early"
+  new RegExp(String.raw`\bleave[^\S\n]+${MEETING_REF}${TRAILING_WORDS}[^\S\n]+(?:early|at[^\S\n]+\d)`, 'i'),
+  // "cut my 1:1 short", "end the review early"
+  new RegExp(String.raw`\b(?:cut|end|finish|wrap[^\S\n]+up)[^\S\n]+${MEETING_REF}${TRAILING_WORDS}[^\S\n]+(?:short|early)\b`, 'i'),
+  // "I have a hard stop at 3": the principal's own, not "Priya has a hard stop at 3".
+  /\bi(?:['’]ve|[^\S\n]+have|['’]ll[^\S\n]+have|[^\S\n]+will[^\S\n]+have)?(?:[^\S\n]+got)?[^\S\n]+a[^\S\n]+hard[^\S\n]+stop\b/i,
+];
+
+// "Find 30 minutes with Priya", "Get me 45 minutes with Hannah", "Set up lunch with Josh", "Can
+// you get me time with Diane?". Needs "with": "find time for board prep" is a focus block, not a
+// meeting with someone.
+const GET_TIME_PATTERN = new RegExp(
+  String.raw`\b(?:find|get|set[^\S\n]+up|book|schedule|arrange|line[^\S\n]+up|grab|organi[sz]e|make)[^\S\n]+(?:me[^\S\n]+|us[^\S\n]+)?(?:some[^\S\n]+)?`
+  + String.raw`(?:time|half[^\S\n]+an[^\S\n]+hour|${TIME_GAP}|an?[^\S\n]+(?:time|slot|call|meeting|chat|catch-?up|1:1|one-on-one|intro|coffee|lunch|dinner|breakfast|drink|walk|video[^\S\n]+call|session)|coffee|lunch|dinner|breakfast|drinks)`
+  + String.raw`(?:[^\S\n]+for[^\S\n]+an?[^\S\n]+\w+)?[^\S\n]*with\b`,
+  'i',
+);
+
+// Not a request to move anything, joining CLAUSE_NEGATION ahead of the match in its clause:
+// - a status question: "Did you move my 2pm?";
+// - someone else's wish, passed on: "Priya wants to move our 2pm", "Dana said we should push it"
+//   (REPORTED_SPEECH covers said, texted, wrote and the like);
+// - the principal asking whether to: "Should I move my 2pm?", "Is it possible to move it?".
+// The guidance says to act without asking, so these fail closed to an ordinary turn.
+const NOT_A_REQUEST = /\b(?:did|wants?|wanted|asks?|asked|asking|should\s+(?:i|we)|is\s+it\s+(?:possible|worth|better)|would\s+it|whether)\b/i;
+
+// Someone else doing it: "Priya will reschedule our 1:1", "Dana can move the review", "Priya is
+// planning to reschedule it". A name or a third-person pronoun before a modal, an "is …ing to"
+// form, or a "has/needs/wants to" form, earlier in the clause. Case-sensitive, so a capitalised
+// name is told from an ordinary word; the principal's own "I", "We" and "You" are not actors here.
+const THIRD_PARTY_ACTOR = /\b(?!(?:I|We|You|Can|Could|Would|Please)\b)(?:[Hh]e|[Ss]he|[Tt]hey|[A-Z][a-z]+)(?:['’]ll|\s+(?:will|would|should|can|could|might|may|(?:is|are|was|were)\s+(?:\w+ing\s+to|gonna|about\s+to)|(?:has|have|needs?|wants?|intends?|plans?|hopes?)\s+to|would\s+like\s+to))\b/;
+
+// Where a negation's reach ends besides CLAUSE_END: "I can't make my 2pm so move it to Friday" and
+// "Not urgent: reschedule the 2pm" are requests. A colon counts only before a space (not "1:1" or
+// "10:30"). Each break replaces one character with a period, so indices stay aligned with the
+// text the patterns run on. Only negation stops there: reported speech, a question and someone
+// else acting reach the whole clause ("Priya asked me to find time with Josh and book a call with
+// Rina" is all Priya's; "Priya texted: can we move our 2pm?" too).
+const NEGATION_CLAUSE_BREAK = /:(?=\s|$)|\s(?=(?:so|but|and|then)\b)/gi;
+
+/**
+ * The principal's own words, ready to match: quoted `>` lines dropped (a caller may hand over raw
+ * text) and quoted spans blanked ("Priya asked 'can we move our 2pm?'" is Priya's).
+ */
+function ownLines(text: string): string {
+  return text.split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n')
+    .replace(QUOTED_SPAN, ' ');
+}
+
+const NOT_A_REQUEST_OR_REPORTED = new RegExp(`${NOT_A_REQUEST.source}|${REPORTED_SPEECH.source}`, 'i');
+
+function matchesUndenied(text: string, patterns: readonly RegExp[]): boolean {
+  const negated = clauseMarkerCheck(text.replace(NEGATION_CLAUSE_BREAK, '.'), CLAUSE_NEGATION);
+  const notARequest = clauseMarkerCheck(text, NOT_A_REQUEST_OR_REPORTED);
+  const someoneElse = clauseMarkerCheck(text, THIRD_PARTY_ACTOR);
+  return patterns.some((p) => {
+    for (const match of text.matchAll(new RegExp(p.source, `${p.flags.replace('g', '')}g`))) {
+      if (!negated(match.index) && !notARequest(match.index) && !someoneElse(match.index)) return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Whether the principal's own words ask to move one of their meetings or cut one short ("I need
+ * to move my Thursday 2pm with Priya", "I have to leave the Catherine meeting at 2:30 instead of
+ * 3"). A refusal ("don't move my 2pm"), a status question ("did Priya move the review?") or
+ * someone else doing it ("Priya will reschedule our 1:1") is not a request.
+ */
+export function looksLikeReschedule(text: string): boolean {
+  return matchesUndenied(ownLines(text), RESCHEDULE_PATTERNS);
+}
+
+/** Whether the principal's own words ask Curia to get them time with someone ("Find 30 minutes with Priya"). */
+export function looksLikeGetTime(text: string): boolean {
+  return matchesUndenied(ownLines(text), [GET_TIME_PATTERN]);
 }
 
 // Booking-page hosts (#2227). A link on the host's root is not a booking page, so each needs
@@ -552,6 +672,11 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
   if (runningLate) keys.push('running-late');
   if (facts.bookingLink === true) keys.push('booking-link');
   if (facts.liveTurn && facts.makeRoom === true) keys.push('make-room');
+  // Not on a CC'd email: that is written to someone else, and email-cc-principal covers a
+  // meeting handed over in it. Never when the message reads as running late, whether or not the
+  // running-late note is added (an outbound block replaces it): "Running late, push my 10am" is a
+  // late note, which Curia sends itself before the start, never a draft or a proposal.
+  if (facts.liveTurn && facts.reschedule === true && !facts.curiaCc && facts.runningLate !== true) keys.push('reschedule');
   if (facts.liveTurn && entries.length > 0) {
     keys.push('outbound-context');
     if (entries.some((m) => isTaskWakeReplyBinding(m))) keys.push('outbound-context-task-wake');

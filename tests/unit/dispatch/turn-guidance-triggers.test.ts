@@ -6,7 +6,9 @@ import {
   hasBookingPageLink,
   inboundTurnGuidance,
   looksLikeForward,
+  looksLikeGetTime,
   looksLikeMakeRoom,
+  looksLikeReschedule,
   looksLikeRunningLate,
   looksLikeSpotCheckReply,
   ownEmailSubject,
@@ -245,6 +247,153 @@ describe('make-room (#2227)', () => {
 
   it('is never added on a non-principal turn', () => {
     expect(inboundTurnGuidance(facts({ liveTurn: false, makeRoom: true }))).not.toContain('make-room');
+  });
+});
+
+describe('reschedule (#2608)', () => {
+  it('is added on a live principal turn, beside the reply-shaped note', () => {
+    expect(inboundTurnGuidance(facts({ reschedule: true }))).toEqual(['principal-reply-shaped', 'reschedule']);
+    expect(inboundTurnGuidance(facts({ channelId: 'email', reschedule: true }))).toContain('reschedule');
+  });
+
+  it("is never added on a non-principal turn or a CC'd email", () => {
+    expect(inboundTurnGuidance(facts({ liveTurn: false, reschedule: true }))).not.toContain('reschedule');
+    expect(inboundTurnGuidance(facts({ channelId: 'email', curiaCc: true, reschedule: true }))).not.toContain('reschedule');
+  });
+
+  it('gives way to running-late, whose note Curia sends itself before the start', () => {
+    expect(inboundTurnGuidance(facts({ runningLate: true, reschedule: true }))).toEqual(['running-late']);
+    // With an outbound block running-late's note is not added, and reschedule still stays out
+    // (CodeRabbit, #2760).
+    expect(inboundTurnGuidance(facts({ runningLate: true, reschedule: true, injectedEntryMetadata: [null] })))
+      .toEqual(['outbound-context']);
+    expect(inboundTurnGuidance(facts({ reschedule: true, injectedEntryMetadata: [null] })))
+      .toEqual(['reschedule', 'outbound-context']);
+    expect(looksLikeRunningLate('Running late - push the board call by 10 minutes')).toBe(true);
+    expect(looksLikeReschedule('Running late - push the board call by 10 minutes')).toBe(true);
+  });
+});
+
+describe('looksLikeReschedule and looksLikeGetTime (#2608)', () => {
+  // The finesse cases' own requests (tests/scenarios/cases/51*, 53*, 57b–d).
+  it.each([
+    'I need to move my Thursday 2pm with Priya. Something came up.',
+    'I have to leave the Catherine meeting at 2:30 instead of 3.',
+    'Move the parent-teacher conference from Tuesday, December 1 to Tuesday, December 8.',
+    "Move Sam's kitchen walk-through from Thursday to the following Thursday.",
+    "Ruth's visit on the 14th has to move to the 21st. The board offsite got moved.",
+    'Can we push the board meeting back a week?',
+    'Please reschedule with Priya',
+    'bump my 1:1 with Dana to Friday',
+    "Push tomorrow's 10:30 to the afternoon",
+    'I have a hard stop at 3 today',
+    'Cut my 1:1 with Sam short, I need the last 15 minutes',
+    'Subject: Move my 2pm\n\nSomething came up.',
+    // A negation before "so", "but" or a colon does not reach the request.
+    "I can't make my 2pm with Priya so can you move it to Friday",
+    "I can't make the board meeting so please reschedule it",
+    'Not urgent: move my 2pm to Friday',
+  ])('reschedule: %s', (text) => {
+    expect(looksLikeReschedule(text)).toBe(true);
+  });
+
+  it.each([
+    'Find 30 minutes with Priya this week to go over the roadmap.',
+    'Get me 45 minutes with Hannah Lindqvist at Northbeam to walk her through the business before we raise.',
+    'Can you get me time with Diane Kessler? I want her advice on building out our board.',
+    'Set up lunch with Josh sometime in the next couple of weeks.',
+    'Set up an hour with Greg to talk about the joint pilot.',
+    'Book a call with the Brightline team next week',
+    'Find some time for a call with Rina',
+    'Please find a time with Priya next week',
+    'Find a slot with Priya',
+  ])('get time: %s', (text) => {
+    expect(looksLikeGetTime(text)).toBe(true);
+  });
+
+  it.each([
+    // Calendar reads.
+    "What's on my calendar Thursday?",
+    'When is my 2pm with Priya?',
+    'Who is in the board meeting tomorrow?',
+    // Someone else's change, or a question whether it happened.
+    'Priya moved my 2pm to Friday',
+    'Priya rescheduled our 1:1',
+    'Did you move my 2pm?',
+    'Did you set up lunch with Josh?',
+    // A refusal.
+    "Don't move my Thursday 2pm, I'll make it work",
+    'No need to reschedule',
+    "I can't leave the board meeting early",
+    // Make-room language is make-room's, and a focus block has no other person.
+    'Let me move a few things around',
+    'I can move my focus block',
+    'Find time for board prep this week',
+    // Quoted text is someone else's.
+    '> Can we move our 2pm?\nNo, leave it.',
+    // A thing about a meeting, not the meeting (scenario 05c: a scheduled report).
+    'Move the pipeline review summary you send me to 10am.',
+    'Move the board meeting notes into the shared folder',
+    'The board meeting notes need to be moved into the shared folder',
+    // A clock time after other words is a time for something else.
+    'Move the daily briefing to 7am',
+    'Push the deadline to 5pm',
+    'Move my reminder to 9am',
+    // Words that name other things too.
+    'Can we move this chat to email?',
+    'In the draft, move the intro to the end',
+    'Push the demo to staging tonight',
+    'The demo build needs to be pushed tonight',
+    // Someone else's request passed on, or the principal asking whether to.
+    'Priya wants to move our 2pm to Friday. What does my Friday look like?',
+    'Priya texted: can we move our 2pm to Friday? Thoughts?',
+    'Priya asked "can we move our 2pm to Friday?" what do you think?',
+    'Dana said we should push the board meeting back a week, is that possible?',
+    'Should I move my 2pm with Priya?',
+    'Is it possible to move my 2pm to Friday?',
+    'Hannah asked to set up a call with Josh',
+    // Reported speech reaches past "and" (CodeRabbit, #2760).
+    'Priya asked me to find time with Josh and book a call with Rina.',
+    // Someone else doing it (CodeRabbit, #2760), the whole class: names, pronouns, modals.
+    'Priya will reschedule our 1:1 tomorrow. Please just tell me when it is.',
+    'Dana can move the board meeting if she needs to',
+    "She'll push my 2pm, no need to do anything",
+    'They are going to reschedule the review',
+    'Priya is planning to reschedule our 1:1. Please just tell me when it is.',
+    'Dana is hoping to move the board meeting',
+    'Priya needs to reschedule our 1:1',
+    'Sam wants to push the walk-through',
+    'Priya would like to find time with Josh',
+    // Someone else's hard stop.
+    'Priya has a hard stop at 3, so keep it tight',
+    // Spot-check verdicts and replies.
+    '2 bad, that was a renewal notice',
+    'Yes, go ahead',
+  ])('neither: %s', (text) => {
+    expect(looksLikeReschedule(text)).toBe(false);
+    expect(looksLikeGetTime(text)).toBe(false);
+  });
+
+  it('scans long whitespace runs before a colon in linear time (CodeRabbit, #2760)', () => {
+    const start = Date.now();
+    expect(looksLikeReschedule(`said${' '.repeat(100_000)}: x`)).toBe(false);
+    expect(looksLikeGetTime(`${' \t'.repeat(50_000)}:`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('keeps direct requests that read like the excluded ones', () => {
+    expect(looksLikeReschedule('Please reschedule with Priya')).toBe(true);
+    expect(looksLikeReschedule('Can you move my 2pm with Priya to Friday?')).toBe(true);
+    expect(looksLikeReschedule('We need to move the board meeting')).toBe(true);
+    expect(looksLikeGetTime('Find time with Josh and book a call with Rina')).toBe(true);
+  });
+
+  it('scans a long clause without a break in linear time', () => {
+    const start = Date.now();
+    expect(looksLikeReschedule(`don't ${'move my 2pm '.repeat(8000)}`)).toBe(false);
+    expect(looksLikeReschedule(`move my ${'big '.repeat(20_000)}x`)).toBe(false);
+    expect(looksLikeGetTime(`find ${'some '.repeat(20_000)}x`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 });
 

@@ -88,11 +88,15 @@ describe('AutonomyService', () => {
     // The tier text gained this carve-out in #2068; the band set (the default since #2192)
     // was written from the band table without it, so at 75 a direct "move it and send my
     // apologies" came back as "which slot should I book?" (smoke "Reschedule Board Chair").
-    it('treats a direct principal instruction as approval in the ask-first bands', () => {
-      for (const band of ['spot-check', 'approval-required'] as AutonomyBand[]) {
+    // #2607: `full` asks first too (money, legal), and a standing instruction counts as well.
+    it('treats a direct or standing principal instruction as approval in the ask-first bands', () => {
+      for (const band of ['full', 'spot-check', 'approval-required'] as AutonomyBand[]) {
         const text = AutonomyService.bandDescription(band, 'band');
-        expect(text).toContain('A direct instruction from the principal is their approval');
+        expect(text).toContain('A direct or standing instruction from the principal is their approval');
         expect(text).toContain('rather than handing the choice back');
+        expect(text).toContain('The ask-first rules here cover what you take on yourself');
+        // A standing instruction may be an extracted memory fact: never approval on money or legal.
+        expect(text).toContain('a standing instruction never covers payments, pricing, contracts or legal positions');
       }
     });
 

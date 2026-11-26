@@ -38,7 +38,7 @@ import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
 import { hasPrincipalAuthority, isUnauthenticatedPrincipal } from '../contacts/principal.js';
-import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeRunningLate, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, senderOwnTextAnyChannel, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
+import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeGetTime, looksLikeMakeRoom, looksLikeReschedule, looksLikeRunningLate, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, senderOwnTextAnyChannel, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
@@ -1411,6 +1411,7 @@ export class Dispatcher {
     // Trigger guidance (#1959): the coordinator's conditional rules travel with the
     // trigger instead of sitting in its always-on prompt. Rendered by the runtime into
     // this turn's user message only, never into `content` (which working memory keeps).
+    const ownTextAnyChannel = senderOwnTextAnyChannel(payload.channelId, payload.content);
     const turnGuidance = setupGuide ? [] : inboundTurnGuidance({
       liveTurn,
       injectedEntryMetadata: injectedOutboundEntries.map((e) => e.metadata),
@@ -1434,7 +1435,13 @@ export class Dispatcher {
       // them a second note unasked. The CLI and web console are the principal's own; any other
       // channel must show it is one-to-one, so missing metadata fails closed (to the ask).
       runningLate: (payload.channelId === 'cli' || payload.channelId === 'web' || inboundIsOneToOne(payload.channelId, payload.metadata))
-        && looksLikeRunningLate(senderOwnTextAnyChannel(payload.channelId, payload.content)),
+        && looksLikeRunningLate(ownTextAnyChannel),
+      // The sender's own words on any channel, gated as running-late is (#2608): with Curia
+      // BCC'd or beside the other person on To, or in a group, the principal may have told them
+      // already, and the guidance would send a second note. liveTurn and curiaCc gate it inside
+      // inboundTurnGuidance.
+      reschedule: (payload.channelId === 'cli' || payload.channelId === 'web' || inboundIsOneToOne(payload.channelId, payload.metadata))
+        && (looksLikeReschedule(ownTextAnyChannel) || looksLikeGetTime(ownTextAnyChannel)),
     });
 
     // The backlog line (prompt trim PR 7): on a principal turn with anything waiting on
