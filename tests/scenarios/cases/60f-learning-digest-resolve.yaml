@@ -1,0 +1,48 @@
+# Case 60f (#2764 Layer 2 D4): resolving a learning-digest item needs that skill.
+name: learning-digest resolve item
+description: >
+  The principal asks the coordinator to accept a pending learning-digest suggestion.
+  The coordinator activates learning-digest and calls resolve-learning-digest
+  successfully.
+tags: [learning-digest, skill-activation, on-demand]
+release_gate: false
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Accept learning digest item ld-60f-001 — yes, keep using that phrasing.
+tool_stubs:
+  list-learning-digest:
+    - match: {}
+      return:
+        items:
+          - id: ld-60f-001
+            summary: Prefer "talk soon" over "best regards" in short Signal notes
+            status: open
+        count: 1
+  resolve-learning-digest:
+    - match: { id: ld-60f-001 }
+      return: { id: ld-60f-001, status: accepted }
+    - match: {}
+      return: { id: ld-60f-001, status: accepted }
+  skill-activate:
+    - match: {}
+      return:
+        skill: learning-digest
+        tools: [list-learning-digest, resolve-learning-digest]
+expected_behaviors:
+  - id: resolves
+    weight: critical
+    description: Calls resolve-learning-digest successfully.
+    check:
+      called: resolve-learning-digest
+      success: true
+  - id: activates_learning_digest
+    weight: critical
+    description: learning-digest is activated.
+    check:
+      skills_activated:
+        includes: [learning-digest]
+failure_modes:
+  - Says it accepted the item without calling resolve-learning-digest
+  - Tool refused because learning-digest was never activated

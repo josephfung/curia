@@ -93,6 +93,12 @@ expected_behaviors:
     check:
       called: card-use-request
       with: { secret_name: user.personal_visa_card }
+  - id: browser_activated
+    weight: important
+    description: browser skill is activated for checkout (#2764 A).
+    check:
+      skills_activated:
+        includes: [browser]
   - id: one_request
     weight: important
     description: Files exactly one card-use request, so no other card is requested.

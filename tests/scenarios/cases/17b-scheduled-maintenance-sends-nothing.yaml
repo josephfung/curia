@@ -63,5 +63,12 @@ expected_behaviors:
     check:
       called: task-update
       with: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b1, priority: 4 }
+  - id: no_browser
+    weight: important
+    description: Does not activate browser on a maintenance job (#2764 B).
+    check:
+      skills_activated:
+        excludes: [browser]
 failure_modes:
   - Sends the principal a note that housekeeping ran
+  - Activates browser for housekeeping
