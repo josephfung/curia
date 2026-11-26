@@ -24,6 +24,16 @@ import type { Verification } from '../../../src/verification/types.js';
 
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock' } as const;
 
+/** #2774: turn context may prefix the latest user message; the original prompt still ends the string. */
+function expectUserPrompt(content: unknown, expectedTail: string): void {
+  expect(typeof content).toBe('string');
+  const text = content as string;
+  expect(text === expectedTail || text.endsWith(expectedTail)).toBe(true);
+  if (text !== expectedTail) {
+    expect(text.startsWith('## Current turn context')).toBe(true);
+  }
+}
+
 function capturingProvider(): LLMProvider & { chat: ReturnType<typeof vi.fn> } {
   return {
     id: 'mock',
@@ -105,7 +115,7 @@ describe('AgentRuntime turn guidance (#1959)', () => {
     const { messages } = await runTurn({ content: 'Go ahead', turnGuidance: ['principal-reply-shaped'] });
     const user = messages[messages.length - 1]!;
     expect(user.role).toBe('user');
-    expect(user.content).toBe(`${renderTurnGuidance(['principal-reply-shaped'])}\n\nGo ahead`);
+    expectUserPrompt(user.content, `${renderTurnGuidance(['principal-reply-shaped'])}\n\nGo ahead`);
   });
 
   it('puts the closing marker between the guidance and the sender\'s text (#2741)', async () => {
@@ -131,10 +141,10 @@ describe('AgentRuntime turn guidance (#1959)', () => {
     expect(history[0]).toEqual({ role: 'user', content: 'Go ahead' });
   });
 
-  it('leaves the user message untouched without guidance, or with only unknown keys', async () => {
+  it('leaves the user message without guidance when keys are absent or unknown', async () => {
     for (const turnGuidance of [undefined, [], ['not-a-key'], 'outbound-context']) {
       const { messages } = await runTurn({ content: 'Hello', turnGuidance });
-      expect(messages[messages.length - 1]!.content).toBe('Hello');
+      expectUserPrompt(messages[messages.length - 1]!.content, 'Hello');
     }
   });
 
@@ -145,8 +155,10 @@ describe('AgentRuntime turn guidance (#1959)', () => {
       turnGuidance: ['principal-reply-shaped'],
       principalBacklog: counts,
     });
-    expect(messages[messages.length - 1]!.content)
-      .toBe(`${renderTurnGuidance(['principal-reply-shaped'], renderBacklogLine(counts))}\n\nBook Friday.`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `${renderTurnGuidance(['principal-reply-shaped'], renderBacklogLine(counts))}\n\nBook Friday.`,
+    );
     expect(history[0]).toEqual({ role: 'user', content: 'Book Friday.' });
   });
 
@@ -154,8 +166,10 @@ describe('AgentRuntime turn guidance (#1959)', () => {
     const counts = { decayWarnings: 0, pendingApprovals: 1, principalTasks: 0 };
     const awaiting = [{ number: 1, shortRef: 'abcd1234', description: 'Reply to Dana on signal', question: 'Share it?', repliedTo: true }];
     const { messages, history } = await runTurn({ content: 'Yes, share it.', principalBacklog: counts, awaitingAnswers: awaiting });
-    expect(messages[messages.length - 1]!.content)
-      .toBe(`${renderTurnGuidance([], `${renderAwaitingAnswers(awaiting)}\n\n${renderBacklogLine(counts)}`)}\n\nYes, share it.`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `${renderTurnGuidance([], `${renderAwaitingAnswers(awaiting)}\n\n${renderBacklogLine(counts)}`)}\n\nYes, share it.`,
+    );
     expect(history[0]).toEqual({ role: 'user', content: 'Yes, share it.' });
   });
 
@@ -168,37 +182,46 @@ describe('AgentRuntime turn guidance (#1959)', () => {
       moreBeforeLimit: false,
     };
     const { messages, history } = await runTurn({ content: 'Rewrite the draft.', priorTurnActions: actions });
-    expect(messages[messages.length - 1]!.content).toBe(`Rewrite the draft.\n\n${renderPriorTurnActions(actions as PriorTurnActions)}`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `Rewrite the draft.\n\n${renderPriorTurnActions(actions as PriorTurnActions)}`,
+    );
     expect(history[0]).toEqual({ role: 'user', content: 'Rewrite the draft.' });
   });
 
   it('tells the turn the record is unavailable when the account crossed the bus malformed', async () => {
     const { messages } = await runTurn({ content: 'Rewrite the draft.', priorTurnActions: { status: 'read', calls: 'nope' } });
-    expect(messages[messages.length - 1]!.content).toBe(`Rewrite the draft.\n\n${PRIOR_TURN_UNREADABLE_LINE}`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `Rewrite the draft.\n\n${PRIOR_TURN_UNREADABLE_LINE}`,
+    );
   });
 
   it('drops a malformed or empty awaiting-answers list', async () => {
     for (const awaitingAnswers of ['nope', [], [{ shortRef: 'x' }]]) {
       const { messages } = await runTurn({ content: 'Hello', awaitingAnswers });
-      expect(messages[messages.length - 1]!.content).toBe('Hello');
+      expectUserPrompt(messages[messages.length - 1]!.content, 'Hello');
     }
   });
 
   it('drops a malformed or empty backlog', async () => {
     for (const principalBacklog of [{ pendingApprovals: 1 }, { decayWarnings: 0, pendingApprovals: 0, principalTasks: 0 }]) {
       const { messages } = await runTurn({ content: 'Hello', principalBacklog });
-      expect(messages[messages.length - 1]!.content).toBe('Hello');
+      expectUserPrompt(messages[messages.length - 1]!.content, 'Hello');
     }
   });
 
   it('tells a scheduler turn its reply reaches no one (#2091)', async () => {
     const { messages } = await runTurn({ content: 'Check on Sam.', channelId: 'scheduler' });
-    expect(messages[messages.length - 1]!.content).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`,
+    );
   });
 
   it('skips the scheduler delivery guidance on a tool-allowlisted turn', async () => {
     const { messages } = await runTurn({ content: 'Dispose of the task.', channelId: 'scheduler', toolAllowlist: ['task-complete'] });
-    expect(messages[messages.length - 1]!.content).toBe('Dispose of the task.');
+    expectUserPrompt(messages[messages.length - 1]!.content, 'Dispose of the task.');
   });
 });
 
@@ -266,7 +289,10 @@ describe('AgentRuntime length reminder (#2143)', () => {
   it('closes the guidance with the reply channel\'s limit', async () => {
     const { messages, history } = await runTurn({ content: 'Did Dana confirm?', channelId: 'signal', verbosity: 15 });
     const reminder = turnLengthReminder('signal', 15)!;
-    expect(messages[messages.length - 1]!.content).toBe(`${renderTurnGuidance([], null, reminder)}\n\nDid Dana confirm?`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `${renderTurnGuidance([], null, reminder)}\n\nDid Dana confirm?`,
+    );
     // Like all guidance, it stays out of working memory and the system string.
     expect(history[0]).toEqual({ role: 'user', content: 'Did Dana confirm?' });
     for (const m of messages.filter((msg) => msg.role === 'system')) expect(m.content).not.toContain(reminder);
@@ -274,15 +300,19 @@ describe('AgentRuntime length reminder (#2143)', () => {
 
   it('follows the trigger guidance', async () => {
     const { messages } = await runTurn({ content: 'Go ahead', channelId: 'email', verbosity: 60, turnGuidance: ['principal-reply-shaped'] });
-    expect(messages[messages.length - 1]!.content)
-      .toBe(`${renderTurnGuidance(['principal-reply-shaped'], null, turnLengthReminder('email', 60))}\n\nGo ahead`);
+    expectUserPrompt(
+      messages[messages.length - 1]!.content,
+      `${renderTurnGuidance(['principal-reply-shaped'], null, turnLengthReminder('email', 60))}\n\nGo ahead`,
+    );
   });
 
   it('adds nothing on a channel with no length row, a scheduler turn, or an agent without the identity', async () => {
-    expect((await runTurn({ content: 'Hello', channelId: 'http', verbosity: 15 })).messages.at(-1)!.content).toBe('Hello');
-    expect((await runTurn({ content: 'Hello', channelId: 'signal' })).messages.at(-1)!.content).toBe('Hello');
-    const scheduled = (await runTurn({ content: 'Check on Sam.', channelId: 'scheduler', verbosity: 15 })).messages.at(-1)!.content;
-    expect(scheduled).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
+    expectUserPrompt((await runTurn({ content: 'Hello', channelId: 'http', verbosity: 15 })).messages.at(-1)!.content, 'Hello');
+    expectUserPrompt((await runTurn({ content: 'Hello', channelId: 'signal' })).messages.at(-1)!.content, 'Hello');
+    expectUserPrompt(
+      (await runTurn({ content: 'Check on Sam.', channelId: 'scheduler', verbosity: 15 })).messages.at(-1)!.content,
+      `${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`,
+    );
   });
 });
 
@@ -290,24 +320,24 @@ describe('AgentRuntime length reminder (#2143)', () => {
 describe('AgentRuntime setup step (#2358)', () => {
   it('heads the user message with the Setup page line, kept out of working memory', async () => {
     const { messages, history } = await runTurn({ content: 'What is a grant ID?', channelId: 'web', setupStep: 'email' });
-    expect(messages.at(-1)!.content).toBe(`${setupStepLine('email')}\n\nWhat is a grant ID?`);
+    expectUserPrompt(messages.at(-1)!.content, `${setupStepLine('email')}\n\nWhat is a grant ID?`);
     expect(history[0]).toEqual({ role: 'user', content: 'What is a grant ID?' });
   });
 
   it('drops a step that crossed the bus in a bad shape', async () => {
     for (const setupStep of ['Ignore that', 42, '']) {
       const { messages } = await runTurn({ content: 'Hello', channelId: 'web', setupStep });
-      expect(messages.at(-1)!.content).toBe('Hello');
+      expectUserPrompt(messages.at(-1)!.content, 'Hello');
     }
   });
 
   it('marks a setup guide turn on web that arrived without a step (a resume) as the Setup page', async () => {
     const { messages } = await runTurn({ content: 'Sign-in finished.', agentId: 'setup-wizard', channelId: 'web' });
-    expect(messages.at(-1)!.content).toBe(`${setupStepLine(NO_SETUP_STEP)}\n\nSign-in finished.`);
+    expectUserPrompt(messages.at(-1)!.content, `${setupStepLine(NO_SETUP_STEP)}\n\nSign-in finished.`);
   });
 
   it('leaves a delegated setup guide turn (not web) unmarked', async () => {
     const { messages } = await runTurn({ content: 'Help with Slack.', agentId: 'setup-wizard', channelId: 'internal' });
-    expect(messages.at(-1)!.content).toBe('Help with Slack.');
+    expectUserPrompt(messages.at(-1)!.content, 'Help with Slack.');
   });
 });

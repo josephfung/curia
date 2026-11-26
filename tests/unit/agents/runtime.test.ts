@@ -37,6 +37,29 @@ function createMockProvider(response: string): LLMProvider {
   };
 }
 
+/** #2774: per-turn blocks may prefix the latest user message; the original prompt still ends it. */
+function expectUserPrompt(content: unknown, expectedTail: string): void {
+  expect(typeof content).toBe('string');
+  const text = content as string;
+  expect(text === expectedTail || text.endsWith(expectedTail)).toBe(true);
+  if (text !== expectedTail) {
+    expect(text.startsWith('## Current turn context')).toBe(true);
+  }
+}
+
+function lastUserContent(messages: Array<{ role: string; content: unknown }>): string {
+  const users = messages.filter((m) => m.role === 'user');
+  const last = users[users.length - 1];
+  return typeof last?.content === 'string' ? last.content : '';
+}
+
+function systemContent(messages: Array<{ role: string; content: unknown }>): string {
+  return messages
+    .filter((m) => m.role === 'system' && typeof m.content === 'string')
+    .map((m) => m.content as string)
+    .join('\n');
+}
+
 // Minimal confirmed senderContext for tests that check the exact messages array.
 // Without this, the runtime injects a LOW-TRUST SENDER block for tasks with no
 // senderContext, which adds an extra system message and breaks exact-match assertions.
@@ -102,20 +125,14 @@ describe('AgentRuntime', () => {
     expect(responses).toHaveLength(1);
     expect(responses[0]?.payload.content).toBe('Hello back!');
     expect(responses[0]?.parentEventId).toBe(task.id);
-    expect(provider.chat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
-          { role: 'user', content: 'Hello' },
-        ]),
-      }),
-    );
-
-    // Verify turn budget block is wired into the system prompt.
     const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(firstCall.messages[0]!.content).toContain('## Turn budget');
+    expect(systemContent(firstCall.messages)).toContain('You are a helpful assistant.');
+    expectUserPrompt(lastUserContent(firstCall.messages), 'Hello');
+    // Turn budget rides on the latest user message after #2774 (cache-stable system).
+    expect(lastUserContent(firstCall.messages)).toContain('## Turn budget');
+    expect(systemContent(firstCall.messages)).not.toContain('## Turn budget');
   });
 
   it('publishes error response when LLM fails', async () => {
@@ -192,17 +209,19 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     // LLM should receive system + history + new message.
-    // Use arrayContaining so other injected system messages (sender info, turn budget)
-    // don't break this assertion — the test cares about history inclusion, not exact order.
+    // Use arrayContaining so other injected messages don't break this assertion —
+    // the test cares about history inclusion, not exact order. The latest user
+    // message may carry a turn-context prefix (#2774).
     expect(provider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
-          { role: 'user', content: 'Second message' },
         ]),
       }),
     );
+    const msgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages as Array<{ role: string; content: string }>;
+    expectUserPrompt(lastUserContent(msgs), 'Second message');
   });
 
   it('calls entityMemory.resetRateLimit() after task completes (success path)', async () => {
@@ -433,8 +452,13 @@ describe('AgentRuntime', () => {
     expect(serialized).not.toContain(LLM_FAILURE_TURN_CONTENT);
     expect(secondTurn.some((m) => m.role === 'user' && m.content === 'STALE_FAILED_PROMPT_xyz')).toBe(true);
     expect(secondTurn.some((m) => m.role === 'assistant' && m.content === LLM_FAILURE_USER_MESSAGE)).toBe(true);
-    expect(secondTurn.some((m) => m.role === 'user' && m.content === 'fresh follow-up question')).toBe(true);
-    const fresh = secondTurn.find((m) => m.role === 'user' && m.content === 'fresh follow-up question');
+    const fresh = [...secondTurn].reverse().find((m) =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && (m.content === 'fresh follow-up question' || m.content.endsWith('fresh follow-up question')),
+    );
+    expect(fresh).toBeDefined();
+    expectUserPrompt(fresh!.content, 'fresh follow-up question');
     expect(String(fresh?.content)).not.toContain('STALE_FAILED_PROMPT_xyz');
 
     const conversation = secondTurn.filter((m) => m.role === 'user' || m.role === 'assistant');
@@ -548,7 +572,7 @@ describe('AgentRuntime', () => {
     expect(displayed.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
   });
 
-  it('appends the autonomy block to the system prompt when autonomyService is provided', async () => {
+  it('puts the autonomy block in turn context when autonomyService is provided', async () => {
     const mockAutonomyService = {
       getConfig: vi.fn().mockResolvedValue({
         score: 75,
@@ -582,15 +606,17 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     expect(mockAutonomyService.getConfig).toHaveBeenCalledOnce();
-    // The system message sent to the LLM should contain both the base prompt and the autonomy block
     const callArgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
     const systemMsg = callArgs?.messages?.[0];
+    const user = lastUserContent(callArgs?.messages ?? []);
     expect(systemMsg?.role).toBe('system');
     expect(systemMsg?.content).toContain('Base prompt.');
-    expect(systemMsg?.content).toContain('Autonomy Level');
+    expect(systemMsg?.content).not.toContain('Autonomy Level');
+    expect(user).toContain('## Current turn context');
+    expect(user).toContain('Autonomy Level');
   });
 
-  it('uses base system prompt unchanged when autonomyService returns null', async () => {
+  it('keeps autonomy out of turn context when autonomyService returns null', async () => {
     const mockAutonomyService = {
       getConfig: vi.fn().mockResolvedValue(null),
     };
@@ -620,14 +646,17 @@ describe('AgentRuntime', () => {
 
     const callArgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
     const systemMsg = callArgs?.messages?.[0];
-    // When autonomyService returns null, the autonomy block must NOT be appended.
-    // The turn budget block is unconditionally appended (expected behavior).
+    const user = lastUserContent(callArgs?.messages ?? []);
+    // When autonomyService returns null, the autonomy block must NOT appear.
+    // The turn budget block is unconditional and lives in turn context (#2774).
     expect(systemMsg?.content).toContain('Base prompt.');
     expect(systemMsg?.content).not.toContain('Autonomy Level');
-    expect(systemMsg?.content).toContain('## Turn budget');
+    expect(systemMsg?.content).not.toContain('## Turn budget');
+    expect(user).not.toContain('Autonomy Level');
+    expect(user).toContain('## Turn budget');
   });
 
-  it('appends intent anchor to system prompt when intentAnchor is present', async () => {
+  it('puts the intent anchor in turn context when intentAnchor is present', async () => {
     const provider = createMockProvider('Done.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -650,18 +679,12 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
-    expect(provider.chat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: 'system',
-            content: expect.stringContaining(
-              '## Original Task Intent\nRun weekly contacts dedup scan and present duplicates to the CEO.',
-            ),
-          }),
-        ]),
-      }),
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+    const user = lastUserContent(chatCall.messages);
+    expect(user).toContain(
+      '## Original Task Intent\nRun weekly contacts dedup scan and present duplicates to the CEO.',
     );
+    expect(systemContent(chatCall.messages)).not.toContain('## Original Task Intent');
   });
 
   it('does not append intent anchor when intentAnchor is absent', async () => {
@@ -687,11 +710,11 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0] as { messages: Array<{ role: string; content: string }> };
-    const systemMsg = chatCall.messages.find(m => m.role === 'system');
-    expect(systemMsg?.content).not.toContain('## Original Task Intent');
+    expect(systemContent(chatCall.messages)).not.toContain('## Original Task Intent');
+    expect(lastUserContent(chatCall.messages)).not.toContain('## Original Task Intent');
   });
 
-  it('appends scheduler fence to system prompt when channelId is scheduler', async () => {
+  it('puts the scheduler fence in turn context when channelId is scheduler', async () => {
     const provider = createMockProvider('Done.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -714,19 +737,21 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
-    const systemMsg = chatCall.messages.find(m => m.role === 'system');
-    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
-    expect(systemMsg?.content).toContain('Outbound-context entries are informational');
+    const user = lastUserContent(chatCall.messages);
+    const system = systemContent(chatCall.messages);
+    expect(user).toContain('## Scheduled Task — Scope Restriction');
+    expect(user).toContain('The task description is the ONLY work you may do this run.');
+    expect(user).toContain('Outbound-context entries are informational');
     // Positive success-path cue — without this, bare "report" in a task drifts to bullpen (#1828).
-    expect(systemMsg?.content).toContain('Record the outcome of this run by calling `scheduler-report`');
-    expect(systemMsg?.content).toContain('do not use the bullpen to report');
+    expect(user).toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(user).toContain('do not use the bullpen to report');
     // Bare job UUID must NOT appear — agents mistook it for a bullpen thread_id (#1828).
-    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
-    expect(systemMsg?.content).not.toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(user).not.toContain('Job ID (pass to scheduler-report)');
+    expect(user).not.toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(system).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
-  it('still appends scheduler fence when conversationId does not match scheduler format', async () => {
+  it('still puts the scheduler fence in turn context when conversationId does not match scheduler format', async () => {
     const provider = createMockProvider('Done.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -750,15 +775,16 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
-    const systemMsg = chatCall.messages.find(m => m.role === 'system');
-    // Fence block still appended — agent still gets its scope restriction
-    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
+    const user = lastUserContent(chatCall.messages);
+    // Fence block still present — agent still gets its scope restriction
+    expect(user).toContain('## Scheduled Task — Scope Restriction');
+    expect(user).not.toContain('Job ID (pass to scheduler-report)');
     // Non-derivable conversationId: do not require scheduler-report (#1828 CodeRabbit)
-    expect(systemMsg?.content).not.toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(user).not.toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(systemContent(chatCall.messages)).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
-  it('appends scheduler fence for 2-part scheduler notification IDs without a Job ID line', async () => {
+  it('puts the scheduler fence in turn context for 2-part scheduler notification IDs without a Job ID line', async () => {
     // The scheduler emits coordinator notification tasks (drift, suspension) with
     // conversationId: "scheduler:<jobId>" — 2 parts, no run-id.
     const provider = createMockProvider('Done.');
@@ -783,12 +809,13 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
-    const systemMsg = chatCall.messages.find(m => m.role === 'system');
-    // Fence block still appended
-    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
+    const user = lastUserContent(chatCall.messages);
+    // Fence block still present
+    expect(user).toContain('## Scheduled Task — Scope Restriction');
+    expect(user).not.toContain('Job ID (pass to scheduler-report)');
     // Notification IDs cannot derive job_id — no scheduler-report requirement (#1828 CodeRabbit)
-    expect(systemMsg?.content).not.toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(user).not.toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(systemContent(chatCall.messages)).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
   it('does not append scheduler fence when channelId is not scheduler', async () => {
@@ -814,8 +841,8 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
-    const systemMsg = chatCall.messages.find(m => m.role === 'system');
-    expect(systemMsg?.content).not.toContain('## Scheduled Task — Scope Restriction');
+    expect(systemContent(chatCall.messages)).not.toContain('## Scheduled Task — Scope Restriction');
+    expect(lastUserContent(chatCall.messages)).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
   it('prepends securityContextBlock above the body when set', async () => {
@@ -1322,11 +1349,14 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
-    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    const msgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages as Array<{ role: string; content: string }>;
+    const systemMsg = systemContent(msgs);
     expect(systemMsg).toContain('### Principal Contact Details');
     expect(systemMsg).toContain('- email: ceo@example.com');
-    // The scheduler scope fence should also be present
-    expect(systemMsg).toContain('## Scheduled Task — Scope Restriction');
+    // Scheduler fence is turn-context (user message) after #2774; contacts stay in system.
+    const user = lastUserContent(msgs);
+    expect(user).toContain('## Scheduled Task — Scope Restriction');
+    expect(systemMsg).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
   it('strips newlines from channelIdentifier and channel before injecting into system prompt', async () => {
@@ -3523,12 +3553,11 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(tools).toContain('task-create');
     expect(tools).toContain('task-list');
 
-    const sys = chatCalls[0]!.messages.find(
-      (m) => m.role === 'system'
-        && typeof m.content === 'string'
-        && m.content.includes('[Activated skill: tasks]'),
-    );
-    expect(sys).toBeDefined();
+    // Activated skill bodies live in turn context on the latest user message (#2774).
+    const user = lastUserContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>);
+    expect(user).toContain('[Activated skill: tasks]');
+    expect(systemContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>))
+      .not.toContain('[Activated skill: tasks]');
   });
 
   describe('onboarding context on live principal turns (#2360)', () => {
@@ -3609,7 +3638,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.forPrincipalTurn).toHaveBeenCalledTimes(1);
       expect(r.mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('onboarding', 'coordinator');
       expect(r.tools).toContain('onboarding-progress');
-      expect(r.system).toContain('[Activated skill: onboarding]');
+      // Skill body is turn context (#2774); onboarding status block is still in the user prompt.
+      expect(r.user).toContain('[Activated skill: onboarding]');
+      expect(r.system).not.toContain('[Activated skill: onboarding]');
       expect(r.user).toContain(BLOCK);
     });
 
@@ -3617,7 +3648,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const r = await runTurn({ liveTurn: true, metadata: principal });
       const header = r.user.indexOf(TURN_GUIDANCE_HEADER);
       const block = r.user.indexOf(BLOCK);
-      expect(header).toBe(0);
+      // Turn context may precede guidance (#2774); guidance still heads the promptContent segment.
+      expect(header).toBeGreaterThanOrEqual(0);
+      expect(r.user.startsWith('## Current turn context') || header === 0).toBe(true);
       expect(block).toBeGreaterThan(header);
       // The re-rendered guidance keeps its closing marker, after the block (#2741).
       expect(r.user.endsWith(`${TURN_GUIDANCE_FOOTER}\n\nWhat is on my calendar today?`)).toBe(true);
@@ -4435,14 +4468,14 @@ describe('AgentRuntime resumable harness wiring (#1173)', () => {
       messages: Array<{ role: string; content: string }>;
       tools?: Array<{ name: string }>;
     };
-    const systemContent = firstCall.messages
-      .filter((m) => m.role === 'system')
-      .map((m) => m.content)
-      .join('\n');
-    expect(systemContent).toContain('## Resumable Task');
-    expect(systemContent).toContain('## Last Checkpoint (resume from here)');
-    expect(systemContent).toContain('25 / 1300');
-    expect(systemContent).not.toContain(NUDGE_MARKER);
+    const user = lastUserContent(firstCall.messages);
+    const system = systemContent(firstCall.messages);
+    // Resumable harness blocks ride on the latest user message (#2774).
+    expect(user).toContain('## Resumable Task');
+    expect(user).toContain('## Last Checkpoint (resume from here)');
+    expect(user).toContain('25 / 1300');
+    expect(user).not.toContain(NUDGE_MARKER);
+    expect(system).not.toContain('## Resumable Task');
 
     const toolNames = (firstCall.tools ?? []).map((t) => t.name);
     expect(toolNames).toContain('checkpoint');

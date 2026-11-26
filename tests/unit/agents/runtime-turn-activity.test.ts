@@ -127,23 +127,33 @@ describe('runtime turn activity (#2588)', () => {
       });
     }
 
+    /** Latest user message — where the other-turns note lives after #2774. */
+    function turnContextOf(chat: ReturnType<typeof vi.fn>): string {
+      const params = chat.mock.calls[0]![0] as { messages: { role: string; content: unknown }[] };
+      const users = params.messages.filter((m) => m.role === 'user');
+      const last = users[users.length - 1];
+      return typeof last?.content === 'string' ? last.content : '';
+    }
+
     function systemPromptOf(chat: ReturnType<typeof vi.fn>): string {
       const params = chat.mock.calls[0]![0] as { messages: { role: string; content: unknown }[] };
       const system = params.messages.find((m) => m.role === 'system');
       return typeof system?.content === 'string' ? system.content : '';
     }
 
-    it("injects the block into the coordinator's system prompt", async () => {
+    it("injects the block into the coordinator's turn context", async () => {
       const logger = createLogger('error');
       const registry = new TurnActivityRegistry({ logger });
       seedOtherTurn(registry);
       const chat = vi.fn(() => Promise.resolve(text('ok')));
       const { bus } = build({ id: 'mock', chat }, registry);
       await bus.publish('dispatch', task('the 9am flight', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } }));
-      const system = systemPromptOf(chat);
-      expect(system).toContain(HEADING);
-      expect(system).toContain('turn_id other-root');
-      expect(system).toContain(JSON.stringify('book the 9am flight to Montreal'));
+      const user = turnContextOf(chat);
+      expect(user).toContain('## Current turn context');
+      expect(user).toContain(HEADING);
+      expect(user).toContain('turn_id other-root');
+      expect(user).toContain(JSON.stringify('book the 9am flight to Montreal'));
+      expect(systemPromptOf(chat)).not.toContain(HEADING);
     });
 
     it('runtime injects the block only for the coordinator', async () => {
@@ -157,7 +167,7 @@ describe('runtime turn activity (#2588)', () => {
         channelId: 'sms',
         metadata: { originator: ORIGINATOR, delegationOrigin: { taskEventId: 'origin-x', conversationId: 'conv-1' } },
       }));
-      expect(systemPromptOf(chat)).not.toContain(HEADING);
+      expect(turnContextOf(chat)).not.toContain(HEADING);
     });
 
     it('injects nothing when the person has no other turns', async () => {
@@ -166,7 +176,7 @@ describe('runtime turn activity (#2588)', () => {
       const chat = vi.fn(() => Promise.resolve(text('ok')));
       const { bus } = build({ id: 'mock', chat }, registry);
       await bus.publish('dispatch', task('hello', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } }));
-      expect(systemPromptOf(chat)).not.toContain(HEADING);
+      expect(turnContextOf(chat)).not.toContain(HEADING);
     });
 
     it('a block failure logs at error and the turn runs without it', async () => {
@@ -181,7 +191,7 @@ describe('runtime turn activity (#2588)', () => {
       const event = task('hello', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } });
       await bus.publish('dispatch', event);
       expect(chat).toHaveBeenCalled();
-      expect(systemPromptOf(chat)).not.toContain(HEADING);
+      expect(turnContextOf(chat)).not.toContain(HEADING);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskEventId: event.id }),
         expect.stringContaining('other turns'),

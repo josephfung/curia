@@ -155,9 +155,19 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     expect(block).not.toContain('noted everyone on the thread');
     expect(block).not.toContain('outside the email window');
     expect(block).not.toContain('following up on a new thread');
-    expect(messages.some(m => m.role === 'user' && m.content === 'following up on a new thread')).toBe(true);
+    // #2774: the latest user message may carry a turn-context prefix; the prompt ends with the task text.
+    const latestUser = [...messages].reverse().find(m => m.role === 'user');
+    expect(typeof latestUser?.content === 'string' && (
+      latestUser.content === 'following up on a new thread'
+      || (latestUser.content.startsWith('## Current turn context')
+        && latestUser.content.endsWith('following up on a new thread'))
+    )).toBe(true);
     const blockAt = messages.findIndex(m => typeof m.content === 'string' && m.content.includes(CONTACT_RECENT_HISTORY_HEADER));
-    const historyAt = messages.findIndex(m => m.role === 'user' && m.content === 'following up on a new thread');
+    const historyAt = messages.findIndex(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && (m.content === 'following up on a new thread' || m.content.endsWith('following up on a new thread')),
+    );
     expect(blockAt).toBeGreaterThan(-1);
     expect(blockAt).toBeLessThan(historyAt);
 
