@@ -446,10 +446,12 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     }
   };
 
-  // allow_discovery gates tool-registry only. skill-activate is offered to every
-  // agent that lists at least one skill (#2764).
+  // allow_discovery gates tool-registry. skill-activate is offered to every agent that
+  // lists a skill, and to every discovery agent: tool-registry returns bundles as
+  // kind:'skill', which only skill-activate can load (#2764).
   if (agentConfig.allow_discovery) {
     injectTool(TOOL_REGISTRY, 'allow_discovery is true');
+    injectTool(SKILL_ACTIVATE, 'allow_discovery is true');
   }
   if (pinResolution.listedSkills.length > 0) {
     injectTool(SKILL_ACTIVATE, 'agent lists skills');
