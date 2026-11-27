@@ -137,7 +137,7 @@ interface AgentBudget {
 // 1,125 it had freed. Restored: 87,250 over 77 local tools. The budget is set to that measurement.
 const AGENT_BUDGETS: AgentBudget[] = [
   // #2764 skill-activate description now documents skills[] (+~128 bytes). Budgets reset in PR 3.
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 87_500, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 87_500, allowMcpPins: true, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came
