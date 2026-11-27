@@ -178,13 +178,15 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2474 D6: the batch read-back is guided by send-draft's description only. The code guard and
   // its batch_size / batch_confirmed inputs were removed again (#2653): 49,454 over 46 local tools.
   // #2699 ceo-inbox-archive's description sentence on the filing mode (+113 bytes; the outputs block is not sent to the model): 49,567 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_567, allowMcpPins: false },
+  // #2764 task-list always-on promise sentence (+140 bytes; ceo-inbox still lists `tasks`): 49,707 over 46 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_707, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same
   // approval: 36,512 over its local tools.
   // #2764 contact-grant-permission description names pending-recommendation routing (+211): 36,731.
-  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_731, allowMcpPins: false },
+  // #2764 task-list always-on promise sentence (+140 bytes; contacts still lists `tasks`): 36,871.
+  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_871, allowMcpPins: false },
   // meeting-debrief: YAML 18,627 → 14,682 chars (~4,670 → ~3,681 tokens always-on); 22,685 bytes over 17 local tools.
   { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
 ];

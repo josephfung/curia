@@ -4,3 +4,4 @@
 - **Google Workspace** — hand-written MCP description; coordinator pointer section removed. (#2764)
 - **Agent pins** — calendar, ceo-inbox, and contacts domains become tool pins. (#2764)
 - **Always-on rules** — promise and external-data warnings live on pinned tools/YAML. (#2764)
+- **Prompt budgets** — bump contacts/ceo-inbox tool defs for task-list promise text. (#2764)
