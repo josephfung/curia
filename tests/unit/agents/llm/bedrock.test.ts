@@ -162,6 +162,32 @@ describe('BedrockProvider', () => {
       expect(req.messages).toEqual([{ role: 'user', content: [{ text: 'hi' }] }]);
     });
 
+    it('merges after-history pre-activated skill bodies into system with no loss (#2774)', async () => {
+      mockSend.mockResolvedValueOnce(textResponse());
+      const { provider } = makeProvider();
+      const skillBody = '[Activated skill: onboarding]\n## Onboarding\nRead back first.';
+      const turnContext =
+        '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nRestricted\n\n[End of turn context]\n\nHello';
+      const messages: Message[] = [
+        { role: 'system', content: 'Stable prefix.' },
+        { role: 'user', content: 'Prior' },
+        { role: 'assistant', content: 'Ack' },
+        { role: 'system', content: skillBody },
+        { role: 'user', content: turnContext },
+      ];
+
+      await provider.chat({ messages, model: MODEL });
+
+      const req = lastRequest();
+      expect(req.system).toEqual([{ text: `Stable prefix.\n\n${skillBody}` }]);
+      expect(req.messages).toEqual([
+        { role: 'user', content: [{ text: 'Prior' }] },
+        { role: 'assistant', content: [{ text: 'Ack' }] },
+        { role: 'user', content: [{ text: turnContext }] },
+      ]);
+      expect(turnContext).not.toContain('[Activated skill:');
+    });
+
     it('omits the system parameter when there are no system messages', async () => {
       mockSend.mockResolvedValueOnce(textResponse());
       const { provider } = makeProvider();

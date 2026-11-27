@@ -349,22 +349,25 @@ describe('OpenRouterProvider', () => {
       description: 'Add a note',
       input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
     }];
-    // Mirrors the runtime wire shape after option (a): stable system → history →
-    // per-turn system (sender / Bullpen / …) → latest user (turn-context with time/autonomy).
+    // Mirrors the runtime wire shape after option (a) + 2026-11-27: stable system →
+    // history → per-turn system (sender / Bullpen / pre-activated skill bodies) →
+    // latest user (turn-context with time/autonomy; no skill bodies).
+    const skillBody1 = '[Activated skill: onboarding]\n## Onboarding\nRead back first.';
+    const skillBody2 = '[Activated skill: onboarding]\n## Onboarding\nRead back first.\nExtra line.';
     const base = [
       { role: 'system' as const, content: 'Stable prefix.' },
       { role: 'user' as const, content: 'Prior' },
       { role: 'assistant' as const, content: 'Ack' },
     ];
     const turn1After = [
-      { role: 'system' as const, content: 'Sender A\n[Bullpen — thread-1]' },
+      { role: 'system' as const, content: `Sender A\n[Bullpen — thread-1]\n\n${skillBody1}` },
       {
         role: 'user' as const,
         content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nRestricted\n\n## Current Date & Time\n2026-10-01\n\n[End of turn context]\n\nTurn 1',
       },
     ];
     const turn2After = [
-      { role: 'system' as const, content: 'Sender B\n[Bullpen — thread-2]' },
+      { role: 'system' as const, content: `Sender B\n[Bullpen — thread-2]\n\n${skillBody2}` },
       {
         role: 'user' as const,
         content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nSpot-check\n\n## Current Date & Time\n2026-10-02\n\n[End of turn context]\n\nTurn 2',
@@ -386,8 +389,15 @@ describe('OpenRouterProvider', () => {
     expect(second.messages[0]).toEqual(first.messages[0]);
     expect(JSON.stringify(first.tools)).toBe(JSON.stringify(second.tools));
     expect(first.messages.filter((m: { role: string }) => m.role === 'system')).toHaveLength(2);
-    expect(second.messages[3]).toEqual({ role: 'system', content: 'Sender B\n[Bullpen — thread-2]' });
+    // Skill bodies sit on the after-history system row (index 3), not in turn context.
+    expect(first.messages[3].content).toContain('[Activated skill: onboarding]');
+    expect(second.messages[3]).toEqual({
+      role: 'system',
+      content: `Sender B\n[Bullpen — thread-2]\n\n${skillBody2}`,
+    });
     expect(second.messages[4].content).toContain('Spot-check');
+    expect(second.messages[4].content).not.toContain('[Activated skill:');
+    expect(first.messages[4].content).not.toContain('[Activated skill:');
   });
 
   it('maps image content to OpenAI image_url format', async () => {

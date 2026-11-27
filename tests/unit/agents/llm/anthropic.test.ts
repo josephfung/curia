@@ -227,6 +227,43 @@ describe('AnthropicProvider — prompt caching', () => {
     ]);
   });
 
+  it('merges after-history pre-activated skill bodies into system with no loss (#2774)', async () => {
+    // Runtime wire: stable system → history → after-history system (skill bodies) → user.
+    // Anthropic lifts every system row into the top-level `system` param.
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const skillBody = '[Activated skill: onboarding]\n## Onboarding\nRead back first.';
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [
+        { role: 'system', content: 'Stable prefix.' },
+        { role: 'user', content: 'Prior' },
+        { role: 'assistant', content: 'Ack' },
+        { role: 'system', content: skillBody },
+        {
+          role: 'user',
+          content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nRestricted\n\n[End of turn context]\n\nHello',
+        },
+      ],
+    });
+
+    const params = mockCreate.mock.calls[0]![0] as {
+      system: Array<{ type: string; text: string }>;
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(params.system).toEqual([
+      { type: 'text', text: `Stable prefix.\n\n${skillBody}`, cache_control: { type: 'ephemeral' } },
+    ]);
+    expect(params.messages).toEqual([
+      { role: 'user', content: 'Prior' },
+      { role: 'assistant', content: 'Ack' },
+      {
+        role: 'user',
+        content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nRestricted\n\n[End of turn context]\n\nHello',
+      },
+    ]);
+    expect(params.messages[2]!.content).not.toContain('[Activated skill:');
+  });
+
   it('passes user/assistant turns through 1:1 — consecutive user turns are not normalized (#1767)', async () => {
     // The Anthropic adapter does not merge or drop consecutive same-role turns.
     // The SDK will glue them silently; the runtime must not feed it this shape.
