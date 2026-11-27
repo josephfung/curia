@@ -31,6 +31,7 @@ import { createAgentTask, type ContextBudgetEvent } from '../../../src/bus/event
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { createLogger } from '../../../src/logger.js';
+import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { VerificationRuntime } from '../../../src/verification/index.js';
 import type { PinnedContextReader } from '../../../src/agents/pinned-context.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
@@ -729,6 +730,19 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
     const provider = textProvider();
     const configs = [coordinatorYaml(), specialistYaml()];
     const ctx = buildContext(provider, configs);
+    // Seed prior history on one turn so "after history" is a real position —
+    // without it, lastUserAt === msgs.length - 1 makes every earlier index
+    // trivially pass and would miss a splice(1, 0, …) regression (#2774).
+    const memory = WorkingMemory.createInMemory();
+    ctx.memory = memory;
+    await memory.addTurn('conv-cache-0', 'coordinator', {
+      role: 'user',
+      content: 'prior user turn for cache ordering',
+    });
+    await memory.addTurn('conv-cache-0', 'coordinator', {
+      role: 'assistant',
+      content: 'prior assistant turn for cache ordering',
+    });
     const autonomyState = { score: 40 };
     ctx.autonomyService = {
       getConfig: async () => ({
@@ -796,17 +810,24 @@ describe('stable system prefix across trigger guidance (#1959)', () => {
 
     // Per-turn system messages (sender / Bullpen / …) sit after history, before
     // the latest user message — OpenRouter keeps them inline (#2774 option a).
-    for (const [i] of turns.entries()) {
-      const msgs = provider.chat.mock.calls[i]![0].messages as Array<{ role: string; content: unknown }>;
-      expect(msgs[0]!.role).toBe('system');
-      const lastUserAt = msgs.length - 1;
-      expect(msgs[lastUserAt]!.role).toBe('user');
-      const laterSystems = msgs
-        .map((m, idx) => ({ m, idx }))
-        .filter(({ m, idx }) => idx > 0 && m.role === 'system');
-      for (const { idx } of laterSystems) {
-        expect(idx).toBeLessThan(lastUserAt);
-      }
+    const msgs = provider.chat.mock.calls[0]![0].messages as Array<{ role: string; content: unknown }>;
+    expect(msgs[0]!.role).toBe('system');
+    const lastUserAt = msgs.length - 1;
+    expect(msgs[lastUserAt]!.role).toBe('user');
+    const historyIdxs = msgs
+      .map((m, idx) => ({ m, idx }))
+      .filter(({ m, idx }) => idx > 0 && idx < lastUserAt && (m.role === 'user' || m.role === 'assistant'))
+      .map(({ idx }) => idx);
+    expect(historyIdxs.length).toBeGreaterThan(0);
+    const lastHistoryAt = Math.max(...historyIdxs);
+    const laterSystems = msgs
+      .map((m, idx) => ({ m, idx }))
+      .filter(({ m, idx }) => idx > 0 && m.role === 'system');
+    expect(laterSystems.length).toBeGreaterThan(0);
+    expect(laterSystems[0]!.idx).toBeGreaterThan(lastHistoryAt);
+    for (const { idx } of laterSystems) {
+      expect(idx).toBeGreaterThan(lastHistoryAt);
+      expect(idx).toBeLessThan(lastUserAt);
     }
   });
 
