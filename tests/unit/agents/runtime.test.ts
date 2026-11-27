@@ -3463,6 +3463,10 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
+    const budgetEvents: Array<{ tiers: Array<{ name: string; included: boolean }> }> = [];
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push((event as { payload: { tiers: Array<{ name: string; included: boolean }> } }).payload);
+    });
 
     const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
     const provider: LLMProvider = {
@@ -3521,6 +3525,19 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       }),
     } as unknown as ExecutionLayer;
 
+    // Seed prior history so "after history" is a real position — without it the
+    // skill row sits at index 1 whether pushed before or after budgetedHistory
+    // and the assert cannot fail (#2774 review).
+    const memory = WorkingMemory.createInMemory();
+    await memory.addTurn('conv-wake-1', 'coordinator', {
+      role: 'user',
+      content: 'prior user turn before wake reload',
+    });
+    await memory.addTurn('conv-wake-1', 'coordinator', {
+      role: 'assistant',
+      content: 'prior assistant turn before wake reload',
+    });
+
     const agent = new AgentRuntime({
       agentId: 'coordinator',
       systemPrompt: 'You are an assistant.',
@@ -3532,6 +3549,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       skillToolDefs: [skillActivateToolDef],
       skillRegistry,
       taskRepo: mockTaskRepo as never,
+      memory,
     });
     agent.register();
 
@@ -3566,11 +3584,17 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     const firstSystem = msgs.find((m) => m.role === 'system');
     expect(typeof firstSystem?.content === 'string' ? firstSystem.content : '').not.toContain('[Activated skill: tasks]');
     const lastUserIdx = msgs.map((m) => m.role).lastIndexOf('user');
+    const lastHistoryIdx = msgs.findIndex(
+      (m) => m.role === 'assistant' && m.content === 'prior assistant turn before wake reload',
+    );
+    expect(lastHistoryIdx).toBeGreaterThan(0);
     const skillSysIdx = msgs.findIndex(
       (m, i) => i > 0 && m.role === 'system' && typeof m.content === 'string' && m.content.includes('[Activated skill: tasks]'),
     );
-    expect(skillSysIdx).toBeGreaterThan(0);
+    expect(skillSysIdx).toBeGreaterThan(lastHistoryIdx);
     expect(skillSysIdx).toBeLessThan(lastUserIdx);
+    // Bodies were reserved before history so telemetry still accounts for them.
+    expect(budgetEvents[0]!.tiers.some((t) => t.name === 'skill_bodies' && t.included)).toBe(true);
   });
 
   describe('onboarding context on live principal turns (#2360)', () => {

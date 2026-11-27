@@ -1602,13 +1602,21 @@ export class AgentRuntime {
     });
 
     // Budget allocation order: reserve non-negotiable tiers first (system prompt,
-    // user message), then allocate in priority order (sender context, tool
-    // definitions, bullpen), and let history — which supports partial inclusion —
-    // take whatever's left. This matches the design spec priority order and ensures
-    // higher-priority tiers (especially security-relevant sender context) aren't
-    // starved by greedy history.
+    // user message, pre-activated skill bodies), then allocate in priority order
+    // (sender context, tool definitions, bullpen), and let history — which supports
+    // partial inclusion — take whatever's left. This matches the design spec
+    // priority order and ensures higher-priority tiers (especially security-relevant
+    // sender context) aren't starved by greedy history. Skill bodies used to ride
+    // inside user_message; they stay required so a long transcript cannot crowd
+    // them out after the after-history system move (#2774 / 2026-11-27).
+    const skillBodiesMessage: Message | null = preActivatedSkillBlocks.length > 0
+      ? { role: 'system', content: preActivatedSkillBlocks.join('\n\n') }
+      : null;
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
     ctxBudget.allocateRequired('user_message', [{ role: 'user', content: userMessageContent }]);
+    if (skillBodiesMessage) {
+      ctxBudget.allocateRequired('skill_bodies', [skillBodiesMessage]);
+    }
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
@@ -2082,11 +2090,9 @@ export class AgentRuntime {
     messages.push(...budgetedHistory);
     // Skill bodies last among after-history system rows — just before the user
     // message — so they stay instructions without sitting in forgeable user text.
-    if (preActivatedSkillBlocks.length > 0) {
-      perTurnSystemMessages.push({
-        role: 'system',
-        content: preActivatedSkillBlocks.join('\n\n'),
-      });
+    // The row was already reserved via allocateRequired('skill_bodies') above.
+    if (skillBodiesMessage) {
+      perTurnSystemMessages.push(skillBodiesMessage);
     }
     const bullpenIdxInPerTurn = perTurnSystemMessages.findIndex(
       m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
