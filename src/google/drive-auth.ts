@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { google } from 'googleapis';
 import { workspaceCredentialPath } from './workspace-token-file.js';
@@ -8,11 +7,10 @@ import { workspaceCredentialPath } from './workspace-token-file.js';
 // ID and secret it was built with: a credential rotated in the vault (no restart) replaces it
 // instead of refreshing with the old secret (#2697 review). A new sign-in restarts Curia, so a
 // rewritten token file never meets a cached client.
-const clientCache = new Map<string, { credentials: string; client: InstanceType<typeof google.auth.OAuth2> }>();
-
-function credentialsTag(clientId: string, clientSecret: string): string {
-  return createHash('sha256').update(`${clientId}\0${clientSecret}`).digest('hex');
-}
+const clientCache = new Map<
+  string,
+  { clientId: string; clientSecret: string; client: InstanceType<typeof google.auth.OAuth2> }
+>();
 
 export interface DriveAuthOptions {
   tokenCachePath?: string;
@@ -36,9 +34,8 @@ export async function getDriveClient(
   // workspace-mcp's own file name: the address URL-encoded (curia+docs@ → curia%2Bdocs@).
   const tokenCachePath = options?.tokenCachePath ?? workspaceCredentialPath(email);
 
-  const credentials = credentialsTag(clientId, clientSecret);
   const cached = clientCache.get(tokenCachePath);
-  if (cached && cached.credentials === credentials) return cached.client;
+  if (cached && cached.clientId === clientId && cached.clientSecret === clientSecret) return cached.client;
 
   let tokenData: Record<string, unknown>;
   try {
@@ -66,7 +63,7 @@ export async function getDriveClient(
 
   const auth = new google.auth.OAuth2(clientId, clientSecret);
   auth.setCredentials({ refresh_token: refreshToken });
-  clientCache.set(tokenCachePath, { credentials, client: auth });
+  clientCache.set(tokenCachePath, { clientId, clientSecret, client: auth });
   return auth;
 }
 

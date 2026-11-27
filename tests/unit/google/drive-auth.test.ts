@@ -100,4 +100,12 @@ describe('getDriveClient — token cache', () => {
     expect(rotated).not.toBe(first);
     expect((rotated as unknown as { clientSecret: string }).clientSecret).toBe('new-secret');
   });
+
+  it('builds a new client when the client ID changes with the same secret', async () => {
+    await fs.writeFile(tokenCachePath, validTokenJson);
+    const first = await getDriveClient({ tokenCachePath, clientId: 'cid-a', clientSecret: 'secret', email: 'curia@test.com' });
+    const other = await getDriveClient({ tokenCachePath, clientId: 'cid-b', clientSecret: 'secret', email: 'curia@test.com' });
+    expect(other).not.toBe(first);
+    expect((other as unknown as { clientId: string }).clientId).toBe('cid-b');
+  });
 });
