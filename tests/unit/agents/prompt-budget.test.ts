@@ -136,64 +136,21 @@ interface AgentBudget {
 // from web/SKILL.md, so main measured 86,125 over 76 tools and later PRs grew 950 bytes into the
 // 1,125 it had freed. Restored: 87,250 over 77 local tools. The budget is set to that measurement.
 const AGENT_BUDGETS: AgentBudget[] = [
-  // #2764 skill-activate description now documents skills[] (+~128 bytes). Budgets reset in PR 3.
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 87_500, allowMcpPins: true, rosterTokens: 500 },
-  // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
-  // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
-  // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came
-  // out (YAML 23,890 → 21,918 chars, ~5,983 → ~5,490 tokens) and doc-write was pinned to edit
-  // the document (+2,100 bytes, 26,729 over 23 local tools). The prompt budget drops by the
-  // cut and the tool budget rises by exactly doc-write's definition, so the total holds.
-  // #2475 the optional `mailbox` input on all 11 calendar tools (net +1,355 bytes after shortening
-  // respond-to-invite's account note), covered by the maintainer's mailbox-input approval (2026-11-12):
-  // 28,447 over 23 local tools.
-  // #2475 Task 32: the `mailbox` inputs of create-event, create-hold, respond-to-invite and
-  // holds-sweep say when an account is required and how to choose it (D5), and respond-to-invite
-  // drops `account` (net +271 bytes, same approval): 28,718 over 23 local tools. Fix round 1:
-  // respond-to-invite's `mailbox` says it is required and found by iCal UID (+37): 28,755.
-  // #2475 Task 33: find-free-time and check-conflicts read every account's calendar and return
-  // what blocks (description lines, find-free-time's `treat_as_free` input, both `mailbox`
-  // inputs reworded since someone else's free/busy no longer needs one), +610 bytes under the
-  // same pre-approval: 29,365 over 23 local tools.
-  // #2475 Part 4 final fixes: needs_mailbox is an error (create-event/create-hold `mailbox`), the
-  // 20-calendar cap on both availability tools and the 30-day RSVP hold window, +88 bytes under the
-  // same pre-approval: 29,453 over 23 local tools.
-  // #2475 review I1: create-event's optional topic_matches_account (D5: topic AND evidence), +109
-  // bytes under the coordinator's pre-approval of multi-mailbox wording: 29,562 over 23 local tools.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_562, allowMcpPins: false },
-  // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
-  // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
-  // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same
-  // delta as the coordinator. Measured 45,301 bytes over 45 local tools; the prior total sat
-  // under the 44,800 ceiling.
-  // contact-update accepts contact_id "principal" (#2226): +38 bytes, 45,339 over 45 local tools.
-  // The budget rises by exactly that delta.
-  // #2328 optional id hints (+132 bytes, the same delta as the coordinator's schema growth):
-  // 45,471 over 45 local tools.
-  // #2474 ceo-inbox-send-draft (+450 bytes after trims), approved by the maintainer: 45,921 over 46 local tools.
-  // #2474 ceo-inbox-list/search DRAFTS modified_since + created_by_curia/date_local (+370 bytes): 46,291 over 46 local tools.
-  // #2474 PR 2 ceo-inbox-send-draft describes triage sends (+236 bytes), approved by the maintainer: 46,527 over 46 local tools.
-  // #2475 the optional `mailbox` input on all 15 ceo-inbox tools (+1,900 bytes, the description fixed by the
-  // design): 48,427 over 46 local tools. approved by the maintainer (2026-11-12).
-  // #2475 D5 account-choice guidance on draft-compose (+521 bytes), approved by the maintainer (2026-11-12).
-  // #2475 move_to_mailbox on draft-edit (+139 bytes), approved by the maintainer: 49,087 over 46 local tools.
-  // #2475 D6 which-draft guidance on send-draft (+329 bytes), approved by the maintainer: 49,416 over 46 local tools.
-  // #2475 review I1: draft-compose's optional topic_matches_account (D5: topic AND evidence), +100
-  // bytes under the coordinator's pre-approval of multi-mailbox wording: 49,516 over 46 local tools.
-  // #2474 D6: the batch read-back is guided by send-draft's description only. The code guard and
-  // its batch_size / batch_confirmed inputs were removed again (#2653): 49,454 over 46 local tools.
-  // #2699 ceo-inbox-archive's description sentence on the filing mode (+113 bytes; the outputs block is not sent to the model): 49,567 over 46 local tools.
-  // #2764 task-list always-on promise sentence (+140 bytes; ceo-inbox still lists `tasks`): 49,707 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_707, allowMcpPins: false },
-  // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
-  // 35,311 bytes over its local tools.
-  // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same
-  // approval: 36,512 over its local tools.
-  // #2764 contact-grant-permission description names pending-recommendation routing (+211): 36,731.
-  // #2764 task-list always-on promise sentence (+140 bytes; contacts still lists `tasks`): 36,871.
-  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_871, allowMcpPins: false },
-  // meeting-debrief: YAML 18,627 → 14,682 chars (~4,670 → ~3,681 tokens always-on); 22,685 bytes over 17 local tools.
-  { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
+  // #2764 switch-on (measured 2026-11-26): skill bodies leave always-on; tool pins only.
+  // coordinator: YAML ~2,021 tokens; ## Skills ~665 tokens; 20,811 bytes over 19 local tools.
+  // Re-measure after #2771/#2772 description deltas and #2787 skill-list growth on rem.
+  { agent: 'coordinator', alwaysOnPromptTokens: 2_100, localToolDefinitionBytes: 21_000, skillListTokens: 700, allowMcpPins: true, rosterTokens: 500 },
+  // calendar: domain tool-pinned; bullpen listed. ~5,652 prompt tokens; 29,136 bytes / 20 tools; skill list ~85.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_500, skillListTokens: 100, allowMcpPins: false },
+  // ceo-inbox: domain tool-pinned; tasks/documents/bullpen/context-bridge listed.
+  // ~12,964 prompt tokens; 34,821 bytes / 29 tools; skill list ~232.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 13_100, localToolDefinitionBytes: 35_500, skillListTokens: 250, allowMcpPins: false },
+  // contacts: everyday tool pins; trust/upkeep/tasks/documents/context-bridge listed.
+  // ~2,886 prompt tokens; 16,930 bytes / 16 tools; skill list ~278.
+  // #2764 contact-grant-permission pending-routing text (+211): raise after remeasure.
+  { agent: 'contacts', alwaysOnPromptTokens: 3_000, localToolDefinitionBytes: 17_711, skillListTokens: 300, allowMcpPins: false },
+  // meeting-debrief: tool pins only (+ listed bullpen). ~3,765 prompt; 18,194 bytes / 14 tools.
+  { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 18_500, skillListTokens: 100, allowMcpPins: false },
 ];
 
 describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
