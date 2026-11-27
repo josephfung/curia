@@ -165,8 +165,8 @@ expected_behaviors:
     weight: critical
     description: Activates the google-workspace skill to get its Drive tools.
     check:
-      called: skill-activate
-      with: { skill: google-workspace }
+      skills_activated:
+        includes: [google-workspace]
   - id: moves_into_folder
     weight: critical
     description: Moves the Doc into the CRM evaluation folder with update_drive_file.
