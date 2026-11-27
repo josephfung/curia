@@ -36,6 +36,7 @@ expected_behaviors:
           success: true
           with: { message_id: nylas-msg-60b-newsletter }
         - called: delegate
+          success: true
           with: { agent: ceo-inbox }
           contains: { task: nylas-msg-60b-newsletter }
   - id: activates_mailbox
@@ -48,6 +49,7 @@ expected_behaviors:
         - skills_activated:
             includes: [mailbox]
         - called: delegate
+          success: true
           with: { agent: ceo-inbox }
           contains: { task: nylas-msg-60b-newsletter }
   - id: no_send
