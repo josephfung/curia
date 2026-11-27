@@ -93,11 +93,11 @@ import {
 } from './planned-task.js';
 import {
   SKILL_ACTIVATE_TOOL_NAME,
-  buildSkillActivationAck,
+  buildSkillActivationToolResult,
   formatActivatedSkillInstructionBlock,
-  formatSkillReferenceBlock,
   parseSkillActivationProtocol,
   selectActiveSkillsForWake,
+  type SkillActivationResult,
 } from '../skills/skill-activation.js';
 import {
   prepareActiveSkillsBlock,
@@ -196,6 +196,41 @@ import {
 } from './resolved-entities.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 
+const SKILL_ACTIVATION_BATCH_PROTOCOL = 'skill_activation_batch';
+
+/** Declared + learned skills for a scheduler-fired turn (#2764). */
+function collectJobSkillNames(
+  payload: Record<string, unknown>,
+  metadata: Record<string, unknown> | undefined,
+): { job: string[]; learned: string[] } {
+  const asNames = (raw: unknown): string[] => {
+    if (!Array.isArray(raw)) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+      if (typeof entry !== 'string') continue;
+      const name = entry.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out;
+  };
+  // Prefer metadata stamped by the scheduler at fire time.
+  if (metadata && typeof metadata === 'object') {
+    const stamped = metadata.preActivateSkills;
+    if (stamped && typeof stamped === 'object' && !Array.isArray(stamped)) {
+      const block = stamped as Record<string, unknown>;
+      return { job: asNames(block.declared), learned: asNames(block.learned) };
+    }
+  }
+  // Fallback: skills on the content JSON / payload itself.
+  return {
+    job: asNames(payload.skills),
+    learned: asNames(payload.learnedSkills),
+  };
+}
+
 /**
  * Request options for an agent turn: the tier's reasoning setting, when it has
  * one (ADR-048 §3). Nothing otherwise, so the provider default applies.
@@ -252,8 +287,28 @@ export interface AgentConfig {
   pinnedTools?: string[];
   /** Skill bundle names resolved from pinned_skills at bootstrap (Tier 0). */
   pinnedSkillNames?: string[];
+  /**
+   * How skill pins enter context (#2764 / ADR-070). Default `eager` until PR 3.
+   * `on_demand`: listedSkills only; bodies and member tools load on activation.
+   */
+  skillLoading?: 'eager' | 'on_demand';
+  /**
+   * From agent YAML `allow_discovery` (#2764). When false, model skill-activate is
+   * limited to `skillList` names via InvokeOptions.activatableSkills.
+   */
+  allowDiscovery?: boolean;
+  /**
+   * Skills listed for the model under on_demand (name + description). Empty when eager.
+   * Rendered as `## Skills` in the system prompt.
+   */
+  skillList?: ReadonlyArray<{ name: string; description: string }>;
   /** Skill (bundle) registry — used for Tier-1 wake re-load of active skills (#1495). */
   skillRegistry?: import('../skills/skill-registry.js').SkillRegistry;
+  /**
+   * Conversation-scoped active skills (#2764). When set, activations carry across
+   * messages in the same conversation (24h idle TTL, cap 8 — config values).
+   */
+  conversationActiveSkills?: import('../db/conversation-active-skills.js').ConversationActiveSkillsStore;
   /** Pre-built tool definitions for the LLM (from ToolRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
   /** Optional autonomy service — when provided, the autonomy block is injected
@@ -582,12 +637,13 @@ export class AgentRuntime {
   }
 
   /**
-   * Activate skills for this turn: add each skill's tools to `workingToolDefs` (skipping names
-   * already there) and return its instruction blocks for the system prompt. A skill the agent
+   * Shared pre-activation entry point (#2764 / ADR-070): add each skill's tools to
+   * `workingToolDefs` (skipping names already there) and return instruction blocks for
+   * the system prompt (placed after the stable prefix until PR 4). A skill the agent
    * may not activate is logged with `skipMessage` and skipped. Each success publishes
-   * `skill.activated` with `by` (#2764).
+   * `skill.activated` with `by`.
    */
-  private async activateSkillsForTurn(
+  private async preActivateSkills(
     skillNames: string[],
     workingToolDefs: ToolDefinition[],
     skipMessage: string,
@@ -597,7 +653,10 @@ export class AgentRuntime {
     const { executionLayer, agentId, logger, bus } = this.config;
     if (!executionLayer) return [];
     const instructionBlocks: string[] = [];
+    const seen = new Set<string>();
     for (const skillName of skillNames) {
+      if (seen.has(skillName)) continue;
+      seen.add(skillName);
       const resolved = executionLayer.resolveSkillActivationForAgent(skillName, agentId);
       if ('error' in resolved) {
         logger.warn({ agentId, skill: skillName, error: resolved.error }, skipMessage);
@@ -632,6 +691,23 @@ export class AgentRuntime {
       }
     }
     return instructionBlocks;
+  }
+
+  /** Apply one activation protocol into tools + append-only tool_result content. */
+  private applySkillActivationToTurn(
+    activation: SkillActivationResult,
+    workingToolDefs: ToolDefinition[],
+  ): { addedTools: string[]; toolResultContent: string } {
+    const { executionLayer } = this.config;
+    const currentNames = new Set(workingToolDefs.map((t) => t.name));
+    const newNames = activation.tools.filter((name) => !currentNames.has(name));
+    if (newNames.length > 0 && executionLayer) {
+      workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+    }
+    return {
+      addedTools: newNames,
+      toolResultContent: buildSkillActivationToolResult(activation),
+    };
   }
 
   /**
@@ -1145,41 +1221,55 @@ export class AgentRuntime {
       }
     }
 
-    // Tier 1 — re-load task-active skills from durable progress as a strong prior,
-    // re-check relevance vs the current step, and cap the set (design §6 / #1495).
-    // Pinned skills (Tier 0) stay eager in the bootstrap prompt and are skipped here.
+    // Pre-activation at turn start through one entry point (#2764 / ADR-070).
     const pinnedSkillNames = new Set(this.config.pinnedSkillNames ?? []);
-    if (
-      boundTaskCtx
-      && this.config.skillRegistry
-      && executionLayer
-    ) {
-      const relevanceText = [
-        typeof originalContent === 'string' ? originalContent : '',
-        typeof taskEvent.payload.intentAnchor === 'string' ? taskEvent.payload.intentAnchor : '',
-      ].join(' ');
+    const preActCtx = { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId };
+    // One set across every appendPreActivated call this turn — a skill named by two
+    // paths (wake + carry, declared + learned) must not append its body twice.
+    const preActivatedThisTurn = new Set<string>();
+    const onDemand = this.config.skillLoading === 'on_demand';
+    const appendPreActivated = async (
+      names: string[],
+      by: SkillActivationBy,
+      skipMessage: string,
+    ): Promise<number> => {
+      if (names.length === 0 || !executionLayer) return 0;
+      const fresh = names.filter((n) => !preActivatedThisTurn.has(n));
+      if (fresh.length === 0) return 0;
+      for (const n of fresh) preActivatedThisTurn.add(n);
+      if (!workingToolDefs) workingToolDefs = [];
+      // Best-effort: unit mocks often omit resolveSkillActivationForAgent; a miss must
+      // not abort the turn (scheduler/bullpen/spot-check still need to run).
+      try {
+        const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
+        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        return blocks.length;
+      } catch (err) {
+        logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
+        return 0;
+      }
+    };
+
+    // Task wake: every skill activated on the task (no relevance filter; cap 8) plus `tasks`.
+    // Under eager, skip skills already pinned (their tools/bodies are in the fixed set).
+    if (boundTaskCtx && this.config.skillRegistry && executionLayer) {
       const wakeSkills = selectActiveSkillsForWake({
         progress: boundTaskCtx.progress,
         pinnedSkillNames,
         skillRegistry: this.config.skillRegistry,
-        relevanceText,
+        relevanceText: '',
       });
-      if (wakeSkills.length > 0) {
-        if (!workingToolDefs) workingToolDefs = [];
-        const instructionBlocks = await this.activateSkillsForTurn(
-          wakeSkills,
-          workingToolDefs,
-          'Wake active-skill re-load skipped',
-          'wake',
-          { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId },
-        );
-        for (const block of instructionBlocks) {
-          effectiveSystemPrompt += `\n\n${block}`;
-        }
+      const wakeForLoad = onDemand
+        ? wakeSkills
+        : wakeSkills.filter((n) => !pinnedSkillNames.has(n));
+      const wakePlusTasks = onDemand
+        ? (wakeForLoad.includes('tasks') ? wakeForLoad : [...wakeForLoad, 'tasks'])
+        : wakeForLoad;
+      if (wakePlusTasks.length > 0) {
+        await appendPreActivated(wakePlusTasks, 'wake', 'Wake active-skill re-load skipped');
         // Persist only when the re-selected set actually changed — a no-op write
         // would bump updated_at + publish task-updated on every wake (#1410/#1064).
-        // reconcileActiveSkillsBlock preserves activatedAt for survivors (prompt-cache).
-        if (this.config.taskRepo) {
+        if (this.config.taskRepo && wakeSkills.length > 0) {
           const storedNames = readActiveSkillNames(boundTaskCtx.progress);
           if (!activeSkillNameSetsEqual(wakeSkills, storedNames)) {
             try {
@@ -1198,9 +1288,62 @@ export class AgentRuntime {
           }
         }
         logger.info(
-          { agentId, taskId: boundTaskCtx.taskId, activeSkills: wakeSkills },
+          { agentId, taskId: boundTaskCtx.taskId, activeSkills: wakePlusTasks },
           'Re-loaded task-active skills on wake',
         );
+      }
+    }
+
+    // Conversation / bullpen / job / spot-check paths are on_demand-only so an
+    // eager deploy of this PR alone cannot widen Tier 0 (scheduler bundle etc.).
+    if (onDemand) {
+    // Conversation carry: skills used recently in this conversation (#2764).
+    if (this.config.conversationActiveSkills && executionLayer) {
+      try {
+        let carried = await this.config.conversationActiveSkills.listActive(
+          taskEvent.payload.conversationId,
+          agentId,
+        );
+        // Defence in depth: when discovery is off, never re-load a skill the agent
+        // does not list (a stale carry entry from a tool-pin touch must not widen reach).
+        if (this.config.allowDiscovery === false) {
+          const listed = new Set((this.config.skillList ?? []).map((s) => s.name));
+          carried = carried.filter((n) => listed.has(n));
+        }
+        if (carried.length > 0) {
+          await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
+        }
+      } catch (err) {
+        logger.warn({ err, agentId, conversationId: taskEvent.payload.conversationId }, 'Conversation skill carry failed');
+      }
+    }
+
+      // Bullpen turns always need the bullpen skill (#2764).
+      if (taskEvent.payload.channelId === 'bullpen') {
+        await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
+      }
+
+      // Every scheduler-fired turn gets scheduler (holds scheduler-report / future job-report).
+      if (taskEvent.payload.channelId === 'scheduler') {
+        await appendPreActivated(['scheduler'], 'job', 'Scheduler skill pre-activation skipped');
+        // Declared job skills + last-run learned activations live on the payload / metadata.
+        const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
+        const declared = collectJobSkillNames(
+          taskEvent.payload as unknown as Record<string, unknown>,
+          meta,
+        );
+        if (declared.job.length > 0) {
+          await appendPreActivated(declared.job, 'job', 'Declared job skill pre-activation skipped');
+        }
+        if (declared.learned.length > 0) {
+          await appendPreActivated(declared.learned, 'job-learned', 'Learned job skill pre-activation skipped');
+        }
+      }
+
+      // Spot-check replies: pre-activate reports (digest after PR 3 split).
+      // `by: trigger` — distinct from conversation carry for Layer-3 by-path counts.
+      if (turnGuidanceKeys.includes('spot-check-reply')) {
+        await appendPreActivated(['reports'], 'trigger', 'Spot-check reports skill pre-activation skipped');
       }
     }
 
@@ -1211,19 +1354,18 @@ export class AgentRuntime {
     const onboardingBlock = await this.onboardingTurnBlock(taskEvent, boundTaskCtx !== null, setupStep !== null);
     if (onboardingBlock) {
       // The block points at the skill's tools, so it goes in only when the skill is on this turn:
-      // pinned, or activated here (its instructions block comes back only on success).
-      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME);
+      // pinned, carried, or activated here. Route through appendPreActivated so a carry
+      // of `onboarding` does not append the body twice (#2764).
+      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME)
+        || preActivatedThisTurn.has(ONBOARDING_SKILL_NAME);
       if (!skillOn) {
         if (!workingToolDefs) workingToolDefs = [];
-        const blocks = await this.activateSkillsForTurn(
+        const blocks = await appendPreActivated(
           [ONBOARDING_SKILL_NAME],
-          workingToolDefs,
-          'Onboarding skill activation skipped',
           'onboarding',
-          { taskEventId: taskEvent.id, conversationId: taskEvent.payload.conversationId },
+          'Onboarding skill activation skipped',
         );
-        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
-        skillOn = blocks.length > 0;
+        skillOn = blocks > 0;
       }
       if (skillOn) {
         // Inside the system-labelled turn guidance, never above it: a block ahead of the header
@@ -1346,6 +1488,14 @@ export class AgentRuntime {
     const MAX_DISTINCT_FAILED_SKILLS = 10;
     const failedSkills: Array<{ name: string; error: string }> = [];
     let failedSkillsOmitted = 0;
+    /** Model-activated skills this turn — scheduler persists for job-learned (#2764). */
+    const modelActivatedSkills: string[] = [];
+    const recordModelActivatedSkill = (skill: string): void => {
+      if (!skill || modelActivatedSkills.includes(skill)) return;
+      modelActivatedSkills.push(skill);
+    };
+    /** Conversation carry touches this turn — at most once per skill (#2764). */
+    const conversationSkillsTouchedThisTurn = new Set<string>();
     /**
      * Calendar (or similar) identity mismatch (#1854). Soft skill failure alone
      * leaves last_run_outcome=completed (#1830); this hard-fails the task after
@@ -2514,10 +2664,9 @@ export class AgentRuntime {
             return 'continue';
           },
         },
-          invokeTool: async (toolCall, ctx) => {
-          // Prefer the primitive's working transcript (ctx.messages) so mid-turn
-          // splices (skill-activate) are visible to the next openStream snapshot.
-          const transcript = ctx?.messages ?? messages;
+          invokeTool: async (toolCall, _ctx) => {
+          // Skill-activate delivers bodies append-only in the tool result (#2764),
+          // so mid-turn system-message splices into the transcript are gone.
 
           // When escalation or identity mismatch is pending mid-batch, skip
           // remaining tools (matches the former `break` after those flags are set).
@@ -2698,6 +2847,14 @@ export class AgentRuntime {
             turnDateResolveResults: turnDateResolveTracker.snapshot(),
             senderId: taskEvent.payload.senderId,
             identifierSources,
+            // allow_discovery:false → model may only activate listed skills (#2764).
+            ...(this.config.allowDiscovery
+              ? {}
+              : {
+                  activatableSkills: new Set(
+                    (this.config.skillList ?? []).map((s) => s.name),
+                  ),
+                }),
             // After acquire, and only on delegate. A signal taken before this
             // task holds the lane never aborts. Late delivery off keeps today's
             // wait: no signal is passed.
@@ -2893,6 +3050,37 @@ export class AgentRuntime {
             budget.consecutiveErrors = 0;
             if (isMessageSend(toolCall.name, skillInput)) sends.push(toolCall.name);
 
+            // Conversation carry (#2764): using a skill = calling any of its member tools
+            // (or activating it again — handled on skill-activate below). Once per skill/turn.
+            // Only touch skills already on this turn (pre-activated or model-activated) —
+            // never the owning bundle of a tool pin the agent did not list/activate
+            // (that would widen reach on the next carry under allow_discovery:false).
+            if (
+              this.config.conversationActiveSkills
+              && this.config.skillRegistry
+              && toolCall.name !== SKILL_ACTIVATE_TOOL_NAME
+            ) {
+              const owner = this.config.skillRegistry.toolOwner(toolCall.name);
+              const skillName = owner?.manifest.name;
+              const onThisTurn = skillName !== undefined
+                && (preActivatedThisTurn.has(skillName) || modelActivatedSkills.includes(skillName));
+              if (skillName && onThisTurn && !conversationSkillsTouchedThisTurn.has(skillName)) {
+                conversationSkillsTouchedThisTurn.add(skillName);
+                try {
+                  await this.config.conversationActiveSkills.touch(
+                    conversationId,
+                    agentId,
+                    skillName,
+                  );
+                } catch (err) {
+                  logger.warn(
+                    { err, agentId, skill: skillName, conversationId, tool: toolCall.name },
+                    'Failed to touch conversation active skill after tool use',
+                  );
+                }
+              }
+            }
+
             // Delegate soft-failures (`success: true, data.failed`) still carry
             // IDENTITY_MISMATCH from @calendar — hard-fail the coordinating turn
             // so the scheduled morning-brief job is not marked completed (#1854).
@@ -2959,80 +3147,99 @@ export class AgentRuntime {
               }
             }
 
-            // Skill activation (#1495/#1490): expand member tools + inject SKILL.md
-            // instructions (and optional progressive-disclosure reference content)
-            // into the in-flight turn. Durable persistence is handled by skill-activate itself.
+            // Skill activation (#1495/#1490/#2764): expand member tools and deliver
+            // SKILL.md bodies append-only in the tool result (prefix stays cacheable).
+            // Durable persistence is handled by skill-activate itself.
             if (!toolAllowlist && toolCall.name === SKILL_ACTIVATE_TOOL_NAME && workingToolDefs) {
               try {
                 const data = typeof result.data === 'string'
                   ? JSON.parse(result.data) as unknown
                   : result.data;
-                const activation = parseSkillActivationProtocol(data);
-                if (activation) {
-                  const currentNames = new Set(workingToolDefs.map(t => t.name));
-                  const newNames = activation.tools.filter(name => !currentNames.has(name));
-                  if (newNames.length > 0) {
-                    workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+                const activations: SkillActivationResult[] = [];
+                let partialErrors: string[] = [];
+                const readPartialErrors = (obj: Record<string, unknown>): string[] =>
+                  Array.isArray(obj.partialErrors)
+                    ? obj.partialErrors.filter((e): e is string => typeof e === 'string')
+                    : [];
+                const single = parseSkillActivationProtocol(data);
+                if (single) {
+                  activations.push(single);
+                  if (data && typeof data === 'object' && !Array.isArray(data)) {
+                    partialErrors = readPartialErrors(data as Record<string, unknown>);
                   }
-                  const instructionBlock = formatActivatedSkillInstructionBlock(
-                    activation.skill,
-                    activation.instructions,
-                    { references: activation.references, assets: activation.assets },
-                  );
-                  const insertAt = transcript.findIndex(m => m.role !== 'system') === -1
-                    ? transcript.length
-                    : Math.max(1, transcript.findIndex(m => m.role !== 'system'));
-                  let spliceAt = insertAt;
-                  if (instructionBlock) {
-                    // Inject after the system prompt so subsequent LLM rounds see the
-                    // discipline block (mirrors Bullpen mid-turn system-message splice).
-                    transcript.splice(spliceAt, 0, { role: 'system', content: instructionBlock });
-                    spliceAt += 1;
+                } else if (
+                  data
+                  && typeof data === 'object'
+                  && !Array.isArray(data)
+                  && (data as Record<string, unknown>)._curia_protocol === SKILL_ACTIVATION_BATCH_PROTOCOL
+                ) {
+                  const batch = data as Record<string, unknown>;
+                  const rawList = batch.activations;
+                  if (Array.isArray(rawList)) {
+                    for (const entry of rawList) {
+                      const parsed = parseSkillActivationProtocol(entry);
+                      if (parsed) activations.push(parsed);
+                    }
                   }
-                  if (activation.referenceContent) {
-                    transcript.splice(spliceAt, 0, {
-                      role: 'system',
-                      content: formatSkillReferenceBlock(
-                        activation.skill,
-                        activation.referenceContent.path,
-                        activation.referenceContent.content,
-                        activation.referenceContent.truncated,
-                      ),
-                    });
-                  }
-                  logger.info(
-                    {
-                      agentId,
-                      skill: activation.skill,
-                      addedTools: newNames,
-                      instructionsLoaded: activation.instructions.length > 0,
-                      skippedTools: activation.skippedTools,
-                      references: activation.references.length,
-                      assets: activation.assets.length,
-                      referenceLoaded: activation.referenceContent?.path,
-                    },
-                    'Activated skill for task turn',
-                  );
-                  // Telemetry only: a publish failure must not undo the activation (#2764).
-                  try {
-                    await bus.publish('agent', createSkillActivated({
-                      agentId,
-                      skill: activation.skill,
-                      by: 'model',
-                      taskEventId: taskEvent.id,
-                      conversationId,
-                      parentEventId: taskEvent.id,
-                    }));
-                  } catch (err) {
-                    logger.error(
-                      { err, agentId, skill: activation.skill },
-                      'Failed to publish skill.activated event — activation audit gap',
+                  partialErrors = readPartialErrors(batch);
+                }
+                if (activations.length > 0) {
+                  const resultParts: string[] = [];
+                  for (const activation of activations) {
+                    const applied = this.applySkillActivationToTurn(activation, workingToolDefs);
+                    resultParts.push(applied.toolResultContent);
+                    logger.info(
+                      {
+                        agentId,
+                        skill: activation.skill,
+                        addedTools: applied.addedTools,
+                        instructionsLoaded: activation.instructions.length > 0,
+                        skippedTools: activation.skippedTools,
+                        references: activation.references.length,
+                        assets: activation.assets.length,
+                        referenceLoaded: activation.referenceContent?.path,
+                      },
+                      'Activated skill for task turn',
                     );
+                    recordModelActivatedSkill(activation.skill);
+                    // Telemetry only: a publish failure must not undo the activation (#2764).
+                    try {
+                      await bus.publish('agent', createSkillActivated({
+                        agentId,
+                        skill: activation.skill,
+                        by: 'model',
+                        taskEventId: taskEvent.id,
+                        conversationId,
+                        parentEventId: taskEvent.id,
+                      }));
+                    } catch (err) {
+                      logger.error(
+                        { err, agentId, skill: activation.skill },
+                        'Failed to publish skill.activated event — activation audit gap',
+                      );
+                    }
+                    // Conversation carry (#2764): mark this skill used on the conversation.
+                    if (this.config.conversationActiveSkills) {
+                      try {
+                        await this.config.conversationActiveSkills.touch(
+                          conversationId,
+                          agentId,
+                          activation.skill,
+                        );
+                        conversationSkillsTouchedThisTurn.add(activation.skill);
+                      } catch (err) {
+                        logger.warn(
+                          { err, agentId, skill: activation.skill, conversationId },
+                          'Failed to record conversation active skill',
+                        );
+                      }
+                    }
                   }
-                  // Instructions + reference content are now in the turn as system
-                  // messages; slim the tool_result to metadata so they aren't injected
-                  // a second time via the generic JSON stringify below (#1505).
-                  toolResultOverride = JSON.stringify(buildSkillActivationAck(activation));
+                  for (const errLine of partialErrors) {
+                    resultParts.push(`Not activated: ${errLine}`);
+                  }
+                  // Append-only: bodies live in the tool result, not spliced system messages.
+                  toolResultOverride = resultParts.join('\n\n');
                 }
               } catch (err) {
                 logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
@@ -3672,6 +3879,7 @@ export class AgentRuntime {
       channelId: turnChannelId,
       ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
+      ...(modelActivatedSkills.length > 0 && { activatedSkills: [...modelActivatedSkills] }),
       parentEventId: taskEvent.id,
     });
     try {

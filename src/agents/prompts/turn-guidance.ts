@@ -328,7 +328,7 @@ const RECIPIENT_OUTBOUND_CONTEXT = [
  */
 const SPOT_CHECK_REPLY = [
   'If the principal is grading a digest\'s spot check ("2 bad, that was a renewal notice"),',
-  'call skill-activate with skill `reports`, then record-spot-check with each number, good or',
+  'the reports skill is already loaded — call record-spot-check with each number, good or',
   'bad, and any reason given. If the number refers to something else, ignore this note. Tell',
   'the principal what was recorded (the tool returns each item\'s summary) and any numbers it',
   'skipped; if it finds no matching spot check or an unknown number, ask which action they',

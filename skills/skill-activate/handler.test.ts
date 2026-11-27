@@ -178,4 +178,63 @@ describe('skill-activate handler', () => {
     if (result.success) return;
     expect(result.error).toContain('Unknown skill');
   });
+
+  it('rejects skills outside activatableSkills when allow_discovery is false (#2764)', async () => {
+    const ctx = makeCtx({
+      input: { skill: 'tasks' },
+      activatableSkills: new Set(['documents']),
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toMatch(/not in this agent's listed skills/);
+  });
+
+  it('allows listed skills when activatableSkills is set (#2764)', async () => {
+    const ctx = makeCtx({
+      input: { skill: 'tasks' },
+      activatableSkills: new Set(['tasks']),
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+  });
+
+  it('returns partialErrors when some of skills[] fail the allowlist (#2764)', async () => {
+    const ctx = makeCtx({
+      input: { skills: ['tasks', 'secrets'] },
+      activatableSkills: new Set(['tasks']),
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as { partialErrors?: string[]; skill?: string };
+    expect(data.skill).toBe('tasks');
+    expect(data.partialErrors?.some((e) => e.includes('secrets'))).toBe(true);
+  });
+
+  it('activates several skills in one call via skills[] (#2764)', async () => {
+    const ctx = makeCtx({ input: { skills: ['tasks'] } });
+    // Register a second callable skill for the multi-activate path.
+    ctx.skillRegistry!.register(
+      {
+        name: 'documents',
+        description: 'Docs',
+        tools: ['task-list'],
+        instructions: '## Documents',
+      },
+      '/tmp/documents',
+    );
+    const result = await handler.execute({
+      ...ctx,
+      input: { skills: ['tasks', 'documents'] },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as {
+      _curia_protocol: string;
+      activations: Array<{ skill: string }>;
+    };
+    expect(data._curia_protocol).toBe('skill_activation_batch');
+    expect(data.activations.map((a) => a.skill)).toEqual(['tasks', 'documents']);
+  });
 });

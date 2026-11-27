@@ -3311,10 +3311,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
   };
 
-  it('splices instruction block into streaming transcript so the next LLM round sees it (#1563)', async () => {
-    // skill-activate writes into ctx.messages (the primitive's workingMessages),
-    // not the outer messages array. This test fails if that splice targets the
-    // wrong array — the following openStream/chat round would miss the block.
+  it('delivers instruction block append-only in the tool result so the next LLM round sees it (#1563, #2764)', async () => {
+    // skill-activate no longer splices a system message; bodies ride in the tool_result
+    // (ADR-070). This test fails if applySkillActivationToTurn does not append them.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
@@ -3400,25 +3399,29 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(secondTools).toContain('task-create');
     expect(secondTools).toContain('task-list');
 
-    // Instruction block must appear in the FOLLOWING LLM round's messages —
-    // proof the splice landed on the streaming working transcript (ctx.messages),
-    // which openStream snapshots for chatWithRetry.
+    // Instruction block must appear in a tool_result on the FOLLOWING LLM round —
+    // proof append-only delivery landed on the working transcript.
     const secondMessages = chatCalls[1]!.messages as Array<{ role: string; content: unknown }>;
-    const instructionMsg = secondMessages.find(
-      (m) => m.role === 'system'
-        && typeof m.content === 'string'
-        && m.content.includes('[Activated skill: tasks]')
-        && m.content.includes('Task Management'),
-    );
-    expect(instructionMsg).toBeDefined();
-    // First round must NOT yet have the activation block (splice happens mid-tool).
+    const toolResultHasInstructions = secondMessages.some((m) => {
+      if (m.role !== 'user' || !Array.isArray(m.content)) return false;
+      return (m.content as Array<{ type?: string; content?: string }>).some(
+        (block) => block.type === 'tool_result'
+          && typeof block.content === 'string'
+          && block.content.includes('[Activated skill: tasks]')
+          && block.content.includes('Task Management'),
+      );
+    });
+    expect(toolResultHasInstructions).toBe(true);
+    // First round must NOT yet have the activation block (activation happens mid-tool).
     const firstMessages = chatCalls[0]!.messages as Array<{ role: string; content: unknown }>;
     expect(
-      firstMessages.some(
-        (m) => m.role === 'system'
-          && typeof m.content === 'string'
-          && m.content.includes('[Activated skill: tasks]'),
-      ),
+      firstMessages.some((m) => {
+        if (typeof m.content === 'string') return m.content.includes('[Activated skill: tasks]');
+        if (!Array.isArray(m.content)) return false;
+        return (m.content as Array<{ content?: string }>).some(
+          (block) => typeof block.content === 'string' && block.content.includes('[Activated skill: tasks]'),
+        );
+      }),
     ).toBe(false);
   });
 
@@ -3638,6 +3641,120 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.mockExecution.resolveSkillActivationForAgent).not.toHaveBeenCalled();
       expect(r.tools).not.toContain('onboarding-progress');
       expect(r.user).not.toContain('Onboarding in progress');
+    });
+  });
+
+  describe('conversation carry touch (#2764)', () => {
+    const memoryStoreDef = {
+      name: 'memory-store',
+      description: 'Store a memory',
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    };
+
+    async function runPinnedToolTurn(opts: {
+      preActivateMemory?: boolean;
+      /** Listed skills (defence-in-depth filter when allowDiscovery is false). */
+      skillList?: ReadonlyArray<{ name: string; description: string }>;
+    }): Promise<{ touch: ReturnType<typeof vi.fn>; listActive: ReturnType<typeof vi.fn> }> {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-1', name: 'memory-store', input: { text: 'note' } }],
+              usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
+            };
+          }
+          return {
+            type: 'text' as const,
+            content: 'Done.',
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        },
+      };
+
+      const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+      const skillRegistry = new SkillRegistry();
+      skillRegistry.register(
+        {
+          name: 'memory',
+          description: 'Store and recall memories',
+          tools: ['memory-store'],
+          instructions: '## Memory\nRemember.',
+        },
+        '/tmp/memory',
+      );
+
+      const touch = vi.fn(async () => {});
+      const listActive = vi.fn(async () => (opts.preActivateMemory ? ['memory'] : []));
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { ok: true } }),
+        getToolDefinitions: vi.fn((names: string[]) =>
+          [memoryStoreDef].filter((d) => names.includes(d.name)),
+        ),
+        resolveSkillActivationForAgent: vi.fn().mockImplementation((skill: string) => {
+          if (skill !== 'memory') return { error: `unknown skill ${skill}` };
+          return {
+            skill: 'memory',
+            tools: ['memory-store'],
+            skippedTools: [],
+            instructions: '## Memory\nRemember.',
+            references: [],
+            assets: [],
+          };
+        }),
+      } as unknown as ExecutionLayer;
+
+      new AgentRuntime({
+        agentId: 'ceo-inbox',
+        systemPrompt: 'You triage mail.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        // Tool pin only — the agent never listed or activated the memory bundle.
+        skillToolDefs: [memoryStoreDef],
+        skillRegistry,
+        skillLoading: 'on_demand',
+        allowDiscovery: false,
+        skillList: opts.skillList ?? [],
+        conversationActiveSkills: { listActive, touch },
+      }).register();
+
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'ceo-inbox',
+        conversationId: 'conv-carry-pin',
+        channelId: 'web',
+        senderId: 'ceo',
+        content: 'note this',
+        parentEventId: 'p-carry',
+        senderContext: CONFIRMED_SENDER_CONTEXT,
+      }));
+      return { touch, listActive };
+    }
+
+    it('does not touch the owning bundle of a tool pin the agent never activated', async () => {
+      const { touch } = await runPinnedToolTurn({ preActivateMemory: false });
+      expect(touch).not.toHaveBeenCalled();
+    });
+
+    it('touches a skill that was pre-activated this turn when a member tool succeeds', async () => {
+      const { touch } = await runPinnedToolTurn({
+        preActivateMemory: true,
+        // Listed so the allowDiscovery:false carry filter keeps it.
+        skillList: [{ name: 'memory', description: 'Store and recall memories' }],
+      });
+      expect(touch).toHaveBeenCalledWith('conv-carry-pin', 'ceo-inbox', 'memory');
     });
   });
 });

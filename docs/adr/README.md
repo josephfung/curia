@@ -91,6 +91,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [067](067-typed-key-value-settings-store.md) | A typed key-value `settings` store with append-only history replaces `setup_state`; `setup_for` and the Setup phase are derived; out of the knowledge graph, no agent access (#2709) | Accepted |
 | [068](068-operator-notices.md) | Operator notices go to whoever set Curia up — one audience per notification type in a central table; one-way email, no contact or tier, no principal content, no fallback to the principal; the confirmation notice is owed until Curia can email, and a system notice records no contact (#2710) | Accepted |
 | [069](069-principal-priorities-record.md) | The principal's priorities are two documents — current ones in `/shared/principal/priorities.md`, pinned by the coordinator and the record (KG facts are context), past ones in an unpinned document its `past:` field names; spec 20's "the KG is the record" revised for durable `/shared/` documents; the deep dive's summary and drafts stay in Curia (console-edited, Google Docs shared with the principal only) and each confirmed draft is written by its owner; a write-only pin rejected (#2362) | Accepted |
+| [070](070-skills-load-on-demand.md) | Skills load on demand — skill pins list name + description; body and member tools load on activation; append-only delivery; temporary `skill_loading` migration switch; updates ADR-031/032 Tier 0 and ADR-046's budget (#2764) | Accepted |
 
 ## Adding new ADRs
 

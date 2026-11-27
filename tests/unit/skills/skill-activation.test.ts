@@ -255,27 +255,26 @@ describe('resolveSkillActivation', () => {
 });
 
 describe('selectActiveSkillsForWake', () => {
-  it('keeps relevant skills as a strong prior and drops pinned', () => {
+  it('restores every stored skill MRU-first, including ones that are also pinned (#2764)', () => {
     const { skills } = setup();
-    let progress: Record<string, unknown> = {};
     const block = activateSkillInBlock(
       activateSkillInBlock(null, 'tasks', '2026-07-21T00:00:00.000Z'),
       'admin-bundle',
       '2026-07-21T01:00:00.000Z',
     );
-    progress = { activeSkills: block };
 
     const selected = selectActiveSkillsForWake({
-      progress,
+      progress: { activeSkills: block },
       pinnedSkillNames: ['admin-bundle'],
       skillRegistry: skills,
       relevanceText: 'please create a task for the board deck',
-      cap: 5,
+      cap: 8,
     });
-    expect(selected).toEqual(['tasks']);
+    // No relevance filter and no pinned exclusion — MRU order.
+    expect(selected).toEqual(['admin-bundle', 'tasks']);
   });
 
-  it('caps and drops irrelevant when any skill still matches', () => {
+  it('caps at ACTIVE_SKILLS_CAP without a relevance filter', () => {
     const { skills } = setup();
     skills.register(
       {
@@ -305,27 +304,12 @@ describe('selectActiveSkillsForWake', () => {
       pinnedSkillNames: [],
       skillRegistry: skills,
       relevanceText: 'reschedule the calendar meeting',
-      cap: 5,
+      cap: 2,
     });
-    // Only calendar shares a whole token with the step — email/tasks are dropped.
-    expect(selected).toEqual(['calendar']);
+    expect(selected).toEqual(['tasks', 'calendar']);
   });
 
-  it('does not match substring tokens (multitask ≠ task)', () => {
-    const { skills } = setup();
-    let block = activateSkillInBlock(null, 'tasks', '2026-07-21T00:00:00.000Z');
-    const selected = selectActiveSkillsForWake({
-      progress: { activeSkills: block },
-      pinnedSkillNames: [],
-      skillRegistry: skills,
-      relevanceText: 'finish the multitask spreadsheet review',
-      cap: 5,
-    });
-    // No whole-token overlap → fall back to MRU (tasks still returned).
-    expect(selected).toEqual(['tasks']);
-  });
-
-  it('falls back to MRU when nothing is relevant', () => {
+  it('returns MRU when relevance text is empty or unrelated', () => {
     const { skills } = setup();
     skills.register(
       {
@@ -345,6 +329,6 @@ describe('selectActiveSkillsForWake', () => {
       relevanceText: 'xyzzy completely unrelated',
       cap: 1,
     });
-    expect(selected).toEqual(['calendar']); // MRU
+    expect(selected).toEqual(['calendar']);
   });
 });

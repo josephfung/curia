@@ -623,9 +623,21 @@ export class SchedulerService {
   async upsertDeclarativeJob(
     sourceAgentId: string,
     agentId: string,
-    schedule: { cron: string; task: string; expectedDurationSeconds?: number; intent_anchor?: string },
+    schedule: {
+      cron: string;
+      task: string;
+      expectedDurationSeconds?: number;
+      intent_anchor?: string;
+      /** Skills to pre-activate when this job fires (#2764). */
+      skills?: string[];
+    },
   ): Promise<string> {
-    const taskPayload = { task: schedule.task };
+    const skills = Array.isArray(schedule.skills)
+      ? schedule.skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      : [];
+    const taskPayload: Record<string, unknown> = skills.length > 0
+      ? { task: schedule.task, skills }
+      : { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
     // Validate expectedDurationSeconds: must be a finite positive integer.
@@ -1009,6 +1021,8 @@ export class SchedulerService {
     autoSummary?: string,
     failedSkills?: Array<{ name: string; error: string }>,
     failedSkillsOmitted?: number,
+    /** Model-activated skills this run — appended to activatedSkillsRuns (#2764). */
+    activatedSkills?: string[],
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
     // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
@@ -1016,9 +1030,16 @@ export class SchedulerService {
     // applied, pg will throw "column timezone does not exist", handleCompletion() will catch it
     // and log an error, and the job will be left permanently in 'running' state with no recovery.
     // Always run migrations before deploying code that depends on them.
-    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures, timezone FROM scheduled_jobs WHERE id = $1`;
+    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures, timezone, last_run_context FROM scheduled_jobs WHERE id = $1`;
     const { rows } = await this.pool.query(fetchSql, [jobId]);
-    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number; timezone: string } | undefined;
+    const job = rows[0] as {
+      id: string;
+      cron_expr: string | null;
+      status: string;
+      consecutive_failures: number;
+      timezone: string;
+      last_run_context: Record<string, unknown> | null;
+    } | undefined;
 
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
@@ -1028,20 +1049,28 @@ export class SchedulerService {
       // Merge or clear failedSkills in last_run_context without clobbering agent continuity
       // state. Strip both keys before merge so a prior omitted-count cannot linger when the
       // new run has none. Non-object JSONB falls through without throwing (#1830 review).
+      // Also append this run's model-activated skills to activatedSkillsRuns (last 3) (#2764).
       // One-shot wakes may carry deferred_wake_at (#1938): the task rescheduled itself
       // while this row was running. Arm that time on the same row instead of completing it.
       let rearmed = false;
       const hasFailedSkills = failedSkills !== undefined && failedSkills.length > 0;
-      const failedSkillsJson = hasFailedSkills
-        ? JSON.stringify({
-            failedSkills,
-            ...(failedSkillsOmitted !== undefined && failedSkillsOmitted > 0
-              ? { failedSkillsOmitted }
-              : {}),
-          })
-        : undefined;
+      const contextPatch: Record<string, unknown> = {};
+      if (hasFailedSkills) {
+        contextPatch.failedSkills = failedSkills;
+        if (failedSkillsOmitted !== undefined && failedSkillsOmitted > 0) {
+          contextPatch.failedSkillsOmitted = failedSkillsOmitted;
+        }
+      }
+      if (activatedSkills !== undefined && activatedSkills.length > 0) {
+        const prevRuns = Array.isArray(job.last_run_context?.activatedSkillsRuns)
+          ? (job.last_run_context!.activatedSkillsRuns as unknown[]).filter(Array.isArray)
+          : [];
+        contextPatch.activatedSkillsRuns = [...prevRuns, activatedSkills].slice(-3);
+      }
+      const hasContextPatch = Object.keys(contextPatch).length > 0;
+      const contextPatchJson = hasContextPatch ? JSON.stringify(contextPatch) : undefined;
       const contextSetClause = (paramIndex: number): string =>
-        hasFailedSkills
+        hasContextPatch
           ? `, last_run_context = CASE
                WHEN jsonb_typeof(last_run_context) = 'object'
                  THEN (last_run_context - 'failedSkills' - 'failedSkillsOmitted') || $${paramIndex}::jsonb
@@ -1075,7 +1104,7 @@ export class SchedulerService {
            WHERE id = $3 AND status NOT IN ('paused', 'cancelled')
         `;
         const params: unknown[] = [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null];
-        if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
+        if (contextPatchJson !== undefined) params.push(contextPatchJson);
         const res = await this.pool.query(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
       } else {
@@ -1100,7 +1129,7 @@ export class SchedulerService {
            RETURNING status
         `;
         const params: unknown[] = ['completed', jobId, 'completed', autoSummary ?? null];
-        if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
+        if (contextPatchJson !== undefined) params.push(contextPatchJson);
         const res = await this.pool.query<{ status: string }>(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
         rearmed = res.rows[0]?.status === 'pending';
@@ -1117,16 +1146,22 @@ export class SchedulerService {
     const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
     const newStatus = shouldSuspend ? 'suspended' : 'failed';
 
-    const hasFailedSkills = failedSkills !== undefined && failedSkills.length > 0;
-    const failedSkillsJson = hasFailedSkills
-      ? JSON.stringify({
-          failedSkills,
-          ...(failedSkillsOmitted !== undefined && failedSkillsOmitted > 0
-            ? { failedSkillsOmitted }
-            : {}),
-        })
-      : undefined;
-    const failureContextSql = hasFailedSkills
+    const failurePatch: Record<string, unknown> = {};
+    if (failedSkills !== undefined && failedSkills.length > 0) {
+      failurePatch.failedSkills = failedSkills;
+      if (failedSkillsOmitted !== undefined && failedSkillsOmitted > 0) {
+        failurePatch.failedSkillsOmitted = failedSkillsOmitted;
+      }
+    }
+    if (activatedSkills !== undefined && activatedSkills.length > 0) {
+      const prevRuns = Array.isArray(job.last_run_context?.activatedSkillsRuns)
+        ? (job.last_run_context!.activatedSkillsRuns as unknown[]).filter(Array.isArray)
+        : [];
+      failurePatch.activatedSkillsRuns = [...prevRuns, activatedSkills].slice(-3);
+    }
+    const hasFailurePatch = Object.keys(failurePatch).length > 0;
+    const failurePatchJson = hasFailurePatch ? JSON.stringify(failurePatch) : undefined;
+    const failureContextSql = hasFailurePatch
       ? `, last_run_context = CASE
            WHEN jsonb_typeof(last_run_context) = 'object'
              THEN (last_run_context - 'failedSkills' - 'failedSkillsOmitted') || $6::jsonb
@@ -1159,7 +1194,7 @@ export class SchedulerService {
        RETURNING status
     `;
     const params: unknown[] = [newFailures, error ?? null, newStatus, jobId, 'failed'];
-    if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
+    if (failurePatchJson !== undefined) params.push(failurePatchJson);
     const res = await this.pool.query<{ status: string }>(updateSql, params);
     if (res.rowCount === 0) return this.skippedCompletion(jobId);
 
@@ -1457,7 +1492,8 @@ export class SchedulerService {
    *
    * @param jobId    The job to update.
    * @param summary  Human-readable description of what the run accomplished.
-   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors).
+   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors). It replaces
+   *                 the previous context, except the scheduler-owned `activatedSkillsRuns` key.
    */
   async reportJobRun(
     jobId: string,
@@ -1468,9 +1504,17 @@ export class SchedulerService {
 
     if (context !== undefined) {
       result = await this.pool.query(
+        // Agent-authored context replaces the old one, but activatedSkillsRuns is the
+        // scheduler's own learned-skills history (#2764): keep it, or a reporting job
+        // loses what its last runs activated before completeJobRun reads it.
         `UPDATE scheduled_jobs
             SET last_run_summary = $1,
-                last_run_context = $2
+                last_run_context = CASE
+                  WHEN jsonb_typeof(last_run_context) = 'object'
+                       AND last_run_context ? 'activatedSkillsRuns'
+                    THEN $2::jsonb || jsonb_build_object('activatedSkillsRuns', last_run_context->'activatedSkillsRuns')
+                  ELSE $2::jsonb
+                END
           WHERE id = $3`,
         [summary, JSON.stringify(context), jobId],
       );

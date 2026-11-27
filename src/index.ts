@@ -155,7 +155,16 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import type { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { buildEscalationJudge, buildOutboundContentFilter, EscalationJudgeConfigError } from './dispatch/outbound-filter-wiring.js';
-import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
+import {
+  extractPromptExfiltrationMarkers,
+  extractSkillBodyMarkers,
+} from './dispatch/prompt-exfiltration-markers.js';
+import {
+  PgConversationActiveSkillsStore,
+  CONVERSATION_ACTIVE_SKILLS_CAP,
+  conversationActiveSkillsIdleTtlMs,
+} from './db/conversation-active-skills.js';
+import { readSkillResource } from './skills/skill-resources.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidance-sources.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
@@ -1903,11 +1912,29 @@ async function main(): Promise<void> {
     // from a hardcoded guess.
     // Trigger guidance moved out of the prompt into injected blocks and tool results is
     // scanned too (#1959), so a rule does not lose coverage by moving to its trigger.
-    const systemPromptMarkers = extractPromptExfiltrationMarkers(
-      officeIdentity,
-      coordinatorConfig.system_prompt,
-      TRIGGER_GUIDANCE_MARKER_SOURCES,
-    );
+    // Every SKILL.md body + text reference an agent can list or activate (#2764).
+    const skillTexts: string[] = [];
+    for (const skill of skillRegistry.list()) {
+      if (skill.synthetic) continue;
+      const body = skill.manifest.instructions?.trim();
+      if (body) skillTexts.push(body);
+      const refs = skill.manifest.references ?? [];
+      const assets = skill.manifest.assets ?? [];
+      if (skill.dir && refs.length > 0) {
+        for (const ref of refs) {
+          const loaded = readSkillResource(skill.dir, ref, { references: refs, assets });
+          if (loaded.ok && loaded.content.trim()) skillTexts.push(loaded.content);
+        }
+      }
+    }
+    const systemPromptMarkers = [
+      ...extractPromptExfiltrationMarkers(
+        officeIdentity,
+        coordinatorConfig.system_prompt,
+        TRIGGER_GUIDANCE_MARKER_SOURCES,
+      ),
+      ...extractSkillBodyMarkers(skillTexts),
+    ];
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
     // not from config. Must NOT be Curia's own Nylas address (the email account's): using
@@ -3648,6 +3675,17 @@ async function main(): Promise<void> {
     },
     bullpenService,
     conversationEntities,
+    conversationActiveSkills: new PgConversationActiveSkillsStore(pool, logger, {
+      idleTtlMs: conversationActiveSkillsIdleTtlMs(
+        (yamlConfig as { conversationActiveSkills?: { idleTtlHours?: number } })
+          .conversationActiveSkills?.idleTtlHours,
+      ),
+      cap: (() => {
+        const cap = (yamlConfig as { conversationActiveSkills?: { cap?: number } })
+          .conversationActiveSkills?.cap;
+        return typeof cap === 'number' && cap > 0 ? cap : CONVERSATION_ACTIVE_SKILLS_CAP;
+      })(),
+    }),
     workingDocsRepo,
     taskRepo,
     turnLanes,

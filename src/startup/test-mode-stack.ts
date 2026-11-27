@@ -85,7 +85,11 @@ import { BandSendReview } from '../dispatch/band-send-review.js';
 import { buildEscalationJudge, buildOutboundContentFilter, EscalationJudgeConfigError } from '../dispatch/outbound-filter-wiring.js';
 import { OutboundLlmJudge, type JudgeConfig } from '../dispatch/outbound-judge.js';
 import { PiiRedactor } from '../dispatch/pii-redactor.js';
-import { extractPromptExfiltrationMarkers } from '../dispatch/prompt-exfiltration-markers.js';
+import {
+  extractPromptExfiltrationMarkers,
+  extractSkillBodyMarkers,
+} from '../dispatch/prompt-exfiltration-markers.js';
+import { readSkillResource } from '../skills/skill-resources.js';
 import { parseExtraPiiPatterns } from '../pii/scrubber.js';
 import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, createTestModePrincipalMailboxes, needsMailClient, NO_MAIL_CLIENT, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
 import { createVerificationRuntime, type VerificationRuntime } from '../verification/index.js';
@@ -808,6 +812,8 @@ function buildRecordingSends(deps: {
   principalProfile: PrincipalProfileRef;
   officeIdentity: OfficeIdentity;
   coordinatorPrompt: string | undefined;
+  /** Loaded skill registry — SKILL.md bodies feed exfiltration markers (#2764). */
+  skillRegistry?: SkillRegistry;
   emailAccounts: ReadonlyArray<{ name: string; selfEmail: string }>;
   selfEmails: string[];
   signalPhoneNumber: string | undefined;
@@ -847,8 +853,27 @@ function buildRecordingSends(deps: {
   const principalEmail: PrincipalEmailRef = {
     get current(): string { return deps.principalPrimaryEmail.current ?? ''; },
   };
+  const skillTexts: string[] = [];
+  if (deps.skillRegistry) {
+    for (const skill of deps.skillRegistry.list()) {
+      if (skill.synthetic) continue;
+      const body = skill.manifest.instructions?.trim();
+      if (body) skillTexts.push(body);
+      const refs = skill.manifest.references ?? [];
+      const assets = skill.manifest.assets ?? [];
+      if (skill.dir && refs.length > 0) {
+        for (const ref of refs) {
+          const loaded = readSkillResource(skill.dir, ref, { references: refs, assets });
+          if (loaded.ok && loaded.content.trim()) skillTexts.push(loaded.content);
+        }
+      }
+    }
+  }
   const contentFilter = buildOutboundContentFilter({
-    systemPromptMarkers: extractPromptExfiltrationMarkers(deps.officeIdentity, deps.coordinatorPrompt, TRIGGER_GUIDANCE_MARKER_SOURCES),
+    systemPromptMarkers: [
+      ...extractPromptExfiltrationMarkers(deps.officeIdentity, deps.coordinatorPrompt, TRIGGER_GUIDANCE_MARKER_SOURCES),
+      ...extractSkillBodyMarkers(skillTexts),
+    ],
     ceoEmail: principalEmail,
     ownEmails: deps.selfEmails,
     judge: outboundJudge,
@@ -1462,6 +1487,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
           contactService, principalIdentities, principalPrimaryEmail, principalProfile,
           officeIdentity: officeIdentityService.get(),
           coordinatorPrompt: agentConfigs.find(c => c.name === 'coordinator')?.system_prompt,
+          skillRegistry,
           emailAccounts, selfEmails,
           signalPhoneNumber,
           autonomyService: agentAutonomy,

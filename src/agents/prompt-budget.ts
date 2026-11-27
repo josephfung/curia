@@ -33,6 +33,7 @@ import { ModelRegistry } from './llm/model-registry.js';
 import { ModelRouter } from './llm/model-router.js';
 import { discoverAgentManifests, loadAgentConfig, type AgentYamlConfig } from './loader.js';
 import { splitMarkdownSections, type Contributor } from './budget-report.js';
+import { formatSkillsListBlock } from './system-prompt.js';
 
 /** Same ratio the epic (#1954) uses for its ≤ 4k-token target. */
 export const CHARS_PER_TOKEN = 4;
@@ -60,6 +61,11 @@ export interface AgentContextMeasurement {
   /** The `## Available Specialists` roster this agent is given, in chars (0 when it gets none). */
   rosterChars: number;
   /**
+   * The `## Skills` list under on_demand (#2764), in chars (0 when eager or empty).
+   * Counted in the always-on prompt budget separately from YAML + pinned bodies.
+   */
+  skillListChars: number;
+  /**
    * What each total is made of, in the unit its budget counts (tokens, bytes, tokens), for
    * a failure message and the breakdown command. Approximate where noted: the prompt
    * entries sum to the always-on total within a few tokens of rounding.
@@ -71,6 +77,8 @@ export interface AgentContextMeasurement {
     tools: Contributor[];
     /** One entry per specialist line. Tokens. */
     roster: Contributor[];
+    /** The on_demand skill list as one contributor. Tokens. */
+    skillList: Contributor[];
   };
 }
 
@@ -152,9 +160,13 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
 
   const yamlChars = agentConfig.system_prompt.length;
   const alwaysOnChars = assembled.systemPrompt.length;
+  const skillListBlock = formatSkillsListBlock(assembled.runtimeConfig.skillList ?? []);
+  const skillListChars = skillListBlock.length;
   return {
     yamlChars,
-    skillMdChars: alwaysOnChars - yamlChars,
+    // The ## Skills list is rendered per turn (buildBaseSystemPrompt), so it is not in
+    // assembled.systemPrompt: measured on its own as skillListChars, not subtracted here.
+    skillMdChars: Math.max(0, alwaysOnChars - yamlChars),
     alwaysOnPromptTokens: Math.ceil(alwaysOnChars / CHARS_PER_TOKEN),
     localToolDefinitionBytes: assembled.toolDefs.reduce(
       (sum, def) => sum + Buffer.byteLength(JSON.stringify(def), 'utf8'),
@@ -165,6 +177,7 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
     allowDiscovery: agentConfig.allow_discovery === true,
     localToolNames: assembled.toolDefs.map(d => d.name),
     rosterChars: assembled.runtimeConfig.availableSpecialists?.length ?? 0,
+    skillListChars,
     contributors: {
       prompt: [
         ...sectionContributors(`${agentName}.yaml system_prompt`, agentConfig.system_prompt),
@@ -176,6 +189,9 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
         .split('\n')
         .filter(line => line.trim().length > 0)
         .map(line => ({ name: /^- (@[^:]+):/.exec(line)?.[1] ?? line.slice(0, 40), size: tokensOf(line.length + 1) })),
+      skillList: skillListChars > 0
+        ? [{ name: '## Skills', size: tokensOf(skillListChars) }]
+        : [],
     },
   };
 }

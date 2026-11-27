@@ -174,4 +174,26 @@ describe('SchedulerReportHandler', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('job not found');
   });
+
+  it('rejects an array or scalar context so the stored history stays an object (#2764)', async () => {
+    for (const context of [[], ['x'], 'text', 5]) {
+      const schedulerService = { reportJobRun: vi.fn().mockResolvedValue(undefined) };
+      const result = await handler.execute(makeCtx(
+        { summary: 'done', context },
+        { conversationId: RUN_CONV, schedulerService: schedulerService as unknown as ToolContext['schedulerService'] },
+      ));
+      expect(result.success).toBe(false);
+      expect(schedulerService.reportJobRun).not.toHaveBeenCalled();
+    }
+  });
+
+  it('treats a null context as no context (#2764)', async () => {
+    const schedulerService = { reportJobRun: vi.fn().mockResolvedValue(undefined) };
+    const result = await handler.execute(makeCtx(
+      { summary: 'done', context: null },
+      { conversationId: RUN_CONV, schedulerService: schedulerService as unknown as ToolContext['schedulerService'] },
+    ));
+    expect(result.success).toBe(true);
+    expect(schedulerService.reportJobRun).toHaveBeenCalledWith(JOB_A, 'done', undefined);
+  });
 });
