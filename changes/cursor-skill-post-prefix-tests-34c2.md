@@ -12,4 +12,5 @@
 - **Specs 19/20 + agent guide** — skill pins list only; body and tools load on activation. (#2764)
 - **Case 60b** — accepts ceo-inbox delegate; require success on archive any_of. (#2764)
 - **13a–e / 48l** — `skills_activated` includes/excludes for google-workspace. (#2764)
+- **Case 13e** — drop duplicate critical `skills_activated.excludes` check. (#2764)
 - **Pre-activation tests** — skill bodies asserted on after-history system rows. (#2764)

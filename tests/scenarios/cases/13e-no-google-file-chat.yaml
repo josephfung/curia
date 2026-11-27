@@ -26,13 +26,7 @@ tool_stubs:
 expected_behaviors:
   - id: no_google_workspace
     weight: critical
-    description: Does not activate the google-workspace skill.
-    check:
-      skills_activated:
-        excludes: [google-workspace]
-  - id: no_google_workspace_activated
-    weight: critical
-    description: google-workspace does not appear in skill.activated (any path).
+    description: Does not activate the google-workspace skill (any path).
     check:
       skills_activated:
         excludes: [google-workspace]
