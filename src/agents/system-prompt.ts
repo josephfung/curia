@@ -13,11 +13,12 @@
 //     YAML, roster, skill list, date guardrail, pinned context. Changes rarely.
 //     This is the sole system-role content on a live turn (#2774).
 //   - buildPerTurnSystemPromptSuffix(): autonomy, live verifications, reach, time,
-//     turn budget. Changes every turn; the runtime places this (with skill bodies,
-//     harness and task-tail blocks) after conversation history, labelled on the
-//     latest user message — not in the system role. On DeepSeek via OpenRouter the
-//     ~22k tool defs serialize after the system message, so any per-turn byte in
-//     system makes the tools uncacheable.
+//     turn budget. Changes every turn; the runtime places this (with harness and
+//     task-tail blocks) after conversation history, labelled on the latest user
+//     message. Pre-activated skill bodies are a separate after-history system row
+//     (2026-11-27), not part of that user block. On DeepSeek via OpenRouter the
+//     ~22k tool defs serialize after the leading system message, so bytes in the
+//     stable prefix would make the tools uncacheable; after-history system rows do not.
 //   - buildBaseSystemPrompt(): stable + per-turn, for render scripts / tests that
 //     want the full task-independent string in one call (not the live wire shape).
 //   - formatTaskTailBlocks(): intent anchor and scheduler fence (task-dependent).
@@ -262,9 +263,10 @@ export async function buildStableSystemPromptPrefix(
 
 /**
  * Per-turn blocks (#2764 / #2774): change often enough to bust the prompt cache
- * if placed in the system role. Order: autonomy → verifications → reach → time →
- * turn budget. The runtime bundles this with skill bodies / harness / task tail
- * after conversation history (see formatTurnContextBlock).
+ * if placed in the *leading* system role. Order: autonomy → verifications →
+ * reach → time → turn budget. The runtime bundles this with harness / task tail
+ * into the labelled user turn-context block; pre-activated skill bodies are a
+ * separate after-history system message (see formatTurnContextBlock).
  */
 export async function buildPerTurnSystemPromptSuffix(
   sources: SystemPromptSources,

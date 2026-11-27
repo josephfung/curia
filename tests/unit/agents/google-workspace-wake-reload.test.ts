@@ -101,9 +101,9 @@ describe('coordinator wake re-loads an activated google-workspace (#2024)', () =
     }));
 
     expect(firstCall.tools).toEqual(expect.arrayContaining(['update_drive_file', 'manage_drive_access', 'get_doc_as_markdown']));
-    // Skill bodies ride on the latest user message with the other per-turn blocks (#2774).
-    expect(firstCall.user.some((u) => u.includes('[Activated skill: google-workspace]'))).toBe(true);
-    expect(firstCall.system.some((s) => s.includes('[Activated skill: google-workspace]'))).toBe(false);
+    // Skill bodies are an after-history system row (#2774 / 2026-11-27), not user turn context.
+    expect(firstCall.user.some((u) => u.includes('[Activated skill: google-workspace]'))).toBe(false);
+    expect(firstCall.system.some((s) => s.includes('[Activated skill: google-workspace]'))).toBe(true);
     // Same set as stored, so the wake does not rewrite progress (#1410).
     expect(taskRepo.setActiveSkillsBlock).not.toHaveBeenCalled();
   });

@@ -3557,11 +3557,20 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(tools).toContain('task-create');
     expect(tools).toContain('task-list');
 
-    // Activated skill bodies live in turn context on the latest user message (#2774).
-    const user = lastUserContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>);
-    expect(user).toContain('[Activated skill: tasks]');
-    expect(systemContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>))
-      .not.toContain('[Activated skill: tasks]');
+    // Pre-activated skill bodies are an after-history system row (#2774 / 2026-11-27).
+    const msgs = chatCalls[0]!.messages as Array<{ role: string; content: unknown }>;
+    const user = lastUserContent(msgs);
+    expect(user).not.toContain('[Activated skill: tasks]');
+    expect(systemContent(msgs)).toContain('[Activated skill: tasks]');
+    // Not in the leading stable system message — after history, before the user.
+    const firstSystem = msgs.find((m) => m.role === 'system');
+    expect(typeof firstSystem?.content === 'string' ? firstSystem.content : '').not.toContain('[Activated skill: tasks]');
+    const lastUserIdx = msgs.map((m) => m.role).lastIndexOf('user');
+    const skillSysIdx = msgs.findIndex(
+      (m, i) => i > 0 && m.role === 'system' && typeof m.content === 'string' && m.content.includes('[Activated skill: tasks]'),
+    );
+    expect(skillSysIdx).toBeGreaterThan(0);
+    expect(skillSysIdx).toBeLessThan(lastUserIdx);
   });
 
   describe('onboarding context on live principal turns (#2360)', () => {
@@ -3642,9 +3651,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.forPrincipalTurn).toHaveBeenCalledTimes(1);
       expect(r.mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('onboarding', 'coordinator');
       expect(r.tools).toContain('onboarding-progress');
-      // Skill body is turn context (#2774); onboarding status block is still in the user prompt.
-      expect(r.user).toContain('[Activated skill: onboarding]');
-      expect(r.system).not.toContain('[Activated skill: onboarding]');
+      // Skill body is an after-history system row; onboarding status block stays in the user prompt.
+      expect(r.user).not.toContain('[Activated skill: onboarding]');
+      expect(r.system).toContain('[Activated skill: onboarding]');
       expect(r.user).toContain(BLOCK);
     });
 

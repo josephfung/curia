@@ -640,9 +640,9 @@ export class AgentRuntime {
   /**
    * Shared pre-activation entry point (#2764 / ADR-070): add each skill's tools to
    * `workingToolDefs` (skipping names already there) and return instruction blocks for
-   * the after-history turn context (#2774). A skill the agent may not activate is
-   * logged with `skipMessage` and skipped. Each success publishes `skill.activated`
-   * with `by`.
+   * an after-history `role: 'system'` message (#2774 / 2026-11-27 decision). A skill the
+   * agent may not activate is logged with `skipMessage` and skipped. Each success
+   * publishes `skill.activated` with `by`.
    */
   private async preActivateSkills(
     skillNames: string[],
@@ -1177,22 +1177,24 @@ export class AgentRuntime {
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
     // System role = stable prefix only (#2774): identity, security, contacts, Who
-    // you serve, YAML, roster, skill list, date guardrail, pinned context. Every
-    // per-turn block (skill bodies, autonomy / verifications / reach / time / turn
-    // budget, other-turns, resumable / plan harness, task tail) goes after
-    // conversation history on the latest user message — OpenRouter/DeepSeek serialize
-    // tool defs after the system message, so a system-role byte change makes ~22k
-    // tool tokens uncacheable. Shared builders with the render script (#1966).
+    // you serve, YAML, roster, skill list, date guardrail, pinned context.
+    // After history: per-turn *system* rows (sender, bullpen, entities, contact
+    // recent, pre-activated skill bodies) then the latest user message, which may
+    // carry labelled turn context (autonomy / verifications / reach / time / turn
+    // budget / harness / task tail). Skill bodies are system — not user turn
+    // context — so the model treats them as instructions (2026-11-27). Shared
+    // builders with the render script (#1966).
     const promptNow = new Date();
     const effectiveSystemPrompt = await buildStableSystemPromptPrefix(this.config, {
       now: promptNow,
       logger,
     });
-    // Collects after-history turn context. Order: pre-activated skill bodies first,
-    // then per-turn suffix (autonomy → verifications → reach → time → turn budget),
-    // then other-turns / harness / task tail — not the old system-tail order where
-    // skill bodies sat later (#2774).
+    // After-history turn context for the latest *user* message (autonomy →
+    // verifications → reach → time → turn budget → other-turns / harness / task
+    // tail). Pre-activated skill bodies are NOT here — they go in a post-history
+    // system message so the model treats them as instructions (#2774 / 2026-11-27).
     const turnContextParts: string[] = [];
+    const preActivatedSkillBlocks: string[] = [];
     // Concurrent-turn note stays out of the cached system prefix (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
 
@@ -1252,7 +1254,7 @@ export class AgentRuntime {
       // not abort the turn (scheduler/bullpen/spot-check still need to run).
       try {
         const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
-        for (const block of blocks) turnContextParts.push(block);
+        for (const block of blocks) preActivatedSkillBlocks.push(block);
         return blocks.length;
       } catch (err) {
         logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
@@ -1395,7 +1397,7 @@ export class AgentRuntime {
       }
     }
 
-    // Per-turn blocks after skill bodies (#2774) — still after history on the wire.
+    // Per-turn suffix into the user-side turn-context block (#2774).
     const perTurnSuffix = await buildPerTurnSystemPromptSuffix(this.config, {
       now: promptNow,
       logger,
@@ -2075,8 +2077,17 @@ export class AgentRuntime {
 
     // Append history, then per-turn system messages, then the latest user message.
     // Final order: stable system → history → sender → bullpen → resolved entities
-    // → contact recent → (turn context +) user message (#2774 option a).
+    // → contact recent → pre-activated skill bodies → (turn context +) user message
+    // (#2774 option a; skill bodies as system per 2026-11-27 decision).
     messages.push(...budgetedHistory);
+    // Skill bodies last among after-history system rows — just before the user
+    // message — so they stay instructions without sitting in forgeable user text.
+    if (preActivatedSkillBlocks.length > 0) {
+      perTurnSystemMessages.push({
+        role: 'system',
+        content: preActivatedSkillBlocks.join('\n\n'),
+      });
+    }
     const bullpenIdxInPerTurn = perTurnSystemMessages.findIndex(
       m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
     );
