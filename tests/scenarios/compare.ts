@@ -79,14 +79,17 @@ function isScheduled(caseResult: CaseResult): boolean {
   return (caseResult.tags ?? []).includes('scheduler');
 }
 
-function agentTotals(caseResult: CaseResult): UsageTotals | undefined {
-  const agent = caseResult.agent ?? COORDINATOR;
+function agentTotals(caseResult: CaseResult, agentOverride?: string): UsageTotals | undefined {
+  const agent = agentOverride ?? caseResult.agent ?? COORDINATOR;
   const byAgent = caseResult.usage.byAgent;
   if (byAgent[agent]) return byAgent[agent];
-  // Older results without `agent`: prefer coordinator, else the sole agent key.
-  if (byAgent[COORDINATOR]) return byAgent[COORDINATOR];
-  const keys = Object.keys(byAgent);
-  return keys.length === 1 ? byAgent[keys[0]!] : undefined;
+  // Older results without `agent` and no override: prefer coordinator, else the sole key.
+  if (agentOverride === undefined && caseResult.agent === undefined) {
+    if (byAgent[COORDINATOR]) return byAgent[COORDINATOR];
+    const keys = Object.keys(byAgent);
+    return keys.length === 1 ? byAgent[keys[0]!] : undefined;
+  }
+  return undefined;
 }
 
 function mean(values: number[]): number {
@@ -94,8 +97,8 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-export function caseMetrics(caseResult: CaseResult): CaseMetrics {
-  const totals = agentTotals(caseResult);
+export function caseMetrics(caseResult: CaseResult, agentOverride?: string): CaseMetrics {
+  const totals = agentTotals(caseResult, agentOverride);
   const runCount = Math.max(caseResult.runs.length, 1);
   // UsageTotals.inputTokens is already uncached (Anthropic meaning).
   const uncached = (totals?.inputTokens ?? 0) / runCount;
@@ -113,7 +116,7 @@ export function caseMetrics(caseResult: CaseResult): CaseMetrics {
   for (const list of Object.values(skillsByPath)) list.sort();
   const passRates = caseResult.behaviors.map(b => b.passRate);
   const strictRates = caseResult.behaviors.map(b => b.strictPassRate);
-  const agent = caseResult.agent ?? COORDINATOR;
+  const agent = agentOverride ?? caseResult.agent ?? COORDINATOR;
   return {
     passRate: mean(passRates),
     strictPassRate: mean(strictRates),
@@ -152,7 +155,12 @@ export function compareCases(
       });
       continue;
     }
-    const base = caseMetrics(baseCase);
+    // Main-arm baselines omit CaseResult.agent. Prefer the branch case's agent so
+    // specialist cases (31a–d, delegates) compare specialist-to-specialist, not
+    // coordinator-on-main vs specialist-on-branch (#2766).
+    const base = baseCase.agent === undefined
+      ? caseMetrics(baseCase, branchCase.agent)
+      : caseMetrics(baseCase);
     const next = caseMetrics(branchCase);
     const flags: string[] = [];
     const runs = Math.max(base.runCount, next.runCount, 1);

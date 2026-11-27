@@ -131,6 +131,65 @@ describe('caseMetrics / compareCases (#2764)', () => {
     expect(caseMetrics(c).uncachedInputTokens).toBe(800);
   });
 
+  it('compares a main-arm baseline without agent using the branch case agent (#2766)', () => {
+    // 31a-shaped: BullpenDispatcher also bills the coordinator on the specialist run.
+    const coordTotals = { ...emptyTotals(), calls: 5, inputTokens: 5000, cacheReadInputTokens: 0 };
+    const calTotals = { ...emptyTotals(), calls: 2, inputTokens: 800, cacheReadInputTokens: 0 };
+    const branchCal = { ...emptyTotals(), calls: 2, inputTokens: 400, cacheReadInputTokens: 0 };
+    const baseline = suite([caseResult({
+      name: '31a',
+      // agent omitted — main-arm baseline JSON
+      runs: [{
+        runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 1000, unstubbedCalls: 0,
+        usage: {
+          byAgent: { coordinator: coordTotals, calendar: calTotals },
+          judge: emptyTotals(),
+          total: { ...emptyTotals(), calls: 7, inputTokens: 5800 },
+        },
+        providerRetries: [],
+      }],
+      behaviors: [
+        { behavior: { id: 'x', weight: 'critical' as const, description: 'x' }, ratings: [], passRate: 1, strictPassRate: 1 },
+      ],
+      usage: {
+        byAgent: { coordinator: coordTotals, calendar: calTotals },
+        judge: emptyTotals(),
+        total: { ...emptyTotals(), calls: 7, inputTokens: 5800 },
+      },
+    })]);
+    const branch = suite([caseResult({
+      name: '31a',
+      agent: 'calendar',
+      runs: [{
+        runIndex: 0, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 1000, unstubbedCalls: 0,
+        usage: {
+          byAgent: { coordinator: coordTotals, calendar: branchCal },
+          judge: emptyTotals(),
+          total: { ...emptyTotals(), calls: 7, inputTokens: 5400 },
+        },
+        providerRetries: [],
+      }],
+      behaviors: [
+        { behavior: { id: 'x', weight: 'critical' as const, description: 'x' }, ratings: [], passRate: 1, strictPassRate: 1 },
+      ],
+      usage: {
+        byAgent: { coordinator: coordTotals, calendar: branchCal },
+        judge: emptyTotals(),
+        total: { ...emptyTotals(), calls: 7, inputTokens: 5400 },
+      },
+    })]);
+    const row = compareCases(baseline, branch)[0]!;
+    expect(row.baseline.agent).toBe('calendar');
+    expect(row.baseline.agentCalls).toBe(2);
+    expect(row.baseline.uncachedInputTokens).toBe(800);
+    expect(row.branch.agentCalls).toBe(2);
+    expect(row.branch.uncachedInputTokens).toBe(400);
+    // calendar 400 ≤ 800×0.6 — within −40%; wrongly using coordinator (5000) would fail.
+    expect(row.flags).toEqual([]);
+  });
+
   it('flags live-turn cases outside the Layer 2 thresholds', () => {
     const baseTotals = { ...emptyTotals(), calls: 2, inputTokens: 1000, cacheReadInputTokens: 0 };
     const branchTotals = { ...emptyTotals(), calls: 4, inputTokens: 900, cacheReadInputTokens: 0 };
