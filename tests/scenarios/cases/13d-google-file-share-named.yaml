@@ -179,9 +179,8 @@ expected_behaviors:
     weight: critical
     description: Activates the google-workspace skill to get its Drive tools.
     check:
-      called: skill-activate
-      success: true
-      with: { skill: google-workspace }
+      skills_activated:
+        includes: [google-workspace]
   # Emailing Kevin a PDF of the v7 deck is a fair reading of "share" too (#2050): the
   # case tests that the Drive tools get used, not which way the deck reaches him. The
   # attachment must be the temp-store file the v7 drive-download-file stub returns. A

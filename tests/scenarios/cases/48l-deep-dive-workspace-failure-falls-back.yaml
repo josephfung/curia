@@ -158,9 +158,8 @@ expected_behaviors:
     weight: important
     description: Activates Google Workspace to copy the drafts to Google Docs before giving up.
     check:
-      called: skill-activate
-      success: true
-      with: { skill: google-workspace }
+      skills_activated:
+        includes: [google-workspace]
   - id: tries_a_document
     weight: critical
     description: Tries to publish a draft as a Google Doc (or create a Doc or Drive file), meeting the failure.
