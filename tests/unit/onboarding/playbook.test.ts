@@ -43,6 +43,12 @@ describe('parsePlaybook', () => {
     expect(session!.topics[0]!.title).toHaveLength(120);
   });
 
+  it('strips a comment closed with --!> from the title', () => {
+    const [session] = parsePlaybook('# Notes <!-- aside --!>\n## <!-- x --!>Topic');
+    expect(session!.title).toBe('Notes');
+    expect(session!.topics[0]!.title).toBe('Topic');
+  });
+
   it('sets needsMailbox from a "Needs: mailbox" line only', () => {
     const [session] = parsePlaybook('# S\n## A\nNeeds: mailbox\ntext\n## B\nno need');
     expect(session!.topics.map((t) => t.needsMailbox)).toEqual([true, false]);
