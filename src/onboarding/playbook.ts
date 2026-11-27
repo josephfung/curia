@@ -33,7 +33,8 @@ function slugify(title: string): string {
 
 function parseHeading(raw: string): { id: string; title: string } {
   const declared = ID_COMMENT_RE.exec(raw)?.[1];
-  const title = raw.replace(/<!--.*?-->/g, '').trim().slice(0, PLAYBOOK_TITLE_MAX).trim();
+  // Strip every HTML comment, including the `--!>` ending browsers also accept.
+  const title = raw.replace(/<!--[\s\S]*?--!?>/g, '').trim().slice(0, PLAYBOOK_TITLE_MAX).trim();
   // Ids are only [a-z0-9-]: they become task tags and ride into live principal turns (the
   // onboarding turn block names open topics by id). Anything else is slugified.
   const id = declared === undefined ? slugify(title) : ID_RE.test(declared) ? declared : slugify(declared);
