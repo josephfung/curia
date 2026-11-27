@@ -41,7 +41,7 @@ export interface CaseCompareRow {
 export interface CaseMetrics {
   passRate: number;
   strictPassRate: number;
-  /** Mean calls by the case agent (coordinator or specialist). */
+  /** Median per-run calls by the case agent (coordinator or specialist); the §10 call gate. */
   agentCalls: number;
   /** @deprecated Alias of agentCalls for older call sites; prefer agentCalls. */
   coordinatorCalls: number;
@@ -79,17 +79,35 @@ function isScheduled(caseResult: CaseResult): boolean {
   return (caseResult.tags ?? []).includes('scheduler');
 }
 
-function agentTotals(caseResult: CaseResult, agentOverride?: string): UsageTotals | undefined {
-  const agent = agentOverride ?? caseResult.agent ?? COORDINATOR;
-  const byAgent = caseResult.usage.byAgent;
+/**
+ * One scheduled verdict for a baseline/branch pair. Explicit `scheduled` wins over the
+ * legacy tag on either side: a main-arm baseline tagged `scheduler` must not turn a
+ * branch case recorded as a live turn (05a–05c) into a scheduled one.
+ */
+function pairScheduled(baseCase: CaseResult, branchCase: CaseResult): boolean {
+  if (branchCase.scheduled !== undefined) return branchCase.scheduled;
+  if (baseCase.scheduled !== undefined) return baseCase.scheduled;
+  return isScheduled(baseCase) || isScheduled(branchCase);
+}
+
+function pickAgentTotals(
+  byAgent: Record<string, UsageTotals>,
+  caseAgent: string | undefined,
+  agentOverride?: string,
+): UsageTotals | undefined {
+  const agent = agentOverride ?? caseAgent ?? COORDINATOR;
   if (byAgent[agent]) return byAgent[agent];
   // Older results without `agent` and no override: prefer coordinator, else the sole key.
-  if (agentOverride === undefined && caseResult.agent === undefined) {
+  if (agentOverride === undefined && caseAgent === undefined) {
     if (byAgent[COORDINATOR]) return byAgent[COORDINATOR];
     const keys = Object.keys(byAgent);
     return keys.length === 1 ? byAgent[keys[0]!] : undefined;
   }
   return undefined;
+}
+
+function agentTotals(caseResult: CaseResult, agentOverride?: string): UsageTotals | undefined {
+  return pickAgentTotals(caseResult.usage.byAgent, caseResult.agent, agentOverride);
 }
 
 function mean(values: number[]): number {
@@ -105,7 +123,10 @@ export function caseMetrics(caseResult: CaseResult, agentOverride?: string): Cas
   const cached = (totals?.cacheReadInputTokens ?? 0) / runCount;
   const cacheCreation = (totals?.cacheCreationInputTokens ?? 0) / runCount;
   const totalInput = uncached + cached + cacheCreation;
-  const perRunCalls = (totals?.calls ?? 0) / runCount;
+  // §10 gates the median, so one high-call run can't flag a case on its own.
+  const medianCalls = median(caseResult.runs.map(
+    r => pickAgentTotals(r.usage.byAgent, caseResult.agent, agentOverride)?.calls ?? 0,
+  ));
   const skillsByPath: Record<string, string[]> = {};
   for (const run of caseResult.runs) {
     for (const a of run.skillActivations ?? []) {
@@ -120,8 +141,8 @@ export function caseMetrics(caseResult: CaseResult, agentOverride?: string): Cas
   return {
     passRate: mean(passRates),
     strictPassRate: mean(strictRates),
-    agentCalls: perRunCalls,
-    coordinatorCalls: perRunCalls,
+    agentCalls: medianCalls,
+    coordinatorCalls: medianCalls,
     uncachedInputTokens: uncached,
     cachedInputTokens: cached,
     totalInputTokens: totalInput,
@@ -176,7 +197,7 @@ export function compareCases(
         );
       }
     }
-    if (base.scheduled || next.scheduled) {
+    if (pairScheduled(baseCase, branchCase)) {
       // Scheduled: calls must not rise; −40% token rule does not apply.
       if (next.agentCalls > base.agentCalls + 1e-9) {
         flags.push(

@@ -413,4 +413,50 @@ describe('caseMetrics / compareCases (#2764)', () => {
     })]);
     expect(compareCases(baseline, branch)[0]!.flags).toEqual([]);
   });
+
+  // Case with per-run coordinator calls; case totals are the sum, as cli.ts writes them.
+  const callsCase = (name: string, calls: number[], extra: Partial<CaseResult> = {}): CaseResult => {
+    const per = (c: number) => ({ ...emptyTotals(), calls: c, inputTokens: 100 });
+    const sum = { ...emptyTotals(), calls: calls.reduce((a, b) => a + b, 0), inputTokens: 100 * calls.length };
+    return caseResult({
+      name,
+      agent: 'coordinator',
+      runs: calls.map((c, i) => ({
+        runIndex: i, inboundContent: '', refs: {}, toolCalls: [], reply: 'ok',
+        durationMs: 100, unstubbedCalls: 0,
+        usage: { byAgent: { coordinator: per(c) }, judge: emptyTotals(), total: per(c) },
+        providerRetries: [],
+      })),
+      usage: { byAgent: { coordinator: sum }, judge: emptyTotals(), total: sum },
+      ...extra,
+    });
+  };
+
+  it('gates calls on the per-run median, so one high-call run does not flag a case', () => {
+    // Means 2 → 2.6 (+0.6) would flag; medians 2 → 2 do not.
+    const rows = compareCases(
+      suite([callsCase('one outlier', [2, 2, 2, 2, 2])]),
+      suite([callsCase('one outlier', [2, 2, 2, 2, 5])]),
+    );
+    expect(rows[0]!.branch.agentCalls).toBe(2);
+    expect(rows[0]!.flags.some(f => f.includes('calls'))).toBe(false);
+    // A real shift of the median still flags.
+    const shifted = compareCases(
+      suite([callsCase('shifted', [2, 2, 2, 2, 2])]),
+      suite([callsCase('shifted', [3, 3, 3, 2, 2])]),
+    );
+    expect(shifted[0]!.flags.some(f => f.includes('calls 3 > 2 + 0.5'))).toBe(true);
+  });
+
+  it("an explicit branch scheduled:false beats a legacy baseline's scheduler tag", () => {
+    // Main-arm baseline (no `scheduled`, tagged) vs a branch 05a-shaped live turn.
+    const base = callsCase('05a-like', [2, 2, 2], { agent: undefined, tags: ['scheduler'] });
+    const branch = callsCase('05a-like', [3, 3, 3], { scheduled: false, tags: ['scheduler'] });
+    const flags = compareCases(suite([base]), suite([branch]))[0]!.flags;
+    // Live-turn gates apply: +1 call exceeds the +0.5 allowance, and unchanged input
+    // fails the −40% rule. The scheduled "no increase" wording must not appear.
+    expect(flags.some(f => f.includes('coordinator calls 3 > 2 + 0.5'))).toBe(true);
+    expect(flags.some(f => f.includes('total input'))).toBe(true);
+    expect(flags.some(f => f.includes('no increase allowed'))).toBe(false);
+  });
 });
