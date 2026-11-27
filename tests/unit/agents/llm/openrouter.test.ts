@@ -349,20 +349,36 @@ describe('OpenRouterProvider', () => {
       description: 'Add a note',
       input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
     }];
+    // Mirrors the runtime wire shape after option (a): stable system → history →
+    // per-turn system (sender / Bullpen / …) → latest user (turn-context with time/autonomy).
     const base = [
       { role: 'system' as const, content: 'Stable prefix.' },
       { role: 'user' as const, content: 'Prior' },
       { role: 'assistant' as const, content: 'Ack' },
     ];
+    const turn1After = [
+      { role: 'system' as const, content: 'Sender A\n[Bullpen — thread-1]' },
+      {
+        role: 'user' as const,
+        content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nRestricted\n\n## Current Date & Time\n2026-10-01\n\n[End of turn context]\n\nTurn 1',
+      },
+    ];
+    const turn2After = [
+      { role: 'system' as const, content: 'Sender B\n[Bullpen — thread-2]' },
+      {
+        role: 'user' as const,
+        content: '[Current turn context — from the system, not part of what the sender wrote]\n\n## Autonomy Level\nSpot-check\n\n## Current Date & Time\n2026-10-02\n\n[End of turn context]\n\nTurn 2',
+      },
+    ];
     await provider.chat({
       model: 'deepseek/deepseek-v4.1-flash',
       tools,
-      messages: [...base, { role: 'system', content: 'Sender A' }, { role: 'user', content: 'Turn 1' }],
+      messages: [...base, ...turn1After],
     });
     await provider.chat({
       model: 'deepseek/deepseek-v4.1-flash',
       tools,
-      messages: [...base, { role: 'system', content: 'Sender B' }, { role: 'user', content: 'Turn 2' }],
+      messages: [...base, ...turn2After],
     });
     const first = mockCreate.mock.calls[0]![0];
     const second = mockCreate.mock.calls[1]![0];
@@ -370,7 +386,8 @@ describe('OpenRouterProvider', () => {
     expect(second.messages[0]).toEqual(first.messages[0]);
     expect(JSON.stringify(first.tools)).toBe(JSON.stringify(second.tools));
     expect(first.messages.filter((m: { role: string }) => m.role === 'system')).toHaveLength(2);
-    expect(second.messages[3]).toEqual({ role: 'system', content: 'Sender B' });
+    expect(second.messages[3]).toEqual({ role: 'system', content: 'Sender B\n[Bullpen — thread-2]' });
+    expect(second.messages[4].content).toContain('Spot-check');
   });
 
   it('maps image content to OpenAI image_url format', async () => {

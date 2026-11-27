@@ -1188,7 +1188,10 @@ export class AgentRuntime {
       now: promptNow,
       logger,
     });
-    // Collects after-history turn context; order matches the former system-tail order.
+    // Collects after-history turn context. Order: pre-activated skill bodies first,
+    // then per-turn suffix (autonomy → verifications → reach → time → turn budget),
+    // then other-turns / harness / task tail — not the old system-tail order where
+    // skill bodies sat later (#2774).
     const turnContextParts: string[] = [];
     // Concurrent-turn note stays out of the cached system prefix (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
