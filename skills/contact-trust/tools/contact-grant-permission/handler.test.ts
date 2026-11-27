@@ -52,6 +52,7 @@ describe('ContactGrantPermissionHandler pending-recommendation guard (#2764)', (
     const { contactService, result } = run({ findResult: pendingRec() });
     const out = await result;
     expect(out.success).toBe(false);
+    if (out.success) throw new Error('expected refusal');
     expect(out.error).toMatch(/approve-grant-recommendation/);
     expect(out.error).toContain(REC_ID);
     expect(contactService.grantPermission).not.toHaveBeenCalled();
@@ -61,6 +62,7 @@ describe('ContactGrantPermissionHandler pending-recommendation guard (#2764)', (
     const { contactService, result } = run({ findResult: pendingRec(), granted: false });
     const out = await result;
     expect(out.success).toBe(false);
+    if (out.success) throw new Error('expected refusal');
     expect(out.error).toMatch(/decline-grant-recommendation/);
     expect(contactService.grantPermission).not.toHaveBeenCalled();
   });

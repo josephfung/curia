@@ -183,7 +183,8 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // 35,311 bytes over its local tools.
   // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same
   // approval: 36,512 over its local tools.
-  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_520, allowMcpPins: false },
+  // #2764 contact-grant-permission description names pending-recommendation routing (+211): 36,731.
+  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_731, allowMcpPins: false },
   // meeting-debrief: YAML 18,627 → 14,682 chars (~4,670 → ~3,681 tokens always-on); 22,685 bytes over 17 local tools.
   { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
 ];
