@@ -3677,10 +3677,18 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     const tools = chatCalls[0]!.tools?.map((t) => t.name) ?? [];
     expect(tools).toContain('web-browser');
     // Pre-activated bodies are an after-history system row (#2774 / 2026-11-27).
-    const user = lastUserContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>);
+    const msgs = chatCalls[0]!.messages as Array<{ role: string; content: unknown }>;
+    const user = lastUserContent(msgs);
     expect(user).not.toContain('[Activated skill: browser]');
-    expect(systemContent(chatCalls[0]!.messages as Array<{ role: string; content: unknown }>))
-      .toContain('[Activated skill: browser]');
+    expect(systemContent(msgs)).toContain('[Activated skill: browser]');
+    const firstSystem = msgs.find((m) => m.role === 'system');
+    expect(typeof firstSystem?.content === 'string' ? firstSystem.content : '').not.toContain('[Activated skill: browser]');
+    const lastUserIdx = msgs.map((m) => m.role).lastIndexOf('user');
+    const skillSysIdx = msgs.findIndex(
+      (m, i) => i > 0 && m.role === 'system' && typeof m.content === 'string' && m.content.includes('[Activated skill: browser]'),
+    );
+    expect(skillSysIdx).toBeGreaterThan(0);
+    expect(skillSysIdx).toBeLessThan(lastUserIdx);
   });
 
   describe('code pre-activation paths (#2764 §5)', () => {
@@ -3777,8 +3785,28 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         tools: call.tools?.map((t) => t.name) ?? [],
         system,
         user: lastUserContent(call.messages),
+        messages: call.messages,
       };
     }
+
+    /** Assert skill bodies sit after history on a system row, not in turn context. */
+    function expectSkillBodyAfterHistory(
+      r: { user: string; system: string; messages: Array<{ role: string; content: unknown }> },
+      skill: string,
+    ) {
+      const marker = `[Activated skill: ${skill}]`;
+      expect(r.user).not.toContain(marker);
+      expect(r.system).toContain(marker);
+      const firstSystem = r.messages.find((m) => m.role === 'system');
+      expect(typeof firstSystem?.content === 'string' ? firstSystem.content : '').not.toContain(marker);
+      const lastUserIdx = r.messages.map((m) => m.role).lastIndexOf('user');
+      const skillSysIdx = r.messages.findIndex(
+        (m, i) => i > 0 && m.role === 'system' && typeof m.content === 'string' && m.content.includes(marker),
+      );
+      expect(skillSysIdx).toBeGreaterThan(0);
+      expect(skillSysIdx).toBeLessThan(lastUserIdx);
+    }
+
 
     const tool = (name: string) => ({
       name,
@@ -3798,9 +3826,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       });
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('bullpen', 'coordinator');
       expect(r.tools).toContain('bullpen-post');
-      // Bodies are an after-history system row (#2774 / 2026-11-27).
-      expect(r.user).not.toContain('[Activated skill: bullpen]');
-      expect(r.system).toContain('[Activated skill: bullpen]');
+      expectSkillBodyAfterHistory(r, 'bullpen');
     });
 
     it('pre-activates job-report plus declared and learned job skills on scheduler turns', async () => {
@@ -3839,8 +3865,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         'list-principal-reports',
         'email-list',
       ]));
-      expect(r.user).not.toContain('[Activated skill: job-report]');
-      expect(r.system).toContain('[Activated skill: job-report]');
+      expectSkillBodyAfterHistory(r, 'job-report');
       expect(r.system).toContain('[Activated skill: digest]');
       expect(r.system).toContain('[Activated skill: mailbox]');
     });
@@ -3859,8 +3884,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       });
       expect(r.resolveSkillActivationForAgent).toHaveBeenCalledWith('digest', 'coordinator');
       expect(r.tools).toContain('record-spot-check');
-      expect(r.user).not.toContain('[Activated skill: digest]');
-      expect(r.system).toContain('[Activated skill: digest]');
+      expectSkillBodyAfterHistory(r, 'digest');
     });
   });
 
@@ -3934,6 +3958,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         tools: call.tools,
         system: call.messages.filter((m) => m.role === 'system').map(text).join('\n'),
         user: call.messages.filter((m) => m.role === 'user').map(text).join('\n'),
+        messages: call.messages,
       };
     }
 
@@ -3946,6 +3971,16 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.user).not.toContain('[Activated skill: onboarding]');
       expect(r.system).toContain('[Activated skill: onboarding]');
       expect(r.user).toContain(BLOCK);
+      const firstSystem = r.messages.find((m) => m.role === 'system');
+      expect(typeof firstSystem?.content === 'string' ? firstSystem.content : '')
+        .not.toContain('[Activated skill: onboarding]');
+      const lastUserIdx = r.messages.map((m) => m.role).lastIndexOf('user');
+      const skillSysIdx = r.messages.findIndex(
+        (m, i) => i > 0 && m.role === 'system' && typeof m.content === 'string'
+          && m.content.includes('[Activated skill: onboarding]'),
+      );
+      expect(skillSysIdx).toBeGreaterThan(0);
+      expect(skillSysIdx).toBeLessThan(lastUserIdx);
     });
 
     it('puts the block under the turn-guidance header, with the principal message last', async () => {
