@@ -54,6 +54,9 @@ export class PgConversationActiveSkillsStore implements ConversationActiveSkills
   }
 
   async listActive(conversationId: string, agentId: string, now: Date = new Date()): Promise<string[]> {
+    // A zero TTL carries nothing: the `>=` cutoff below would still admit a skill touched in
+    // the same millisecond as this read.
+    if (this.idleTtlMs <= 0) return [];
     const cutoff = new Date(now.getTime() - this.idleTtlMs);
     try {
       const result = await this.pool.query<Row>(
