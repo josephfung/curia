@@ -5,6 +5,7 @@
 //   pnpm scenarios --concurrency 1                                # one case at a time
 //   pnpm scenarios --on-demand                                    # also the release_gate: false cases
 //   pnpm scenarios --preflight                                    # reachability only, no model calls (#2764)
+//   pnpm scenarios --preflight --model deepseek/…                 # same, with tiers remapped for boot
 //   pnpm scenarios --model … --reasoning-effort low               # an effort A/B arm (ADR-048)
 //
 // Cases run --concurrency at a time (default 4); a case's own runs stay one at a time,
@@ -363,10 +364,6 @@ async function main(): Promise<void> {
   // during a half-hour suite.
   const commit = gitCommit();
   const args = parseArgs(process.argv.slice(2));
-  if (args.preflight && args.model !== undefined) {
-    err('--preflight does not take --model (it makes no model calls).');
-    process.exit(1);
-  }
   // A deployment's agents and cases are its own repo's code: name that commit too.
   const overlayCommit = args.overlay ? gitCommit(args.overlay) : undefined;
 
@@ -387,11 +384,15 @@ async function main(): Promise<void> {
     }
     out('\nScenario preflight (reachability only; no model calls)');
     out(`   ${cases.length} case(s) of ${loadedCases.length} loaded`);
+    if (args.model) out(`   Model override (boot tiers only): ${args.model}`);
     out('   Booting the test-mode stack...');
     const overlay = args.overlay ? buildOverlay(args.overlay, REPO_ROOT) : undefined;
     let harness: ScenarioHarness;
     try {
+      // --model remaps every tier at boot so a vault with only OpenRouter/OpenAI
+      // keys can assemble agents that otherwise bind Anthropic defaults (#2766).
       harness = await createScenarioHarness({
+        model: args.model,
         ...(overlay ?? {}),
         ...(args.mcpSnapshots ? { mcpSnapshotDirs: [args.mcpSnapshots] } : {}),
       });
@@ -399,6 +400,7 @@ async function main(): Promise<void> {
       overlay?.cleanup();
       err(`\nFailed to boot: ${e instanceof Error ? e.message : String(e)}`);
       err('Needs DATABASE_URL (migrated, with a principal) and SECRET_ENCRYPTION_KEY.');
+      err('If agents bind Anthropic by default, pass --model <openrouter/…> so boot remaps tiers.');
       process.exit(1);
     }
     try {
