@@ -2,7 +2,7 @@
 // suite and smoke, so both see tool calls, NO_REPLY and held replies the same way.
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createAgentResponse, createToolInvoke, createToolResult } from '../../../src/bus/events.js';
+import { createAgentResponse, createSkillActivated, createToolInvoke, createToolResult } from '../../../src/bus/events.js';
 import { createLogger } from '../../../src/logger.js';
 import { createTurnCapture, withoutRecentHistory } from '../../shared/turn-capture.js';
 
@@ -53,6 +53,32 @@ describe('createTurnCapture', () => {
     const turn = capture.waitFor('conv-2', 5_000);
     await respond(bus, 'conv-2', '', { suppressDelivery: true });
     expect((await turn).reply).toBe('NO_REPLY');
+  });
+
+  it('captures skill.activated events for the awaited agent (#2764)', async () => {
+    const { bus, capture } = setup();
+    const turn = capture.waitFor('conv-skills', 5_000);
+    await bus.publish('agent', createSkillActivated({
+      agentId: 'coordinator',
+      skill: 'tasks',
+      by: 'model',
+      taskEventId: 'task-1',
+      conversationId: 'conv-skills',
+      parentEventId: 'task-1',
+    }));
+    await bus.publish('agent', createSkillActivated({
+      agentId: 'calendar',
+      skill: 'calendar',
+      by: 'wake',
+      taskEventId: 'task-2',
+      conversationId: 'conv-skills',
+      parentEventId: 'task-2',
+    }));
+    await respond(bus, 'conv-skills', 'done');
+    const outcome = await turn;
+    expect(outcome.skillActivations).toEqual([
+      { skill: 'tasks', by: 'model', agentId: 'coordinator' },
+    ]);
   });
 
   it('ignores other agents and other conversations', async () => {

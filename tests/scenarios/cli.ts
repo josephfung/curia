@@ -4,6 +4,8 @@
 //   pnpm scenarios --case transfer                                # iterate on one case (one run)
 //   pnpm scenarios --concurrency 1                                # one case at a time
 //   pnpm scenarios --on-demand                                    # also the release_gate: false cases
+//   pnpm scenarios --preflight                                    # reachability only, no model calls (#2764)
+//   pnpm scenarios --preflight --model deepseek/…                 # same, with tiers remapped for boot
 //   pnpm scenarios --model … --reasoning-effort low               # an effort A/B arm (ADR-048)
 //
 // Cases run --concurrency at a time (default 4); a case's own runs stay one at a time,
@@ -72,6 +74,12 @@ interface Args {
   concurrency: number;
   allowOtherConnections: boolean;
   onDemand: boolean;
+  /**
+   * Reachability only (#2764): boot the stack, run staticProblems over the selected
+   * cases (all 259 by default, including on-demand and identity fixtures), exit.
+   * No model calls, no judge, no results file.
+   */
+  preflight: boolean;
   /** A deployment's custom/ directory, laid over core's agents, skills and config (overlay.ts). */
   overlay?: string;
   /** Cases, stub sets and the stub-coverage record to use instead of core's (a deployment's own). */
@@ -103,6 +111,7 @@ function parseArgs(argv: string[]): Args {
     concurrency: concurrencyRaw === undefined ? DEFAULT_CONCURRENCY : parseConcurrency(concurrencyRaw),
     allowOtherConnections: argv.includes('--allow-other-connections'),
     onDemand: argv.includes('--on-demand'),
+    preflight: argv.includes('--preflight'),
     overlay: optionalPath(value('--overlay')),
     casesDir: optionalPath(value('--cases')),
     stubsDir: optionalPath(value('--stubs')),
@@ -332,6 +341,23 @@ function gitCommit(cwd: string = import.meta.dirname): string | undefined {
   }
 }
 
+/**
+ * Cases for `--preflight` (#2764): honour --case / --tags, but keep release_gate: false
+ * and identity-fixture cases. Reachability does not need a single office identity.
+ */
+function selectPreflightCases(
+  all: readonly ScenarioCase[],
+  args: { caseFilter?: string; tags?: readonly string[] },
+): ScenarioCase[] {
+  let cases = [...all];
+  if (args.caseFilter !== undefined) {
+    const needles = args.caseFilter.toLowerCase().split(',').map(n => n.trim()).filter(n => n !== '');
+    cases = cases.filter(c => needles.some(n => c.name.toLowerCase().includes(n)));
+  }
+  if (args.tags !== undefined) cases = cases.filter(c => c.tags.some(t => args.tags!.includes(t)));
+  return cases;
+}
+
 async function main(): Promise<void> {
   const started = Date.now();
   // At start, not at the end: the results must name the code that ran, and HEAD can move
@@ -346,6 +372,55 @@ async function main(): Promise<void> {
   const loadedCases = loadScenarioCases(args.casesDir ?? CASES_DIR, args.stubsDir ? { extraStubsDirs: [args.stubsDir] } : {});
   // Every loaded case's, selected or not: an earlier selection's crashed run may have left them.
   const signalConversations = fixtureSignalConversations(loadedCases);
+
+  if (args.preflight) {
+    const cases = selectPreflightCases(loadedCases, {
+      ...(args.caseFilter !== undefined ? { caseFilter: args.caseFilter } : {}),
+      ...(args.tags !== undefined ? { tags: args.tags } : {}),
+    });
+    if (cases.length === 0) {
+      err('No scenario cases match the filters.');
+      process.exit(1);
+    }
+    out('\nScenario preflight (reachability only; no model calls)');
+    out(`   ${cases.length} case(s) of ${loadedCases.length} loaded`);
+    if (args.model) out(`   Model override (boot tiers only): ${args.model}`);
+    out('   Booting the test-mode stack...');
+    const overlay = args.overlay ? buildOverlay(args.overlay, REPO_ROOT) : undefined;
+    let harness: ScenarioHarness;
+    try {
+      // --model remaps every tier at boot so a vault with only OpenRouter/OpenAI
+      // keys can assemble agents that otherwise bind Anthropic defaults (#2766).
+      harness = await createScenarioHarness({
+        model: args.model,
+        ...(overlay ?? {}),
+        ...(args.mcpSnapshots ? { mcpSnapshotDirs: [args.mcpSnapshots] } : {}),
+      });
+    } catch (e) {
+      overlay?.cleanup();
+      err(`\nFailed to boot: ${e instanceof Error ? e.message : String(e)}`);
+      err('Needs DATABASE_URL (migrated, with a principal) and SECRET_ENCRYPTION_KEY.');
+      err('If agents bind Anthropic by default, pass --model <openrouter/…> so boot remaps tiers.');
+      process.exit(1);
+    }
+    try {
+      const problems = staticProblems(cases, harness);
+      if (problems.length > 0) {
+        err('\nCase problems:');
+        for (const p of problems) err(`   ${p}`);
+        process.exitCode = 1;
+      } else {
+        out(`\n   Preflight passed (${cases.length} case(s), ${Math.round((Date.now() - started) / 1000)}s).`);
+      }
+    } finally {
+      try { overlay?.cleanup(); } catch { /* best-effort */ }
+      try { await harness!.shutdown(); } catch (e) {
+        err(`  [WARN] shutdown error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    process.exit(process.exitCode ?? 0);
+  }
+
   const { cases, onDemandSkipped, identitySkipped } = selectRunCases(
     loadedCases,
     {
@@ -581,6 +656,11 @@ async function main(): Promise<void> {
       const result: CaseResult = {
         ...scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate),
         setupHash: caseSetupHash(scenario),
+        agent: scenario.agent,
+        // §10 scheduled gates key off a real scheduler fire, not a `scheduler` tag
+        // (05a–05c are tagged but are live principal turns).
+        scheduled: scenario.inbound.from === 'scheduler',
+        tags: scenario.tags,
       };
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       // Real delegation multiplies model calls (#2027): show whose they were.

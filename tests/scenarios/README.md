@@ -44,6 +44,8 @@ pnpm scenarios --case "sweep-on-close" --model deepseek/deepseek-v4.1-flash
 | `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
 | `--on-demand` | Also run the cases marked `release_gate: false`. `--case` and `--tags` select them without it. |
+| `--preflight` | Reachability only (#2764): boot the stack, run the stub/`called` static checks over every loaded case (or `--case` / `--tags`), exit. No model calls, no results file. |
+| `pnpm scenarios:compare <baseline.json> <branch.json>` | Diff two results files: per-behaviour pass rates, case-agent calls, total input tokens (uncached + cache read/creation), p50 duration, skills activated by path. Exit 1 when a case is outside the Layer 2 thresholds. Scheduled fires (`inbound.from: scheduler`) skip the −40% token gate and forbid call increases; a `scheduler` tag alone does not. |
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
 `timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
@@ -504,6 +506,7 @@ expected_behaviors:
       success: true                       #     | briefed: <agent> + brief_contains: [..]
       returns: { outbound_entry: { status: released } }   # | any_of: [checks]
                                           #     | text: reply | {tool, arg} + max_words / excludes
+                                          #     | skills_activated: { includes, excludes, by }
 failure_modes:
   - Replies "Done!" without delegating
 ```
@@ -515,6 +518,14 @@ failure_modes:
 containing it, as a nested subset: `not_called: [delegate]` with `returns: { declined: true }`
 passes unless a specialist declined. `called` may list several tools; their matching calls
 are counted together (`called: [signal-send, email-send]` with `max: 1`).
+
+`skills_activated` (#2764) reads the run's `skill.activated` audit events, so code
+pre-activation is visible (unlike `called: skill-activate`). `includes` must all appear;
+`excludes` must not. `by` filters the path: `model` (skill-activate), `pre` (any non-model
+path), or `any` (default). The harness keeps only the **case agent's** activations
+(first turn, wake, and `then`); specialist activations in `delegation: real` runs are
+not in the check. An `excludes:` against a specialist-activated skill therefore cannot
+fail unless the case agent itself activated it.
 
 `called`, `not_called` and `order` read the coordinator's calls. With real delegation they
 can read another agent's (`agent: calendar`) or every agent's (`agent: any`). `briefed:

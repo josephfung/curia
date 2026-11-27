@@ -301,3 +301,39 @@ describe('evaluateCheck: text (#2143)', () => {
     expect(wordCount('')).toBe(0);
   });
 });
+
+describe('evaluateCheck: skills_activated (#2764)', () => {
+  function withSkills(activations: ScenarioRun['skillActivations']): ScenarioRun {
+    return { ...run([]), ...(activations ? { skillActivations: activations } : {}) };
+  }
+
+  it('passes when includes are present and excludes are absent', () => {
+    const r = withSkills([
+      { skill: 'tasks', by: 'model', agentId: 'coordinator' },
+      { skill: 'email', by: 'wake', agentId: 'coordinator' },
+    ]);
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['tasks'], excludes: ['browser'] }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('misses a missing include or a forbidden exclude', () => {
+    const r = withSkills([{ skill: 'browser', by: 'model', agentId: 'coordinator' }]);
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['tasks'] }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'skills_activated', excludes: ['browser'] }, r, ctx).rating).toBe('MISS');
+  });
+
+  it('filters by model vs pre', () => {
+    const r = withSkills([
+      { skill: 'tasks', by: 'model', agentId: 'coordinator' },
+      { skill: 'onboarding', by: 'onboarding', agentId: 'coordinator' },
+    ]);
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['tasks'], by: 'model' }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['onboarding'], by: 'model' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['onboarding'], by: 'pre' }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['tasks'], by: 'pre' }, r, ctx).rating).toBe('MISS');
+  });
+
+  it('treats a missing skillActivations field as empty', () => {
+    expect(evaluateCheck({ kind: 'skills_activated', excludes: ['tasks'] }, run([]), ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'skills_activated', includes: ['tasks'] }, run([]), ctx).rating).toBe('MISS');
+  });
+});

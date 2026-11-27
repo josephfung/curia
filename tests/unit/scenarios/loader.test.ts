@@ -791,6 +791,31 @@ describe('loadScenarioCase: principal_note checks (prompt trim PR 5)', () => {
   });
 });
 
+describe('loadScenarioCase: skills_activated checks (#2764)', () => {
+  const withCheck = (check: string) => VALID.replace(
+    '  - id: silent\n    description: does not answer directly\n',
+    `  - id: silent\n    description: does not answer directly\n    check:\n${check}`,
+  );
+
+  it('loads includes, excludes and by', () => {
+    const c = loadScenarioCase(write('skills.yaml', withCheck(
+      '      skills_activated:\n        includes: [tasks, email]\n        excludes: [browser]\n        by: model\n',
+    )));
+    expect(c.expectedBehaviors[1]!.check).toEqual({
+      kind: 'skills_activated',
+      includes: ['tasks', 'email'],
+      excludes: ['browser'],
+      by: 'model',
+    });
+  });
+
+  it('rejects an empty mapping, a bad by, and a non-mapping value', () => {
+    expect(() => loadScenarioCase(write('bad-empty.yaml', withCheck('      skills_activated: {}\n')))).toThrow(/includes, excludes or both/);
+    expect(() => loadScenarioCase(write('bad-by.yaml', withCheck('      skills_activated:\n        includes: [tasks]\n        by: wake\n')))).toThrow(/any, model, pre/);
+    expect(() => loadScenarioCase(write('bad-val.yaml', withCheck('      skills_activated: true\n')))).toThrow(/must be a mapping/);
+  });
+});
+
 describe('text checks and identity fixtures (#2143)', () => {
   const STYLE = `
 name: style

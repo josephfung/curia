@@ -12,6 +12,8 @@ import type {
   BusEvent,
   ModelFallbackEngagedEvent,
   OutboundNoReplyEvent,
+  SkillActivatedEvent,
+  SkillActivationBy,
   ToolInvokeEvent,
   ToolResultEvent,
 } from '../../src/bus/events.js';
@@ -37,8 +39,17 @@ export interface ObservedToolCall {
   invokeEventId?: string;
 }
 
+/** One skill activation this turn, as the bus saw it (#2764). */
+export interface ObservedSkillActivation {
+  skill: string;
+  by: SkillActivationBy;
+  agentId: string;
+}
+
 export interface TurnOutcome {
   calls: ObservedToolCall[];
+  /** Skills whose tools/instructions entered this turn (#2764). */
+  skillActivations: ObservedSkillActivation[];
   /** The agent's agent.response content, with an exact NO_REPLY restored. */
   reply: string | null;
   /** A note for the principal the runtime cut out of the reply (prompt trim PR 5). */
@@ -57,6 +68,7 @@ interface PendingTurn {
   /** The agent whose turn this is; every other agent's events on the conversation are ignored. */
   agentId: string;
   calls: ObservedToolCall[];
+  skillActivations: ObservedSkillActivation[];
   invokeIndex: Map<string, number>;
   reply: string | null;
   principalNote?: string;
@@ -90,6 +102,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
       if (pending.get(conversationId) === p) pending.delete(conversationId);
       p.resolve({
         calls: p.calls,
+        skillActivations: p.skillActivations,
         reply: p.reply,
         ...(p.principalNote !== undefined ? { principalNote: p.principalNote } : {}),
         ...(p.noReplyReason ? { noReplyReason: p.noReplyReason } : {}),
@@ -117,6 +130,13 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     if (!p || p.done) return;
     p.invokeIndex.set(event.id, p.calls.length);
     p.calls.push({ name: payload.toolName, input: payload.input, invokeEventId: event.id });
+  });
+
+  on('skill.activated', (event) => {
+    const { payload } = event as SkillActivatedEvent;
+    const p = forAgent(payload.agentId, payload.conversationId);
+    if (!p || p.done) return;
+    p.skillActivations.push({ skill: payload.skill, by: payload.by, agentId: payload.agentId });
   });
 
   on('tool.result', (event) => {
@@ -192,12 +212,18 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
         // its settle window is fine: it no longer takes events.)
         const live = pending.get(conversationId);
         if (live && !live.done) {
-          resolve({ calls: [], reply: null, error: `a turn is already pending on conversation ${conversationId}` });
+          resolve({
+            calls: [],
+            skillActivations: [],
+            reply: null,
+            error: `a turn is already pending on conversation ${conversationId}`,
+          });
           return;
         }
         const p: PendingTurn = {
           agentId,
           calls: [],
+          skillActivations: [],
           invokeIndex: new Map(),
           reply: null,
           done: false,

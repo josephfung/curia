@@ -68,11 +68,21 @@ export const ANY_AGENT = 'any';
  * On `not_called` it narrows the forbidden calls the same way (`returns: { declined: true }`).
  * A refused send still counts for `not_called`.
  */
+/** Which activation paths a `skills_activated` check accepts (#2764). */
+export type SkillsActivatedByFilter = 'any' | 'model' | 'pre';
+
 export type BehaviorCheck =
   /** `tool` may list several tools: their matching calls are counted together. */
   | { kind: 'called'; tool: string | string[]; agent?: CheckAgent; with?: Record<string, unknown>; contains?: Record<string, string>; min?: number; max?: number; success?: boolean; returns?: Record<string, unknown> }
   | { kind: 'not_called'; tools: string[]; agent?: CheckAgent; with?: Record<string, unknown>; contains?: Record<string, string>; returns?: Record<string, unknown> }
   | { kind: 'order'; tools: string[]; agent?: CheckAgent }
+  /**
+   * Skills whose tools/instructions entered the turn (#2764). Reads `run.skillActivations`
+   * from `skill.activated` events, so code pre-activation is visible (unlike `called:
+   * skill-activate`). `by: model` = skill-activate only; `pre` = any non-model path;
+   * `any` (default) = either.
+   */
+  | { kind: 'skills_activated'; includes?: string[]; excludes?: string[]; by?: SkillsActivatedByFilter }
   | { kind: 'reply'; is: 'no_reply' | 'not_no_reply' }
   | { kind: 'reply_excludes'; patterns: string[] }
   /** No tool, agent or system identifier from the running stack appears in the reply. */
@@ -758,6 +768,11 @@ export interface ScenarioRun {
    */
   clock?: { now: string; timezone: string };
   toolCalls: CapturedToolCall[];
+  /**
+   * Skills activated on this run (#2764), from `skill.activated` events. Absent on
+   * transcripts saved before the check existed, and when none fired.
+   */
+  skillActivations?: Array<{ skill: string; by: string; agentId: string }>;
   /** The case agent's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;
   /**
@@ -971,6 +986,19 @@ export interface CaseResult {
    * current case file needs it unchanged. Absent on results saved before it existed.
    */
   setupHash?: string;
+  /**
+   * The case's scored agent (#2764 compare). Absent on results saved before it existed;
+   * compare then falls back to `coordinator`.
+   */
+  agent?: string;
+  /**
+   * True when the case's inbound was a scheduler fire (`inbound.from === 'scheduler'`).
+   * Compare uses this for the scheduled-case call/token gates (#2764 §10). Absent on
+   * results saved before it existed; compare then falls back to a `scheduler` tag.
+   */
+  scheduled?: boolean;
+  /** Case tags (legacy compare fallback when `scheduled` is absent). */
+  tags?: string[];
 }
 
 /** One contrast group's blind-identification result (blind-id.ts, #2556), in the results JSON. */
