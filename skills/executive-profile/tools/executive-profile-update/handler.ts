@@ -22,6 +22,9 @@ interface PartialWritingVoiceInput {
   sign_off?: string;
 }
 
+/** The writing_voice keys the merge reads (snake_case, after normalization). */
+const WRITING_VOICE_KEYS: ReadonlySet<string> = new Set(['tone', 'formality', 'patterns', 'vocabulary', 'sign_off']);
+
 /** Longest voice guide this tool accepts. The guide is injected into every drafting prompt. */
 export const MAX_GUIDE_CHARS = 8000;
 /** Longest change note this tool accepts. */
@@ -61,6 +64,25 @@ export class ExecutiveProfileUpdateHandler implements ToolHandler {
     // sign_off is the only current field affected (all others are single words), but this
     // guards against future multi-word fields too.
     const writing_voice = normalizeKeysToSnakeCase(rawVoice) as PartialWritingVoiceInput;
+    // Fail closed on anything the merge below would ignore: an unknown key or a list sent as
+    // a string returned success while nothing changed (a guide nested in writing_voice was
+    // dropped on most deep-dive imports in the #2764 A/B).
+    const misplaced = Object.keys(writing_voice).filter(k => !WRITING_VOICE_KEYS.has(k));
+    if (misplaced.length > 0) {
+      const topLevel = misplaced.filter(k => k === 'guide' || k === 'note');
+      return {
+        success: false,
+        error: topLevel.length > 0
+          ? `${topLevel.map(k => `"${k}"`).join(' and ')} must be top-level inputs, not fields of writing_voice.`
+          : `Unknown writing_voice field(s): ${misplaced.join(', ')}. Allowed: ${[...WRITING_VOICE_KEYS].join(', ')}.`,
+      };
+    }
+    const notList = (['tone', 'patterns'] as const).filter(
+      k => writing_voice[k] !== undefined && !Array.isArray(writing_voice[k]),
+    );
+    if (notList.length > 0) {
+      return { success: false, error: `writing_voice ${notList.join(' and ')} must be a list of strings.` };
+    }
 
     try {
       // Read the current profile as the base for merging.
