@@ -120,6 +120,27 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
     expect(after!.lastRunContext).toEqual({ scanned: 5, expired: 2 });
   });
 
+  it('keeps the scheduler-owned activatedSkillsRuns when scheduler-report replaces context (#2764)', async () => {
+    const jobId = await insertDueCronJob('learned skills', { cursor: 1, activatedSkillsRuns: [['email']] });
+
+    // The agent's context replaces its own keys (cursor 1 → 2); it cannot drop or
+    // overwrite the learned-skills history the scheduler keeps in the same column.
+    await schedulerService.reportJobRun(jobId, 'agent report', {
+      cursor: 2,
+      activatedSkillsRuns: [['browser']],
+    });
+
+    const after = await schedulerService.getJob(jobId);
+    expect(after!.lastRunContext).toEqual({ cursor: 2, activatedSkillsRuns: [['email']] });
+  });
+
+  it('replaces a context with no learned history wholesale', async () => {
+    const jobId = await insertDueCronJob('no history', { cursor: 1, stale: true });
+    await schedulerService.reportJobRun(jobId, 'agent report', { cursor: 2 });
+    const after = await schedulerService.getJob(jobId);
+    expect(after!.lastRunContext).toEqual({ cursor: 2 });
+  });
+
   it('preserves last_run_context when scheduler-report omits context', async () => {
     const jobId = await insertDueCronJob('prior', { offset: 500 });
     const pastDue = new Date(Date.now() - 60_000).toISOString();

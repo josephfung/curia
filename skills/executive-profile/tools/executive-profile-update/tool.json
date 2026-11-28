@@ -1,6 +1,6 @@
 {
   "name": "executive-profile-update",
-  "description": "Update the writing voice profile; send only changed fields. Only on the principal's request. Use when the principal adjusts voice settings or critiques a draft.",
+  "description": "Update the writing voice profile; send only changed fields. Only on the principal's request. Use when the principal adjusts voice settings or critiques a draft. guide and note are top-level inputs, not fields of writing_voice.",
   "version": "1.1.1",
   "sensitivity": "normal",
   "capabilities": ["executiveProfileService"],
