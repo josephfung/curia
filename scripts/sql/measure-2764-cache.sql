@@ -36,12 +36,19 @@ WITH calls AS (
     AND source_id = 'coordinator'
     AND timestamp > now() - (:window_days || ' days')::interval
 ), acts AS (
-  SELECT payload->>'taskEventId' AS task, timestamp AS ts
-  FROM audit_log
-  WHERE event_type = 'tool.invoke'
-    AND payload->>'agentId' = 'coordinator'
-    AND payload->>'toolName' IN ('skill-activate', 'tool-registry')
-    AND timestamp > now() - (:window_days || ' days')::interval
+  -- Only calls that succeeded can change the tool list: a refused skill-activate (skill not
+  -- listed, unknown name) or a failed tool-registry search adds nothing. The pre-deploy
+  -- measurements in #2764 counted every invocation; refusals were rare then (one activator).
+  SELECT i.payload->>'taskEventId' AS task, i.timestamp AS ts
+  FROM audit_log i
+  JOIN audit_log res
+    ON res.parent_event_id = i.id::text
+   AND res.event_type IN ('tool.result', 'skill.result')
+   AND res.payload->'result'->>'success' = 'true'
+  WHERE i.event_type = 'tool.invoke'
+    AND i.payload->>'agentId' = 'coordinator'
+    AND i.payload->>'toolName' IN ('skill-activate', 'tool-registry')
+    AND i.timestamp > now() - (:window_days || ' days')::interval
 ), labelled AS (
   SELECT c.*,
     EXISTS (SELECT 1 FROM acts a WHERE a.task = c.task) AS task_has_act,
