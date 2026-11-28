@@ -77,7 +77,7 @@ function loadOnDiskSkills(registry: SkillRegistry): void {
   }
 }
 
-function resolveAgent(agentFile: string): string[] {
+function resolveAgent(agentFile: string) {
   const config = loadAgentConfig(resolve(agentsDir, agentFile));
   const tools = new ToolRegistry();
   const skills = new SkillRegistry();
@@ -129,12 +129,20 @@ function resolveAgent(agentFile: string): string[] {
   }
 
   registerSyntheticSingletonSkills(tools, skills);
-  return resolvePinnedSkills(config.pinned_skills ?? [], skills, tools).toolNames.sort();
+  return resolvePinnedSkills(config.pinned_skills ?? [], skills, tools);
+}
+
+function resolveAgentTools(agentFile: string): string[] {
+  return [...resolveAgent(agentFile).toolNames].sort();
+}
+
+function resolveAgentListed(agentFile: string): string[] {
+  return resolveAgent(agentFile).listedSkills.map((s) => s.name).sort();
 }
 
 describe('resolved pin sets after #1494 bundling', () => {
   it('diagnostics resolves query tools + resolve-time-window + date-resolve + request-clarification', () => {
-    expect(resolveAgent('diagnostics.yaml')).toEqual(
+    expect(resolveAgentTools('diagnostics.yaml')).toEqual(
       [
         'audit-query',
         'audit-trace',
@@ -147,7 +155,7 @@ describe('resolved pin sets after #1494 bundling', () => {
   });
 
   it('meeting-debrief keeps individual task-* pins (not plan/checkpoint from tasks bundle)', () => {
-    const tools = resolveAgent('meeting-debrief.yaml');
+    const tools = resolveAgentTools('meeting-debrief.yaml');
     expect(tools).toEqual(
       expect.arrayContaining(['task-create', 'task-list', 'task-update', 'task-complete']),
     );
@@ -165,10 +173,13 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(config.pinned_skills).toContain('contact-trust');
     expect(config.pinned_skills).toContain('contact-upkeep');
     expect(config.pinned_skills).toContain('entity-context');
-    const tools = resolveAgent('contacts.yaml');
+    const tools = resolveAgentTools('contacts.yaml');
     expect(tools).toContain('entity-context');
     expect(tools).toContain('contact-lookup');
-    expect(tools).toContain('contact-grant-permission');
+    expect(tools).not.toContain('contact-grant-permission');
+    expect(resolveAgentListed('contacts.yaml')).toEqual(
+      expect.arrayContaining(['contact-trust', 'contact-upkeep']),
+    );
   });
 
   it('calendar and ceo-inbox tool-pin their domain members (#2764)', () => {
@@ -183,15 +194,19 @@ describe('resolved pin sets after #1494 bundling', () => {
   });
 
   it('ceo-inbox learning producers do not pull digest review tools', () => {
-    const tools = resolveAgent('ceo-inbox.yaml');
+    const tools = resolveAgentTools('ceo-inbox.yaml');
     expect(tools).toEqual(expect.arrayContaining(['voice-learn', 'task-completion-from-sent']));
     expect(tools).not.toContain('list-learning-digest');
     expect(tools).not.toContain('resolve-learning-digest');
   });
 
-  it('coordinator pins neither google-workspace nor its MCP tools (activated on demand, #2024)', () => {
+  it('coordinator lists google-workspace for its description; MCP tools stay off the fixed set (#2764)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).not.toContain('google-workspace');
+    expect(config.pinned_skills).toContain('google-workspace');
+    // Listed under on_demand: description only — member tools are not eager pins.
+    const coordinatorTools = resolveAgentTools('coordinator.yaml');
+    expect(coordinatorTools).not.toContain('create_doc');
+    expect(coordinatorTools).not.toContain('search_drive_files');
     expect(config.pinned_skills).not.toContain('create_doc');
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
@@ -222,23 +237,23 @@ describe('resolved pin sets after #1494 bundling', () => {
     // tools individually — so removing them from the bundle is behavior-preserving.
     expect(config.pinned_skills).toContain('query-relationships');
     expect(config.pinned_skills).toContain('delete-relationship');
-    const tools = resolveAgent('contacts.yaml');
+    const tools = resolveAgentTools('contacts.yaml');
     expect(tools).toContain('query-relationships');
     expect(tools).toContain('delete-relationship');
   });
 
-  it('coordinator gains the relationship tools via the memory bundle (#1502)', () => {
-    const tools = resolveAgent('coordinator.yaml');
-    expect(tools).toEqual(
-      expect.arrayContaining(['query-relationships', 'delete-relationship']),
-    );
+  it('coordinator lists memory so relationship tools load on activation (#1502 / #2764)', () => {
+    const tools = resolveAgentTools('coordinator.yaml');
+    expect(tools).not.toContain('query-relationships');
+    expect(tools).not.toContain('delete-relationship');
+    expect(resolveAgentListed('coordinator.yaml')).toContain('memory');
   });
 
   it('coordinator pins list-user-secrets alongside secret-capture-request (#1497)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
     expect(config.pinned_skills).toContain('list-user-secrets');
     expect(config.pinned_skills).toContain('secret-capture-request');
-    const tools = resolveAgent('coordinator.yaml');
+    const tools = resolveAgentTools('coordinator.yaml');
     expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
   });
 
@@ -247,7 +262,7 @@ describe('resolved pin sets after #1494 bundling', () => {
   it('coordinator leaves image-generate and drive-download-file to discovery', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
     expect(config.allow_discovery).toBe(true);
-    const tools = resolveAgent('coordinator.yaml');
+    const tools = resolveAgentTools('coordinator.yaml');
     expect(tools).not.toContain('image-generate');
     expect(tools).not.toContain('drive-download-file');
   });

@@ -2,7 +2,7 @@
 # contact. Nothing in the message is a Google URL, so only the prompt's "any Google file,
 # link or not" tells the coordinator to activate google-workspace. With the tools
 # unloaded, the failure to watch for is "I can't share files". Rule:
-# agents/coordinator.yaml, "Google Workspace".
+# config/skills.yaml, google-workspace description.
 #
 # Sharing without asking first is intended (#2068). Scenarios run at the default autonomy
 # score, 75 (Approval Required). That band's text used to say to confirm any consequential

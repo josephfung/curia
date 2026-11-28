@@ -474,8 +474,9 @@ describe('loadAgentPinCatalog', () => {
   it('expands the real coordinator pins without leaving any unresolved', () => {
     const repoRoot = path.resolve(import.meta.dirname, '..');
     const loaded = loadAgentPinCatalog(repoRoot, 'coordinator');
-    // The coordinator pins no MCP server: it activates google-workspace on demand (#2024).
-    expect(loaded.mcpServers).toEqual([]);
+    // #2764: google-workspace is listed so its description stays always-on; tools still
+    // load on activation. The catalog reports the MCP server pin (not a local tool).
+    expect(loaded.mcpServers).toEqual(['google-workspace']);
     expect(loaded.unresolvedPins).toEqual([]);
     expect(loaded.missingPinnedTools).toEqual([]);
     expect(loaded.localPinnedTools).toContain('email-get');

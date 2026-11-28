@@ -204,15 +204,17 @@ describe('registerAgentRoster', () => {
 });
 
 describe('assembleAgent', () => {
-  it('gives the coordinator its SKILL.md bodies, discovery tools and coordinator-only blocks', () => {
+  it('lists pinned skills for on-demand load and injects discovery tools (#2764)', () => {
     const configs = [coordinatorYaml(), specialistYaml()];
     const ctx = buildContext(textProvider(), configs);
     const coordinator = assembleAgent(configs[0]!, ctx);
 
     expect(coordinator.systemPrompt).toContain(`Principal: ${PRINCIPAL_CONTACT_ID}.`);
-    expect(coordinator.systemPrompt).toContain('NOTES SKILL BODY');
-    expect(coordinator.pinnedToolNames).toEqual(['notes-add']);
-    expect(coordinator.toolDefs.map(t => t.name)).toEqual(['notes-add', 'tool-registry', 'skill-activate']);
+    // Bodies load on activation — not spliced into the assembled system prompt.
+    expect(coordinator.systemPrompt).not.toContain('NOTES SKILL BODY');
+    expect(coordinator.runtimeConfig.skillList).toEqual([{ name: 'notes', description: 'notes' }]);
+    expect(coordinator.pinnedToolNames).toEqual([]);
+    expect(coordinator.toolDefs.map(t => t.name)).toEqual(['tool-registry', 'skill-activate']);
 
     const rc = coordinator.runtimeConfig;
     expect(rc.officeIdentityService).toBe(ctx.officeIdentityService);
@@ -226,6 +228,16 @@ describe('assembleAgent', () => {
     expect(rc.principalIdentities).toBe(ctx.principalIdentities);
   });
 
+  it('gives a discovery agent with no listed skills skill-activate too (#2764)', () => {
+    // tool-registry returns bundles as kind:'skill'; only skill-activate can load one.
+    const configs = [coordinatorYaml({ pinned_skills: [] }), specialistYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const coordinator = assembleAgent(configs[0]!, ctx);
+
+    expect(coordinator.runtimeConfig.skillList).toEqual([]);
+    expect(coordinator.toolDefs.map(t => t.name)).toEqual(['tool-registry', 'skill-activate']);
+  });
+
   it('withholds coordinator-only blocks from specialists and resolves their placeholders', () => {
     const configs = [coordinatorYaml(), specialistYaml({ inject_specialists: true })];
     const ctx = buildContext(textProvider(), configs);
@@ -234,7 +246,9 @@ describe('assembleAgent', () => {
     expect(specialist.systemPrompt).toContain(`Me: ${AGENT_CONTACT_ID}.`);
     expect(specialist.systemPrompt).toContain(`Principal: ${PRINCIPAL_CONTACT_ID}.`);
     expect(specialist.systemPrompt).toContain('researcher');
-    expect(specialist.systemPrompt).toContain('LOOKUP SKILL BODY');
+    expect(specialist.systemPrompt).not.toContain('LOOKUP SKILL BODY');
+    expect(specialist.runtimeConfig.skillList).toEqual([{ name: 'lookup', description: 'lookup' }]);
+    expect(specialist.toolDefs.map(t => t.name)).toEqual(['skill-activate']);
 
     const rc = specialist.runtimeConfig;
     // Every agent gets the identity service (#2143); buildBaseSystemPrompt gives a
@@ -531,8 +545,8 @@ describe('rendered coordinator system string', () => {
       '## Who you serve',
       '### Principal Contact Details',
       'You are the coordinator.',
-      'NOTES SKILL BODY',
       '## Available Specialists',
+      '## Skills',
       'Spot', // autonomy band label
       DATE_RESOLVE_GUARDRAIL.split('\n')[0]!,
     ];

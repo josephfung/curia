@@ -2,7 +2,7 @@
 # searches "on its own initiative" included a recurring job that misfired; activation
 # belongs to a task, so a job that needs no Google file must not load the tools. "Prepare
 # the weekly status report" is the lure: it reads like a document but is a message. Rule:
-# agents/coordinator.yaml, "Google Workspace".
+# config/skills.yaml, google-workspace description.
 name: no google file scheduled job
 description: >
   A recurring job fires: prepare the weekly status report of open tasks and pending

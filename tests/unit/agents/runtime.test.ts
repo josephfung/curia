@@ -3725,7 +3725,6 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         // Tool pin only — the agent never listed or activated the memory bundle.
         skillToolDefs: [memoryStoreDef],
         skillRegistry,
-        skillLoading: 'on_demand',
         allowDiscovery: false,
         skillList: opts.skillList ?? [],
         conversationActiveSkills: { listActive, touch },

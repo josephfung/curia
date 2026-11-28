@@ -17,11 +17,18 @@ const config = loadAgentConfig(path.join(agentsDir, 'diagnostics.yaml'));
 
 /**
  * The complete toolset the diagnostics agent is allowed to hold: read-only
- * queries + request-clarification. request-clarification is safe here — it only
- * pauses and routes a question to the PRINCIPAL (via the coordinator's resume
- * flow); it cannot address an arbitrary recipient.
+ * domain tools as pins (#2764 §6) + request-clarification. request-clarification
+ * is safe here — it only pauses and routes a question to the PRINCIPAL (via the
+ * coordinator's resume flow); it cannot address an arbitrary recipient.
  */
-const ALLOWED_SKILLS = new Set(['date-resolve', 'diagnostics', 'request-clarification']);
+const ALLOWED_PINS = new Set([
+  'date-resolve',
+  'resolve-time-window',
+  'audit-query',
+  'audit-trace',
+  'ops-lookup',
+  'request-clarification',
+]);
 
 describe('diagnostics agent config', () => {
   it('runs on the powerful tier', () => {
@@ -32,10 +39,17 @@ describe('diagnostics agent config', () => {
     expect(config.role).toBe('specialist');
   });
 
-  it('pins the diagnostics skill bundle plus date-resolve', () => {
+  it('tool-pins the diagnostics domain plus date-resolve (#2764)', () => {
     expect(config.pinned_skills).toEqual(
-      expect.arrayContaining(['diagnostics', 'date-resolve']),
+      expect.arrayContaining([
+        'date-resolve',
+        'resolve-time-window',
+        'audit-query',
+        'audit-trace',
+        'ops-lookup',
+      ]),
     );
+    expect(config.pinned_skills).not.toContain('diagnostics');
   });
 
   it('pins request-clarification so it can ask the principal mid-diagnosis', () => {
@@ -43,8 +57,8 @@ describe('diagnostics agent config', () => {
   });
 
   it('pins NO outbound, delegate, or write-capable skill (structural principal-restriction)', () => {
-    for (const skill of config.pinned_skills ?? []) {
-      expect(ALLOWED_SKILLS.has(skill), `unexpected skill pinned to diagnostics: ${skill}`).toBe(true);
+    for (const pin of config.pinned_skills ?? []) {
+      expect(ALLOWED_PINS.has(pin), `unexpected pin on diagnostics: ${pin}`).toBe(true);
     }
     // Spell out the disallowed classes so the intent is legible in the failure output.
     const forbidden = ['email-send', 'email-reply', 'signal-send', 'send-draft', 'delegate', 'memory-store'];

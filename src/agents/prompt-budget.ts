@@ -61,8 +61,8 @@ export interface AgentContextMeasurement {
   /** The `## Available Specialists` roster this agent is given, in chars (0 when it gets none). */
   rosterChars: number;
   /**
-   * The `## Skills` list under on_demand (#2764), in chars (0 when eager or empty).
-   * Counted in the always-on prompt budget separately from YAML + pinned bodies.
+   * The `## Skills` list (#2764), in chars (0 when empty).
+   * Counted in the always-on prompt budget separately from YAML.
    */
   skillListChars: number;
   /**
@@ -71,13 +71,13 @@ export interface AgentContextMeasurement {
    * entries sum to the always-on total within a few tokens of rounding.
    */
   contributors: {
-    /** system_prompt and pinned SKILL.md bodies, split by heading. Tokens. */
+    /** system_prompt, split by heading. Tokens. */
     prompt: Contributor[];
     /** One entry per local tool definition. Bytes. */
     tools: Contributor[];
     /** One entry per specialist line. Tokens. */
     roster: Contributor[];
-    /** The on_demand skill list as one contributor. Tokens. */
+    /** The skill list as one contributor. Tokens. */
     skillList: Contributor[];
   };
 }
@@ -181,8 +181,6 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
     contributors: {
       prompt: [
         ...sectionContributors(`${agentName}.yaml system_prompt`, agentConfig.system_prompt),
-        ...assembled.pinResolution.instructionBlocks.flatMap((block, i) =>
-          sectionContributors(`${assembled.pinResolution.instructionBlockSkills[i] ?? `pinned skill ${i + 1}`} SKILL.md`, block)),
       ],
       tools: assembled.toolDefs.map(def => ({ name: def.name, size: Buffer.byteLength(JSON.stringify(def), 'utf8') })),
       roster: (assembled.runtimeConfig.availableSpecialists ?? '')

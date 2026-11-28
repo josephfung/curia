@@ -110,10 +110,14 @@ describeIf('test-mode stack', () => {
       expect(rendered.startsWith(identity + '\n\n' + security + '\n\n')).toBe(true);
     });
 
-    it('carries every pinned SKILL.md body', () => {
-      const blocks = stack.agent('coordinator').pinResolution.instructionBlocks;
-      expect(blocks.length).toBeGreaterThan(0);
-      for (const block of blocks) expect(rendered).toContain(block);
+    it('lists pinned skills without embedding SKILL.md bodies (#2764)', () => {
+      const listed = stack.agent('coordinator').pinResolution.listedSkills;
+      expect(listed.length).toBeGreaterThan(0);
+      expect(rendered).toContain('## Skills');
+      for (const skill of listed) {
+        expect(rendered).toContain(`- ${skill.name}:`);
+      }
+      // Bodies load on activation — not spliced into the always-on system string.
     });
 
     it('carries the roster, autonomy, date guardrail, own contact details and turn budget', async () => {
@@ -227,6 +231,7 @@ describeIf('test-mode stack', () => {
     });
 
     it('reports the refused tools per agent', () => {
+      // Includes member tools of listed skills (email/messaging), not only boot tool pins.
       const coordinator = stack.disabledTools['coordinator'] ?? [];
       expect(coordinator.find(d => d.tool === 'email-send')?.missing).toContain('outboundContext');
       expect(coordinator.find(d => d.tool === 'signal-send')?.missing).toContain('outboundContext');

@@ -1,7 +1,7 @@
 # Case 13c (#2024): the principal names a Doc by its bare ID, with no link. A hint keyed
 # on docs.google.com links would miss this, which is why the coordinator's prompt says to
 # activate google-workspace for any Google file, link or not. Rule:
-# agents/coordinator.yaml, "Google Workspace".
+# config/skills.yaml, google-workspace description.
 name: google doc bare id read
 description: >
   The principal gives a Google Doc's ID, with no link, and asks what launch date it

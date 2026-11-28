@@ -7,7 +7,15 @@ import { VOICE_TOOL_NAMES, withVoiceSpokenNotes } from '../../../../src/channels
 import { findInternalJargon } from '../../../../src/channels/voice/spoken-jargon.js';
 import { buildVoiceSystemPrompt, VOICE_GREETING_INSTRUCTION } from '../../../../src/channels/voice/voice-runtime.js';
 import { measureAgentContext } from '../../../../src/agents/prompt-budget.js';
+import { loadAgentConfig } from '../../../../src/agents/loader.js';
 import { discoverToolManifests } from '../../../../src/skills/loader.js';
+import {
+  discoverSkillManifests,
+  loadSkillsFromDiscovery,
+  registerSyntheticSingletonSkills,
+} from '../../../../src/skills/skill-loader.js';
+import { resolvePinnedSkills } from '../../../../src/skills/pin-resolution.js';
+import { SkillRegistry } from '../../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
 import { createLogger } from '../../../../src/logger.js';
 
@@ -78,12 +86,33 @@ describe('VOICE_TOOL_NAMES', () => {
     expect(notes).toContain('do not also hand it off with async-offramp or delegate');
   });
 
-  it('is a subset of what the coordinator can do, plus the voice-only tools', () => {
-    const coordinatorTools = new Set(measureAgentContext('coordinator', SOURCES).localToolNames);
+  it('is reachable by the coordinator (tool pin or listed skill), plus voice-only tools (#2764)', () => {
+    const measured = measureAgentContext('coordinator', SOURCES);
+    const alwaysOn = new Set(measured.localToolNames);
+    const logger = createLogger('silent');
+    const tools = new ToolRegistry();
+    const noop = { execute: async () => ({ success: true as const, data: {} }) };
+    for (const disc of discoverToolManifests(SOURCES.skillsDir, logger)) {
+      if (disc.manifest) tools.register(disc.manifest, noop);
+    }
+    const skills = new SkillRegistry();
+    const discovery = discoverSkillManifests(SOURCES.skillsDir, logger);
+    loadSkillsFromDiscovery(discovery, skills, logger, new Set(discovery.map((d) => d.name)));
+    registerSyntheticSingletonSkills(tools, skills, logger);
+    const pins = resolvePinnedSkills(
+      loadAgentConfig(resolve(SOURCES.agentsDir, 'coordinator.yaml')).pinned_skills ?? [],
+      skills,
+      tools,
+    );
+    const reachable = new Set(alwaysOn);
+    for (const listed of pins.listedSkills) {
+      const skill = skills.get(listed.name);
+      for (const t of skill?.manifest.tools ?? []) reachable.add(t);
+    }
     // These hand work TO the coordinator or lock call state, so the coordinator must not carry them.
     const voiceOnly = new Set(['async-offramp', 'meeting-agenda-load', 'meeting-notes-start']);
-    for (const name of voiceOnly) expect(coordinatorTools.has(name)).toBe(false);
-    const beyondCoordinator = VOICE_TOOL_NAMES.filter(name => !voiceOnly.has(name) && !coordinatorTools.has(name));
+    for (const name of voiceOnly) expect(alwaysOn.has(name)).toBe(false);
+    const beyondCoordinator = VOICE_TOOL_NAMES.filter((name) => !voiceOnly.has(name) && !reachable.has(name));
     expect(beyondCoordinator).toEqual([]);
   });
 

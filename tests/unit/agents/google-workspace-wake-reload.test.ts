@@ -1,11 +1,12 @@
 // google-workspace-wake-reload.test.ts — a task that activated google-workspace gets
 // it back when it wakes (#2024).
 //
-// The coordinator no longer pins google-workspace; a task activates it with
-// skill-activate, which records it in progress.activeSkills. On a scheduler wake the
-// runtime re-loads active skills, but skips pinned ones (they are already eager). This
-// checks the whole chain with the real pieces: the coordinator's real pin list, the
-// skill projected from the production tools/list snapshot, and production's
+// The coordinator lists google-workspace so its description stays always-on (#2764);
+// member tools still load on activation. A task that activated it records it in
+// progress.activeSkills; on a scheduler wake the runtime re-loads active skills
+// (including listed ones — under on_demand they are not already in the tool set).
+// This checks the whole chain with the real pieces: the coordinator's real pin list,
+// the skill projected from the production tools/list snapshot, and production's
 // activation check in the ExecutionLayer.
 import { describe, it, expect, vi } from 'vitest';
 import { resolve } from 'node:path';
@@ -40,9 +41,9 @@ describe('coordinator wake re-loads an activated google-workspace (#2024)', () =
     });
     const executionLayer = new ExecutionLayer(toolRegistry, logger, { skillRegistry });
 
-    // The real pin list: if google-workspace were pinned, the wake path would skip it.
+    // Listed under on_demand: wake still re-loads member tools from activeSkills.
     const pinnedSkillNames = loadAgentConfig(resolve(REPO, 'agents', 'coordinator.yaml')).pinned_skills ?? [];
-    expect(pinnedSkillNames).not.toContain('google-workspace');
+    expect(pinnedSkillNames).toContain('google-workspace');
 
     const taskId = '33333333-3333-4333-8333-333333333333';
     const activeSkills = { skills: [{ name: 'google-workspace', activatedAt: '2026-10-06T12:00:00.000Z' }] };
