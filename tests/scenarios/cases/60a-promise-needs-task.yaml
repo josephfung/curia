@@ -48,6 +48,7 @@ expected_behaviors:
     description: Creates a task for the end-of-next-week deck promise (call succeeds).
     check:
       called: task-create
+      contains: { title: deck }
       success: true
   - id: activates_tasks
     weight: critical

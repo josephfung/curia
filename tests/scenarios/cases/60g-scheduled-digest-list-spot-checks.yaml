@@ -38,9 +38,12 @@ expected_behaviors:
       success: true
   - id: reports
     weight: critical
-    description: Calls scheduler-report.
+    description: Calls scheduler-report exactly once, with a summary naming the 2 open items.
     check:
       called: scheduler-report
+      contains: { summary: "2" }
+      min: 1
+      max: 1
       success: true
   - id: digest_activated
     weight: critical
