@@ -1119,7 +1119,7 @@ git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-relay-budget
 **Files:**
 - Modify: `src/skills/_shared/principal-directed.ts` (two new exports)
 - Modify: `tests/unit/skills/_shared/principal-directed.test.ts`
-- Modify: `skills/email/tools/email-send/handler.ts`, `skills/signal-send/handler.ts` (both send sites), `skills/slack-send/handler.ts`, `skills/sms-send/handler.ts`
+- Modify: `skills/email/tools/email-send/handler.ts`, `skills/messaging/tools/signal-send/handler.ts` (both send sites), `skills/messaging/tools/slack-send/handler.ts`, `skills/messaging/tools/sms-send/handler.ts`
 - Modify: each skill's `handler.test.ts`
 - Modify: `tool.json` versions — `email-send` 1.6.2 → 1.7.0, `signal-send` 1.4.3 → 1.5.0, `slack-send` 0.4.3 → 0.5.0, `sms-send` 0.4.3 → 0.5.0 (new output field: minor)
 
@@ -1205,7 +1205,7 @@ Shared fixture for all four (define at the top of each test file, after imports)
 const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known' } };
 ```
 
-`skills/sms-send/handler.test.ts`, inside `describe('send by reference (#2033)', ...)`:
+`skills/messaging/tools/sms-send/handler.test.ts`, inside `describe('send by reference (#2033)', ...)`:
 
 ```ts
     it('passes the task originator to the gateway and surfaces a relay-budget deferral (#1320)', async () => {
@@ -1221,9 +1221,9 @@ const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, ch
     });
 ```
 
-`skills/slack-send/handler.test.ts` — the same test with `SlackSendHandler` (keep `recipient: 'principal'`).
+`skills/messaging/tools/slack-send/handler.test.ts` — the same test with `SlackSendHandler` (keep `recipient: 'principal'`).
 
-`skills/signal-send/handler.test.ts` — its `makeCtx` takes no `taskMetadata`, so spread it in:
+`skills/messaging/tools/signal-send/handler.test.ts` — its `makeCtx` takes no `taskMetadata`, so spread it in:
 
 ```ts
   it('passes the task originator to the gateway and surfaces a relay-budget deferral (#1320)', async () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { REDACTION_NOTE } from '../../src/skills/_shared/principal-directed.js';
+import { REDACTION_NOTE } from '../../../../src/skills/_shared/principal-directed.js';
 import { SmsSendHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
 import pino from 'pino';
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {

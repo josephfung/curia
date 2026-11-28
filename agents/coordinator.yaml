@@ -204,11 +204,8 @@ pinned_skills:
   - verification
   # Records a web form or call made for a task, so the reply can find it (#2312).
   - record-outreach
-  - signal-send
-  - sms-send
-  - slack-send
-  # The phone app. A dead subscription continues on the next channel in the handler.
-  - web-send
+  # Channel sends (#2764): messaging bundle covers the principal-reach channels.
+  - messaging
   - config-store
   - date-resolve
   - contact-update

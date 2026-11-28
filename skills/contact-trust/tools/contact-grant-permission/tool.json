@@ -1,6 +1,6 @@
 {
   "name": "contact-grant-permission",
-  "description": "Grant or deny a specific permission for a contact, overriding their role defaults. Use when the principal says 'Let X do Y' or 'Don't let X do Y'.",
+  "description": "Grant or deny a specific permission for a contact when the principal names it directly ('Let Dana schedule meetings'). A grant is refused while a pending grant recommendation covers the same contact+permission: answer that with approve-grant-recommendation. A denial is always stored.",
   "version": "1.1.1",
   "sensitivity": "elevated",
   "action_risk": "critical",

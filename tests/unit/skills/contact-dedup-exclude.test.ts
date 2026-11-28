@@ -7,7 +7,7 @@
 // review task open (the #1624 prompt gate depends on `success`).
 
 import { describe, it, expect, vi } from 'vitest';
-import { ContactDedupExcludeHandler } from '../../../skills/contacts/tools/contact-dedup-exclude/handler.js';
+import { ContactDedupExcludeHandler } from '../../../skills/contact-upkeep/tools/contact-dedup-exclude/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import { InvalidExclusionPairError } from '../../../src/contacts/dedup-exclusions.js';
 import { ContactNotFoundError } from '../../../src/contacts/types.js';

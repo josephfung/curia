@@ -6,13 +6,13 @@
 // Standing preferences are not parsed. No subscription is a failure and is
 // not sent onward. A hold or a content-filter block stops the fallback.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { OutboundGateway, OutboundSendRequest, OutboundSendResult } from '../../src/skills/outbound-gateway.js';
-import { RELAY_DEFERRED_NOTE, isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
-import { FALLBACK_CHANNELS, type FallbackChannel } from '../../src/agents/principal-reach.js';
-import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
-import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { OutboundGateway, OutboundSendRequest, OutboundSendResult } from '../../../../src/skills/outbound-gateway.js';
+import { RELAY_DEFERRED_NOTE, isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../../../src/skills/_shared/principal-directed.js';
+import { FALLBACK_CHANNELS, type FallbackChannel } from '../../../../src/agents/principal-reach.js';
+import { registerOutboundContext } from '../../../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 4000;
 

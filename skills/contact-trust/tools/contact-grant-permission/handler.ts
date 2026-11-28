@@ -46,6 +46,25 @@ export class ContactGrantPermissionHandler implements ToolHandler {
       return { success: false, error: 'Cannot determine valid actor identity for audit trail — neither caller nor originator provides a valid UUID contactId' };
     }
 
+    // A grant covered by a pending recommendation must go through
+    // approve-grant-recommendation — not a side-door grant (#2764 Layer-2 / case 33j).
+    // A denial is never blocked: it is the safe direction, and
+    // decline-grant-recommendation only closes the recommendation without storing one.
+    if (granted) {
+      try {
+        const existing = await ctx.contactService.findGrantRecommendation(contact_id, permission);
+        if (existing?.status === 'pending') {
+          return {
+            success: false,
+            error: `A pending grant recommendation (${existing.id}) already covers this contact and permission. Call approve-grant-recommendation with that recommendation_id instead of contact-grant-permission.`,
+          };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Failed to check grant recommendations: ${message}` };
+      }
+    }
+
     try {
       await ctx.contactService.grantPermission(contact_id, permission, granted, actorContactId);
       const action = granted ? 'granted' : 'denied';

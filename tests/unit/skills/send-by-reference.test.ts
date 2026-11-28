@@ -20,9 +20,9 @@ import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
 import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler.js';
 import { EmailReplyHandler } from '../../../skills/email/tools/email-reply/handler.js';
-import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
-import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
-import { SlackSendHandler } from '../../../skills/slack-send/handler.js';
+import { SignalSendHandler } from '../../../skills/messaging/tools/signal-send/handler.js';
+import { SmsSendHandler } from '../../../skills/messaging/tools/sms-send/handler.js';
+import { SlackSendHandler } from '../../../skills/messaging/tools/slack-send/handler.js';
 import { ContactCreateHandler } from '../../../skills/contacts/tools/contact-create/handler.js';
 import { ContactLinkIdentityHandler } from '../../../skills/contacts/tools/contact-link-identity/handler.js';
 

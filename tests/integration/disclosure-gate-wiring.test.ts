@@ -33,8 +33,8 @@ import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { ContactTier } from '../../src/contacts/types.js';
 import type { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import type { SignalRpcClient } from '../../src/channels/signal/signal-rpc-client.js';
-import { SignalSendHandler } from '../../skills/signal-send/handler.js';
-import signalSendManifest from '../../skills/signal-send/tool.json' with { type: 'json' };
+import { SignalSendHandler } from '../../skills/messaging/tools/signal-send/handler.js';
+import signalSendManifest from '../../skills/messaging/tools/signal-send/tool.json' with { type: 'json' };
 
 const logger = createSilentLogger();
 const CONFIG_DIR = path.resolve(import.meta.dirname, '../../config');

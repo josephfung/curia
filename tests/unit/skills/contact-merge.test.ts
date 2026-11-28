@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ContactMergeHandler } from '../../../skills/contacts/tools/contact-merge/handler.js';
+import { ContactMergeHandler } from '../../../skills/contact-upkeep/tools/contact-merge/handler.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
 import type { ToolContext } from '../../../src/skills/types.js';

@@ -15,20 +15,20 @@
 // a contact yet is added first with contact-create. The retired raw input
 // (recipient_number) is refused, never ignored.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { holdRecipientName } from '../../src/skills/_shared/hold-recipient-name.js';
-import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
-import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
-import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
-import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { holdRecipientName } from '../../../../src/skills/_shared/hold-recipient-name.js';
+import { checkGroupMemberTrust } from '../../../../src/channels/signal/group-trust.js';
+import { registerOutboundContext } from '../../../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
+import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../../../src/skills/_shared/principal-directed.js';
+import { hasPresentValue } from '../../../../src/contacts/principal-carveout-parse.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   derivedAddressData,
   findRetiredRecipientField,
   retiredRecipientFieldError,
-} from '../../src/skills/_shared/recipient-reference.js';
-import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
+} from '../../../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 

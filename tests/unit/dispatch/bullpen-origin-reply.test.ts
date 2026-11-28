@@ -16,8 +16,8 @@ import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { ToolHandler, ToolManifest } from '../../../src/skills/types.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
-import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
-import signalSendManifest from '../../../skills/signal-send/tool.json' with { type: 'json' };
+import { SignalSendHandler } from '../../../skills/messaging/tools/signal-send/handler.js';
+import signalSendManifest from '../../../skills/messaging/tools/signal-send/tool.json' with { type: 'json' };
 import {
   isHumanReplySkill,
   parseOriginTurnOwnsReply,

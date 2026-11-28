@@ -1,25 +1,16 @@
 ---
 name: contacts
 description: >
-  Contact identity, lifecycle, and grant recommendations. Mixed action_risk (lookup=none … grant/revoke=critical) preserved per tool.
+  Everyday contact identity: lookup, create, update, rename, set-role, link/unlink identity,
+  and list. Load for people work; trust and dedup live in contact-trust and contact-upkeep.
 version: "0.2.1"
 tools:
-  - contact-create
   - contact-lookup
+  - contact-create
+  - contact-update
+  - contact-rename
+  - contact-set-role
   - contact-link-identity
   - contact-unlink-identity
-  - contact-set-identity-status
-  - contact-set-role
-  - contact-set-tier
-  - contact-rename
-  - contact-update
   - contact-list
-  - contact-merge
-  - contact-find-duplicates
-  - contact-dedup-exclude
-  - contact-grant-permission
-  - contact-revoke-permission
-  - scan-grant-recommendations
-  - approve-grant-recommendation
-  - decline-grant-recommendation
 ---

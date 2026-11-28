@@ -605,9 +605,9 @@ describe('documented TTL tiers per channel', () => {
   });
 
   it.each([
-    'skills/signal-send/tool.json',
-    'skills/sms-send/tool.json',
-    'skills/slack-send/tool.json',
+    'skills/messaging/tools/signal-send/tool.json',
+    'skills/messaging/tools/sms-send/tool.json',
+    'skills/messaging/tools/slack-send/tool.json',
     'skills/email/tools/email-send/tool.json',
     'skills/email/tools/email-reply/tool.json',
   ])('%s tells the two drop paths apart', (rel) => {

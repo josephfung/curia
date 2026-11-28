@@ -1799,6 +1799,14 @@ export class ContactService {
     return this.backend.getGrantRecommendation(id);
   }
 
+  /** Fetch the recommendation for a contact+permission pair, if any. */
+  async findGrantRecommendation(
+    contactId: string,
+    permission: string,
+  ): Promise<GrantRecommendation | null> {
+    return this.backend.findGrantRecommendation(contactId, permission);
+  }
+
   /** List grant recommendations, optionally filtered by status. */
   async listGrantRecommendations(
     filters?: { status?: GrantRecommendationStatus; limit?: number },
