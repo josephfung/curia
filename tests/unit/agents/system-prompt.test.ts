@@ -2,10 +2,17 @@
 // coordinator and ceo-inbox only, rebuilt each turn, and never allowed to fail the turn.
 
 import { describe, expect, it, vi } from 'vitest';
-import { buildBaseSystemPrompt, type SystemPromptSources } from '../../../src/agents/system-prompt.js';
+import {
+  buildBaseSystemPrompt,
+  buildPerTurnSystemPromptSuffix,
+  buildStableSystemPromptPrefix,
+  formatTurnContextBlock,
+  type SystemPromptSources,
+} from '../../../src/agents/system-prompt.js';
 import { createLogger } from '../../../src/logger.js';
 import type { Verification } from '../../../src/verification/types.js';
 import type { VerificationRuntime } from '../../../src/verification/index.js';
+import { DATE_RESOLVE_GUARDRAIL } from '../../../src/agents/prompts/date-resolve-guardrail.js';
 
 const NOW = new Date('2026-10-19T14:05:00Z');
 const logger = createLogger('silent');
@@ -48,6 +55,52 @@ function sources(agentId: string, rows: Verification[], extra: Partial<SystemPro
     ...extra,
   };
 }
+
+describe('stable vs per-turn system prompt split (#2764)', () => {
+  it('keeps the date guardrail in the stable prefix and autonomy/time in the suffix', async () => {
+    const autonomyService = {
+      getConfig: async () => ({
+        score: 75,
+        band: 'spot-check',
+        updatedAt: NOW,
+        updatedBy: 'test',
+      }),
+    } as unknown as SystemPromptSources['autonomyService'];
+    const src = sources('coordinator', [verification()], {
+      autonomyService,
+      skillList: [{ name: 'notes', description: 'notes' }],
+    });
+    const opts = { now: NOW, logger };
+    const stable = await buildStableSystemPromptPrefix(src, opts);
+    const perTurn = await buildPerTurnSystemPromptSuffix(src, opts);
+
+    expect(stable).toContain(DATE_RESOLVE_GUARDRAIL.split('\n')[0]!);
+    expect(stable).toContain('## Skills');
+    expect(stable).not.toContain('## Autonomy Level');
+    expect(stable).not.toContain('## Current Date & Time');
+    expect(stable).not.toContain('## Sign-in verifications');
+    expect(stable).not.toContain('## Turn budget');
+
+    expect(perTurn).toContain('## Autonomy Level');
+    expect(perTurn).toContain('## Sign-in verifications');
+    expect(perTurn).toContain('## Current Date & Time');
+    expect(perTurn).toContain('## Turn budget');
+    expect(perTurn).not.toContain(DATE_RESOLVE_GUARDRAIL.split('\n')[0]!);
+
+    const combined = await buildBaseSystemPrompt(src, opts);
+    expect(combined).toBe(stable + perTurn);
+  });
+
+  it('formatTurnContextBlock labels joined parts and omits blanks (#2774)', () => {
+    expect(formatTurnContextBlock([])).toBe('');
+    expect(formatTurnContextBlock(['', '  '])).toBe('');
+    expect(formatTurnContextBlock(['## Autonomy Level\nscore 1', '', '## Turn budget\nN'])).toBe(
+      '[Current turn context — from the system, not part of what the sender wrote]\n\n'
+      + '## Autonomy Level\nscore 1\n\n## Turn budget\nN\n\n'
+      + '[End of turn context]',
+    );
+  });
+});
 
 describe('buildBaseSystemPrompt verification block', () => {
   it('coordinator prompt includes the block when a verification is pending', async () => {
@@ -99,15 +152,22 @@ describe('buildBaseSystemPrompt verification block', () => {
     expect(lookup.listActive).not.toHaveBeenCalled();
   });
 
-  it('places the block after the autonomy block and before the date guardrail', async () => {
+  it('places the block after the date guardrail and after the autonomy block (#2764)', async () => {
     const autonomyService = {
-      getConfig: async () => ({ score: 80 }),
+      getConfig: async () => ({
+        score: 80,
+        band: 'spot-check',
+        updatedAt: NOW,
+        updatedBy: 'test',
+      }),
     } as unknown as SystemPromptSources['autonomyService'];
     const prompt = await buildBaseSystemPrompt(
       sources('coordinator', [verification()], { autonomyService }),
       { now: NOW, logger },
     );
-    expect(prompt.indexOf('## Sign-in verifications')).toBeLessThan(prompt.indexOf('### Date & time'));
+    // Date guardrail is in the stable prefix; autonomy + verifications are per-turn.
+    expect(prompt.indexOf('### Date & time')).toBeLessThan(prompt.indexOf('## Autonomy Level'));
+    expect(prompt.indexOf('## Autonomy Level')).toBeLessThan(prompt.indexOf('## Sign-in verifications'));
   });
 
   it('omits the block, without failing the turn, when listActive throws', async () => {

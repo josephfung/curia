@@ -8,20 +8,22 @@
 // differently from the runtime. Anything that needs "the prompt production sends"
 // must call these functions, not rebuild the string.
 //
-// Two pieces live here:
-//   - buildBaseSystemPrompt(): everything that does not depend on the task — the
-//     preamble (identity, security, own contact details, Who you serve), the YAML
-//     body, the specialist roster, the autonomy band, the date guardrail, the
-//     time block and the turn budget. For an ordinary principal turn this is the whole
-//     system string.
-//   - formatTaskTailBlocks(): the intent anchor and the scheduler fence, which
-//     depend only on the task event. They go last.
-//
-// What sits between the two and is NOT here: the task-bound harness blocks (wake
-// re-load of active skills, resumable guidance, plan harness). Those read and
-// write the task row and mutate the per-turn tool list, so they stay inline in
-// runtime.ts. They only apply to scheduler wakes of a bound task, never to a
-// principal chat turn.
+// Pieces live here (#2764 / #2774 — stable system message for provider cache):
+//   - buildStableSystemPromptPrefix(): identity, security, contacts, Who you serve,
+//     YAML, roster, skill list, date guardrail, pinned context. Changes rarely.
+//     This is the sole system-role content on a live turn (#2774).
+//   - buildPerTurnSystemPromptSuffix(): autonomy, live verifications, reach, time,
+//     turn budget. Changes every turn; the runtime places this (with harness and
+//     task-tail blocks) after conversation history, labelled on the latest user
+//     message. Pre-activated skill bodies are a separate after-history system row
+//     (2026-11-27), not part of that user block. On DeepSeek via OpenRouter the
+//     ~22k tool defs serialize after the leading system message, so bytes in the
+//     stable prefix would make the tools uncacheable; after-history system rows do not.
+//   - buildBaseSystemPrompt(): stable + per-turn, for render scripts / tests that
+//     want the full task-independent string in one call (not the live wire shape).
+//   - formatTaskTailBlocks(): intent anchor and scheduler fence (task-dependent).
+//   - formatTurnContextBlock(): labels the after-history bundle the runtime prepends
+//     to the latest user message.
 
 import type { Logger } from '../logger.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -107,36 +109,45 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
   return errorBudget?.maxTurns ?? DEFAULT_ERROR_BUDGET.maxTurns;
 }
 
+type PromptBuildOpts = { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' };
+
 /**
- * Build the task-independent part of the per-turn system string.
- *
- * Order (do not change without updating the tests that pin it):
- *   identity → security → ## Your Contact Details → ## Who you serve (with
- *   ### Principal Contact Details) → ## Reaching the principal (send-capable
- *   agents only) → YAML body → ## Available Specialists →
- *   ## Pinned context → autonomy → live sign-in verifications (coordinator, ceo-inbox) → date guardrail
- *   (coordinator) → time → turn budget
- *
- * Specialists get no identity or security block, so theirs starts at
- * ## Your Contact Details.
- *
- * Every block is rebuilt per call, so identity, autonomy and principal-identity
- * changes take effect on the next turn without a restart. By default a failure
- * loading one block is logged and the block omitted — it never aborts a live turn.
- * `onBlockError: 'throw'` makes it fatal instead, for renders (red-team, tests) where
- * a prompt missing a block would silently test less than production sends.
+ * By default a failure loading one block is logged and the block omitted — it
+ * never aborts a live turn. `onBlockError: 'throw'` makes it fatal instead, for
+ * renders (red-team, tests) where a prompt missing a block would silently test
+ * less than production sends.
  */
-export async function buildBaseSystemPrompt(
-  sources: SystemPromptSources,
-  opts: { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' },
-): Promise<string> {
-  const { agentId, officeIdentityService, autonomyService } = sources;
-  const { now, logger } = opts;
-  const failBlock = (block: string, err: unknown): void => {
+function makeFailBlock(
+  agentId: string,
+  opts: PromptBuildOpts,
+): (block: string, err: unknown) => void {
+  return (block, err) => {
     if (opts.onBlockError === 'throw') {
       throw new Error(`System prompt block '${block}' failed for agent '${agentId}'`, { cause: err });
     }
   };
+}
+
+/**
+ * Stable system-prompt prefix (#2764): everything that should survive across
+ * turns for provider prompt cache. Order (tests pin it):
+ *   identity → security → ## Your Contact Details → ## Who you serve → YAML body
+ *   → ## Available Specialists → ## Skills → date guardrail (coordinator)
+ *   → ## Pinned context
+ *
+ * Specialists get no identity or security block, so theirs starts at
+ * ## Your Contact Details.
+ *
+ * Every block is rebuilt per call, so identity and principal-identity changes
+ * take effect on the next turn without a restart.
+ */
+export async function buildStableSystemPromptPrefix(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const { agentId, officeIdentityService } = sources;
+  const { logger } = opts;
+  const failBlock = makeFailBlock(agentId, opts);
 
   // Build the fixed preamble — constraints first, most salient. Identity then
   // security are PREPENDED to the body (not substituted in-place), so the YAML
@@ -190,13 +201,11 @@ export async function buildBaseSystemPrompt(
   // The principal and their verified contact details. The list is closed: an address
   // not rendered here is not the principal's (#1950). Injected into ALL agents. With
   // no identities the whole section stays omitted — do not render a complete-set
-  // claim over nothing.
-  const { principalIdentities } = sources;
-  // The profile (name, pronouns, title) renders even with no identities: the
-  // pronoun rule matters whatever channels are set up (#2226).
+  // claim over nothing. The profile (name, pronouns, title) renders even with no
+  // identities: the pronoun rule matters whatever channels are set up (#2226).
   {
     const block = formatWhoYouServeBlock(
-      principalIdentities ?? [],
+      sources.principalIdentities ?? [],
       sources.principalPrimaryEmail?.current ?? null,
       sources.principalProfile?.current ?? null,
     );
@@ -226,6 +235,15 @@ export async function buildBaseSystemPrompt(
     if (skillsBlock) prompt += '\n\n' + skillsBlock;
   }
 
+  // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). This module is
+  // the sole ### Date & time instruction for the coordinator — do not leave a
+  // pointer stub in agents/coordinator.yaml (that would leak repo paths into the
+  // model-visible prompt and duplicate the heading). Static text — keep it in the
+  // cached prefix (#2764 PR 4).
+  if (agentId === 'coordinator') {
+    prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
+  }
+
   // Declared `/shared/` documents and config keys (#2338), read fresh every turn so a
   // console edit applies on the next turn. After the body, which refers to them, and
   // ahead of the per-turn blocks: they change rarely, so they stay in the cached
@@ -239,6 +257,25 @@ export async function buildBaseSystemPrompt(
     );
     if (block) prompt += '\n\n' + block;
   }
+
+  return prompt;
+}
+
+/**
+ * Per-turn blocks (#2764 / #2774): change often enough to bust the prompt cache
+ * if placed in the *leading* system role. Order: autonomy → verifications →
+ * reach → time → turn budget. The runtime bundles this with harness / task tail
+ * into the labelled user turn-context block; pre-activated skill bodies are a
+ * separate after-history system message (see formatTurnContextBlock).
+ */
+export async function buildPerTurnSystemPromptSuffix(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const { agentId, autonomyService } = sources;
+  const { now, logger } = opts;
+  const failBlock = makeFailBlock(agentId, opts);
+  let prompt = '';
 
   // Load the current autonomy config and append its behavioral block. Per-task (not
   // startup) so a principal score change mid-session takes effect on the next action.
@@ -282,14 +319,6 @@ export async function buildBaseSystemPrompt(
     }
   }
 
-  // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). This module is
-  // the sole ### Date & time instruction for the coordinator — do not leave a
-  // pointer stub in agents/coordinator.yaml (that would leak repo paths into the
-  // model-visible prompt and duplicate the heading).
-  if (agentId === 'coordinator') {
-    prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
-  }
-
   // Reach order changes when a browser opens or closes the chat, so it stays
   // out of the cached prefix (#2341). Standing preferences are not parsed here.
   if (sources.principalReach) {
@@ -322,14 +351,46 @@ export async function buildBaseSystemPrompt(
   // tool use from turn 1. Injected for ALL agents. Comes before the task-bound
   // blocks and the intent anchor so the anchor stays close to the end.
   prompt += '\n\n' + formatTurnBudgetBlock(resolveMaxTurns(sources.errorBudget));
-
   return prompt;
 }
 
 /**
- * The task-dependent blocks that close the system string: the intent anchor and,
- * for scheduler turns, the scope fence. Returns '' when neither applies (any
- * ordinary chat turn). Appended after the task-bound harness blocks.
+ * Full task-independent string (stable prefix + per-turn). Render scripts and
+ * tests that want one blob; the live runtime keeps only the stable prefix in
+ * the system role (#2774).
+ */
+export async function buildBaseSystemPrompt(
+  sources: SystemPromptSources,
+  opts: PromptBuildOpts,
+): Promise<string> {
+  const stable = await buildStableSystemPromptPrefix(sources, opts);
+  const perTurn = await buildPerTurnSystemPromptSuffix(sources, opts);
+  return stable + perTurn;
+}
+
+/**
+ * System-attributed wrapper for the after-history turn-context bundle (#2774).
+ * Mirrors turn-guidance markers (#2741): without them the block sits in a user
+ * message under a forgeable markdown heading while Prompt Injection Defense
+ * says user messages are data.
+ */
+export const TURN_CONTEXT_HEADER =
+  '[Current turn context — from the system, not part of what the sender wrote]';
+export const TURN_CONTEXT_FOOTER = '[End of turn context]';
+
+/**
+ * Label the after-history turn-context bundle (#2774). Empty when every part is blank.
+ */
+export function formatTurnContextBlock(parts: ReadonlyArray<string>): string {
+  const body = parts.map((p) => p.trim()).filter((p) => p.length > 0).join('\n\n');
+  if (!body) return '';
+  return `${TURN_CONTEXT_HEADER}\n\n${body}\n\n${TURN_CONTEXT_FOOTER}`;
+}
+
+/**
+ * Task-dependent blocks (intent anchor and scheduler fence). Returns '' when
+ * neither applies. Bundled into the after-history turn context (#2774), not the
+ * system role.
  */
 export function formatTaskTailBlocks(task: {
   intentAnchor?: string;

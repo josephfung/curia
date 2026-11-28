@@ -164,12 +164,15 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       });
     });
 
-    let capturedSystemPrompt = '';
+    // Checkpoint resume lives in after-history turn context (#2774), not the system role.
+    let capturedTurnPrompt = '';
     const specialistLlm: LLMProvider = {
       id: 'mock-specialist',
       chat: vi.fn().mockImplementation(async (params: { messages: Message[] }) => {
-        const system = params.messages.find((m: Message) => m.role === 'system');
-        capturedSystemPrompt = typeof system?.content === 'string' ? system.content : '';
+        capturedTurnPrompt = params.messages
+          .filter((m: Message) => m.role === 'system' || m.role === 'user')
+          .map((m: Message) => (typeof m.content === 'string' ? m.content : ''))
+          .join('\n');
         return {
           type: 'text' as const,
           content: 'Slice advanced.',
@@ -211,8 +214,8 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       };
       expect(boundTask.progress?.resumable?.done).toBe(25);
       expect(boundTask.progress?.resumable?.total).toBe(1300);
-      expect(capturedSystemPrompt).toContain('## Last Checkpoint (resume from here)');
-      expect(capturedSystemPrompt).toContain('25 / 1300');
+      expect(capturedTurnPrompt).toContain('## Last Checkpoint (resume from here)');
+      expect(capturedTurnPrompt).toContain('25 / 1300');
 
       const advanced = await repo.setResumableBlock(task.id, {
         cursor: 'page:4',

@@ -318,11 +318,17 @@ function harness() {
     return JSON.stringify((chatsByTurn.get(marker) ?? []).map((c) => c.messages));
   }
 
-  /** The system messages of the turn's first model call. */
+  /**
+   * Prompt text of the turn's first model call (#2774): system messages plus user
+   * messages (other-turns / hand-off guidance ride on the latest user message).
+   */
   function systemPrompt(marker: string): string {
     const first = chatsByTurn.get(marker)?.[0];
     if (!first) return '';
-    return first.messages.filter((m) => m.role === 'system').map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+    return first.messages
+      .filter((m) => m.role === 'system' || m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n');
   }
 
   /** The tool names offered on the turn's first model call. */
@@ -345,8 +351,11 @@ function harness() {
 
 /** The email turn's turn_id, read from the note the way the model reads it. */
 function emailTurnId(messages: Message[]): string {
-  const system = messages.filter((m) => m.role === 'system').map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
-  const match = /- turn_id (\S+), on email,/.exec(system);
+  const prompt = messages
+    .filter((m) => m.role === 'system' || m.role === 'user')
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+  const match = /- turn_id (\S+), on email,/.exec(prompt);
   if (!match) throw new Error('scripted provider: no email turn in the other-turns note');
   return match[1]!;
 }

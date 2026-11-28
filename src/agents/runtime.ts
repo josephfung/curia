@@ -70,7 +70,13 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
 import { identityMismatchFromToolResult } from '../skills/_shared/calendar-identity-guard.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
-import { buildBaseSystemPrompt, formatTaskTailBlocks, resolveMaxTurns } from './system-prompt.js';
+import {
+  buildPerTurnSystemPromptSuffix,
+  buildStableSystemPromptPrefix,
+  formatTaskTailBlocks,
+  formatTurnContextBlock,
+  resolveMaxTurns,
+} from './system-prompt.js';
 import { TurnDateResolveTracker } from './delegate-brief-date-validation.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import {
@@ -634,9 +640,9 @@ export class AgentRuntime {
   /**
    * Shared pre-activation entry point (#2764 / ADR-070): add each skill's tools to
    * `workingToolDefs` (skipping names already there) and return instruction blocks for
-   * the system prompt (placed after the stable prefix until PR 4). A skill the agent
-   * may not activate is logged with `skipMessage` and skipped. Each success publishes
-   * `skill.activated` with `by`.
+   * an after-history `role: 'system'` message (#2774 / 2026-11-27 decision). A skill the
+   * agent may not activate is logged with `skipMessage` and skipped. Each success
+   * publishes `skill.activated` with `by`.
    */
   private async preActivateSkills(
     skillNames: string[],
@@ -1170,15 +1176,27 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Task-independent part of the system string: the preamble (identity, security,
-    // own contact details, Who you serve), YAML body, specialist roster, autonomy
-    // band, date guardrail, time and the turn budget. Shared with the render script and the smoke
-    // harness so they send exactly what production sends (#1966). Rebuilt every
-    // turn so identity / autonomy / principal-identity changes apply without restart.
-    let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
-    // The tool's availability is decided inside, before the note is rendered (#2588).
+    // System role = stable prefix only (#2774): identity, security, contacts, Who
+    // you serve, YAML, roster, skill list, date guardrail, pinned context.
+    // After history: per-turn *system* rows (sender, bullpen, entities, contact
+    // recent, pre-activated skill bodies) then the latest user message, which may
+    // carry labelled turn context (autonomy / verifications / reach / time / turn
+    // budget / harness / task tail). Skill bodies are system — not user turn
+    // context — so the model treats them as instructions (2026-11-27). Shared
+    // builders with the render script (#1966).
+    const promptNow = new Date();
+    const effectiveSystemPrompt = await buildStableSystemPromptPrefix(this.config, {
+      now: promptNow,
+      logger,
+    });
+    // After-history turn context for the latest *user* message (autonomy →
+    // verifications → reach → time → turn budget → other-turns / harness / task
+    // tail). Pre-activated skill bodies are NOT here — they go in a post-history
+    // system message so the model treats them as instructions (#2774 / 2026-11-27).
+    const turnContextParts: string[] = [];
+    const preActivatedSkillBlocks: string[] = [];
+    // Concurrent-turn note stays out of the cached system prefix (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
-    if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
 
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
@@ -1236,7 +1254,7 @@ export class AgentRuntime {
       // not abort the turn (scheduler/bullpen/spot-check still need to run).
       try {
         const blocks = await this.preActivateSkills(fresh, workingToolDefs, skipMessage, by, preActCtx);
-        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        for (const block of blocks) preActivatedSkillBlocks.push(block);
         return blocks.length;
       } catch (err) {
         logger.warn({ err, agentId, skills: fresh, by }, skipMessage);
@@ -1295,6 +1313,9 @@ export class AgentRuntime {
           const listed = new Set((this.config.skillList ?? []).map((s) => s.name));
           carried = carried.filter((n) => listed.has(n));
         }
+        // Stable tool order for provider cache: listActive is recency-DESC; a flip
+        // between two carried skills reorders tool defs and busts the cache (#2774).
+        carried = [...carried].sort((a, b) => a.localeCompare(b));
         if (carried.length > 0) {
           await appendPreActivated(carried, 'conversation', 'Conversation skill carry skipped');
         }
@@ -1376,6 +1397,14 @@ export class AgentRuntime {
       }
     }
 
+    // Per-turn suffix into the user-side turn-context block (#2774).
+    const perTurnSuffix = await buildPerTurnSystemPromptSuffix(this.config, {
+      now: promptNow,
+      logger,
+    });
+    if (perTurnSuffix.trim()) turnContextParts.push(perTurnSuffix.trim());
+    if (otherTurns.text) turnContextParts.push(otherTurns.text);
+
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     let resumableNudgeCtx: { resumable: ResumableProgressBlock; circuit: ResumableCircuitState } | null = null;
     if (resumableActive && boundTaskCtx) {
@@ -1387,13 +1416,13 @@ export class AgentRuntime {
       if (existingCheckpoint && circuit) {
         resumableNudgeCtx = { resumable: existingCheckpoint, circuit };
       }
-      effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
+      turnContextParts.push(buildResumableTaskGuidanceBlock({
         workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
         workspaceManifestInjected,
         throughputMetrics,
-      });
+      }));
       if (existingCheckpoint) {
-        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
+        turnContextParts.push(buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit }));
       }
     }
 
@@ -1403,9 +1432,8 @@ export class AgentRuntime {
         boundTaskCtx,
         workingToolDefs,
         getToolDefinitions: (names) => executionLayer?.getToolDefinitions(names) ?? [],
-        effectiveSystemPrompt,
       });
-      effectiveSystemPrompt = planHarness.effectiveSystemPrompt;
+      if (planHarness.planGuidance) turnContextParts.push(planHarness.planGuidance);
       workingToolDefs = planHarness.workingToolDefs ?? undefined;
     }
 
@@ -1536,14 +1564,20 @@ export class AgentRuntime {
             ...(failedSkillsOmitted > 0 && { failedSkillsOmitted }),
           };
 
-    // Intent anchor + scheduler fence, last so they stay maximally salient. Shared
-    // with the render script via formatTaskTailBlocks (#1966); '' on a chat turn.
-    effectiveSystemPrompt += formatTaskTailBlocks({
+    // Intent anchor + scheduler fence, last in turn context so they stay salient.
+    // Shared with the render script via formatTaskTailBlocks (#1966); '' on a chat turn.
+    const taskTail = formatTaskTailBlocks({
       intentAnchor: taskEvent.payload.intentAnchor,
       channelId: taskEvent.payload.channelId,
       conversationId,
       hasToolAllowlist: toolAllowlist !== undefined,
     });
+    if (taskTail.trim()) turnContextParts.push(taskTail.trim());
+
+    const turnContext = formatTurnContextBlock(turnContextParts);
+    const userMessageContent = turnContext
+      ? `${turnContext}\n\n${promptContent}`
+      : promptContent;
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.resolvedModel ?? this.config.modelName;
@@ -1568,13 +1602,21 @@ export class AgentRuntime {
     });
 
     // Budget allocation order: reserve non-negotiable tiers first (system prompt,
-    // user message), then allocate in priority order (sender context, tool
-    // definitions, bullpen), and let history — which supports partial inclusion —
-    // take whatever's left. This matches the design spec priority order and ensures
-    // higher-priority tiers (especially security-relevant sender context) aren't
-    // starved by greedy history.
+    // user message, pre-activated skill bodies), then allocate in priority order
+    // (sender context, tool definitions, bullpen), and let history — which supports
+    // partial inclusion — take whatever's left. This matches the design spec
+    // priority order and ensures higher-priority tiers (especially security-relevant
+    // sender context) aren't starved by greedy history. Skill bodies used to ride
+    // inside user_message; they stay required so a long transcript cannot crowd
+    // them out after the after-history system move (#2774 / 2026-11-27).
+    const skillBodiesMessage: Message | null = preActivatedSkillBlocks.length > 0
+      ? { role: 'system', content: preActivatedSkillBlocks.join('\n\n') }
+      : null;
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
-    ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
+    ctxBudget.allocateRequired('user_message', [{ role: 'user', content: userMessageContent }]);
+    if (skillBodiesMessage) {
+      ctxBudget.allocateRequired('skill_bodies', [skillBodiesMessage]);
+    }
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
@@ -1582,19 +1624,21 @@ export class AgentRuntime {
       );
     }
 
-    // Start building messages array — history and user message appended after
-    // sender context and bullpen are resolved.
+    // Start building messages array. Stable system prompt alone leads; per-turn
+    // system messages (sender, Bullpen, resolved entities, contact recent) are
+    // staged and appended *after* conversation history so OpenRouter/DeepSeek
+    // can keep system+tools+history cached when only those blocks change (#2774
+    // maintainer option a). History and the latest user message complete the array.
     const messages: Message[] = [
       { role: 'system', content: effectiveSystemPrompt },
     ];
-
-    // Track insertion position for Bullpen context — it must follow sender context (if any)
-    // so the agent reads: system prompt → who is talking → what's pending in Bullpen → history.
+    const perTurnSystemMessages: Message[] = [];
+    // Mid-turn Bullpen refresh insert index — set after history is appended.
     let bullpenInsertAt = 1;
 
     // Inject resolved sender context as a system message so the coordinator
-    // knows who it's talking to. Inserted after the system prompt but before
-    // history, so it's visible but doesn't pollute working memory.
+    // knows who it's talking to. Staged after history (not after messages[0]),
+    // so it's visible but doesn't pollute working memory or the cacheable prefix.
     // Validated once and reused for the delegated-task prompt and ctx.caller.
     // metadata is Record<string, unknown>; a malformed originator must not become
     // audit fields or prompt identity (#1871, #710).
@@ -1722,10 +1766,8 @@ export class AgentRuntime {
         principalUnauthenticated: isUnauthenticatedPrincipal(taskEvent.payload.metadata),
       })}`;
 
-      // Insert after system prompt (index 0) but before history
       if (ctxBudget.allocate('sender_context', [{ role: 'system', content: senderInfo }])) {
-        messages.splice(1, 0, { role: 'system', content: senderInfo });
-        bullpenInsertAt = 2;
+        perTurnSystemMessages.push({ role: 'system', content: senderInfo });
       } else {
         logger.warn(
           { agentId, conversationId, senderInfoLength: senderInfo.length },
@@ -1755,8 +1797,7 @@ export class AgentRuntime {
         const delegatedBlock = renderDelegatedTaskContext(identity);
         const delegatedAddendumApplied = ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }]);
         if (delegatedAddendumApplied) {
-          messages.splice(1, 0, { role: 'system', content: delegatedBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: delegatedBlock });
         } else {
           logger.error(
             { agentId, conversationId, blockLength: delegatedBlock.length },
@@ -1784,8 +1825,7 @@ export class AgentRuntime {
       } else if (taskEvent.payload.channelId === 'internal' && identity) {
         const identityBlock = renderRequesterIdentity(identity);
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: identityBlock }])) {
-          messages.splice(1, 0, { role: 'system', content: identityBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: identityBlock });
         } else {
           logger.error(
             { agentId, conversationId, blockLength: identityBlock.length },
@@ -1827,8 +1867,7 @@ export class AgentRuntime {
         unknownSenderBlock += `\n${renderSenderFacts({ identityVerified: false, messageAuthenticated: senderVerifiedUnknown, messageAuthentication: taskEvent.payload.metadata?.senderAuthentication })
           .split('\n').map(l => `  ${l}`).join('\n')}`;
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: unknownSenderBlock }])) {
-          messages.splice(1, 0, { role: 'system', content: unknownSenderBlock });
-          bullpenInsertAt = 2;
+          perTurnSystemMessages.push({ role: 'system', content: unknownSenderBlock });
         } else {
           // Security-relevant: the LOW-TRUST block could not fit in the context budget.
           // The coordinator will receive this message with no behavioral constraints for the unresolved sender.
@@ -1923,12 +1962,18 @@ export class AgentRuntime {
     }
 
     // Inject pending Bullpen threads as a system message so the agent is aware
-    // of active inter-agent discussions. Inserted after sender context (if any),
-    // before conversation history — matching spec context budget priority order.
+    // of active inter-agent discussions. Staged with other per-turn system
+    // messages after sender context (if any) — matching spec context budget
+    // priority order — and placed after history on the wire (#2774).
     // Refreshed before every chatWithRetry call so the model sees current thread
     // state, not a stale snapshot from the start of the task (#213).
     if (!suppressAmbientBullpen) {
-      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, ambientBullpenThreads);
+      await this.refreshBullpenContext(
+        perTurnSystemMessages,
+        perTurnSystemMessages.length,
+        agentId,
+        ambientBullpenThreads,
+      );
     }
 
     // Record bullpen context in the budget for observability. Match by the
@@ -1936,16 +1981,16 @@ export class AgentRuntime {
     // detection sites can't drift apart. Honour the decision: refresh has
     // already spliced the block in, and a seven-day window makes that block
     // large enough to overrun a small context window if it is sent anyway (#1899).
-    const bullpenMsg = messages.find(
+    const bullpenMsg = perTurnSystemMessages.find(
       m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
     );
     const bullpenFits = ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
     let ambientBullpenDropped = false;
     if (bullpenMsg && !bullpenFits) {
-      const idx = messages.findIndex(
+      const idx = perTurnSystemMessages.findIndex(
         m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
       );
-      if (idx !== -1) messages.splice(idx, 1);
+      if (idx !== -1) perTurnSystemMessages.splice(idx, 1);
       // The block never reached the model. Leave those threads unmarked so a later
       // wake can try again. The woke thread is not in this map; it is still stamped.
       ambientBullpenThreads.clear();
@@ -1975,7 +2020,7 @@ export class AgentRuntime {
       }
       const resolvedBlock = formatResolvedEntitiesBlock(resolvedCards);
       if (resolvedBlock && ctxBudget.allocate(RESOLVED_ENTITIES_TIER, [{ role: 'system', content: resolvedBlock }])) {
-        messages.push({ role: 'system', content: resolvedBlock });
+        perTurnSystemMessages.push({ role: 'system', content: resolvedBlock });
       } else if (!resolvedBlock) {
         ctxBudget.allocate(RESOLVED_ENTITIES_TIER, []);
       } else {
@@ -2027,7 +2072,7 @@ export class AgentRuntime {
         ? [{ role: 'system', content: contactRecent.block }]
         : [];
       if (contactRecent.block && ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, blockMessage)) {
-        messages.push(blockMessage[0]!);
+        perTurnSystemMessages.push(blockMessage[0]!);
       } else if (!contactRecent.block) {
         ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, []);
       } else {
@@ -2038,11 +2083,28 @@ export class AgentRuntime {
       }
     }
 
-    // Append history and user message to complete the messages array.
-    // Final order: system prompt → sender context → bullpen → resolved entities
-    // → contact recent history → history → user message.
+    // Append history, then per-turn system messages, then the latest user message.
+    // Final order: stable system → history → sender → bullpen → resolved entities
+    // → contact recent → pre-activated skill bodies → (turn context +) user message
+    // (#2774 option a; skill bodies as system per 2026-11-27 decision).
     messages.push(...budgetedHistory);
-    messages.push({ role: 'user', content: promptContent });
+    // Skill bodies last among after-history system rows — just before the user
+    // message — so they stay instructions without sitting in forgeable user text.
+    // The row was already reserved via allocateRequired('skill_bodies') above.
+    if (skillBodiesMessage) {
+      perTurnSystemMessages.push(skillBodiesMessage);
+    }
+    const bullpenIdxInPerTurn = perTurnSystemMessages.findIndex(
+      m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
+    );
+    // Mid-turn Bullpen refresh: keep the block in the after-history region.
+    bullpenInsertAt = messages.length + (
+      bullpenIdxInPerTurn >= 0
+        ? bullpenIdxInPerTurn
+        : perTurnSystemMessages.length
+    );
+    messages.push(...perTurnSystemMessages);
+    messages.push({ role: 'user', content: userMessageContent });
 
     const maybeAppendCheckpointBudgetNudge = (target: Message[] = messages): void => {
       if (!resumableActive || checkpointBudgetNudgeSent) return;
@@ -3937,6 +3999,9 @@ export class AgentRuntime {
    *
    * Called before every chatWithRetry invocation so the model sees current
    * thread state, not a stale snapshot from the start of the task (#213).
+   * The initial call stages into the per-turn system list (after history on
+   * the wire); mid-turn refreshes splice in place in that after-history region
+   * (#2774 option a).
    *
    * - Finds and removes any existing Bullpen system message (identified by
    *   the `[Bullpen —` prefix produced by formatBullpenContext).

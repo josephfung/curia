@@ -946,12 +946,16 @@ describe('runtime turn-handoff wiring', () => {
       const lanes = new TurnLanes({
         enabled: opts.lanesOn ?? true, maxInjectionsPerTurn: 2, extraRoundsPerInjection: 2, laneWaitTimeoutMs: 60_000, logger: quiet,
       });
-      const calls: { tools: string[]; system: string }[] = [];
+      const calls: { tools: string[]; system: string; user: string }[] = [];
       const chat = vi.fn(async (params: { tools?: ToolDefinition[]; messages: Array<{ role: string; content: unknown }> }) => {
         const system = params.messages.find((m) => m.role === 'system');
+        const users = params.messages.filter((m) => m.role === 'user');
+        const lastUser = users[users.length - 1];
         calls.push({
           tools: (params.tools ?? []).map((t) => t.name),
           system: typeof system?.content === 'string' ? system.content : '',
+          // Other-turns note / hand-off guidance live on the latest user message (#2774).
+          user: typeof lastUser?.content === 'string' ? lastUser.content : '',
         });
         return textResponse('ok');
       });
@@ -964,14 +968,16 @@ describe('runtime turn-handoff wiring', () => {
     it('eligible: both shown', async () => {
       const call = await firstCall(myTask());
       expect(call.tools).toContain('turn-handoff');
-      expect(call.system).toContain(GUIDANCE);
+      expect(call.user).toContain(GUIDANCE);
+      expect(call.system).not.toContain(GUIDANCE);
     });
 
     it('lanes off: neither, but the per-turn hand-off line stays', async () => {
       const call = await firstCall(myTask(), { lanesOn: false });
       expect(call.tools).not.toContain('turn-handoff');
-      expect(call.system).not.toContain(GUIDANCE);
-      expect(call.system).toContain('hand-off: available');
+      expect(call.user).not.toContain(GUIDANCE);
+      expect(call.user).toContain('hand-off: available');
+      expect(call.system).not.toContain('hand-off: available');
     });
 
     it('unscanned, flagged, clipped or missing text: neither', async () => {
@@ -984,7 +990,7 @@ describe('runtime turn-handoff wiring', () => {
       for (const metadata of variants) {
         const call = await firstCall(myTask({ metadata }));
         expect(call.tools).not.toContain('turn-handoff');
-        expect(call.system).not.toContain(GUIDANCE);
+        expect(call.user).not.toContain(GUIDANCE);
       }
     });
 
@@ -995,9 +1001,9 @@ describe('runtime turn-handoff wiring', () => {
         metadata: { originator: ORIGINATOR, wakeContext: { derived: true }, lateDelegation: { agent: 'research', task: 't' } },
       });
       const call = await firstCall(wake, { seed: (r) => startMine(r, {}, { originatorContactId: CONTACT }) });
-      expect(call.system).not.toContain('## Your other recent turns with this person');
+      expect(call.user).not.toContain('## Your other recent turns with this person');
       expect(call.tools).not.toContain('turn-handoff');
-      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.user).not.toContain(GUIDANCE);
     });
 
     it('an unauthenticated principal email root: no note, no tool and no guidance line', async () => {
@@ -1013,9 +1019,9 @@ describe('runtime turn-handoff wiring', () => {
       const call = await firstCall(email, { selfEmails: ['curia@example.com'], emailOneToOne: true });
       // A one-to-one thread, but a forged From could resolve to the principal: the reader must
       // pass the hand-off's sender rule, so the other turns' words and actions are not shown.
-      expect(call.system).not.toContain('## Your other recent turns with this person');
+      expect(call.user).not.toContain('## Your other recent turns with this person');
       expect(call.tools).not.toContain('turn-handoff');
-      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.user).not.toContain(GUIDANCE);
 
       const verified = await firstCall(myTask({
         channelId: 'email',
@@ -1026,17 +1032,18 @@ describe('runtime turn-handoff wiring', () => {
           inboundScanFindingCount: 0,
         },
       }), { selfEmails: ['curia@example.com'], emailOneToOne: true });
-      expect(verified.system).toContain('## Your other recent turns with this person');
+      expect(verified.user).toContain('## Your other recent turns with this person');
       expect(verified.tools).toContain('turn-handoff');
-      expect(verified.system).toContain(GUIDANCE);
+      expect(verified.user).toContain(GUIDANCE);
+      expect(verified.system).not.toContain('## Your other recent turns with this person');
     });
 
     it('the tool not registered: no guidance line either, and a warning', async () => {
       const warn = vi.fn();
       const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
       const call = await firstCall(myTask(), { tools: ['signal-send'], logger });
-      expect(call.system).toContain('## Your other recent turns with this person');
-      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.user).toContain('## Your other recent turns with this person');
+      expect(call.user).not.toContain(GUIDANCE);
       expect(call.tools).not.toContain('turn-handoff');
       expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('turn-handoff is not registered'));
     });
@@ -1050,7 +1057,7 @@ describe('runtime turn-handoff wiring', () => {
       const warn = vi.fn();
       const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
       const call = await firstCall(myTask({ toolAllowlist }), { logger });
-      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.user).not.toContain(GUIDANCE);
       expect(call.tools ?? []).not.toContain('turn-handoff');
       expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('allowlist'));
     });
@@ -1059,7 +1066,7 @@ describe('runtime turn-handoff wiring', () => {
       const warn = vi.fn();
       const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
       const call = await firstCall(myTask({ toolAllowlist: ['signal-send'] }), { logger });
-      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.user).not.toContain(GUIDANCE);
       expect(call.tools).toEqual(['signal-send']);
       expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('allowlist'));
     });
@@ -1068,14 +1075,18 @@ describe('runtime turn-handoff wiring', () => {
   describe('who reads the note (#2588 SEC MEDIUM-1, I4)', () => {
     const HEADING = '## Your other recent turns with this person';
 
-    async function system(task: AgentTaskEvent): Promise<string> {
+    /** Latest user message content — where the other-turns note lives after #2774. */
+    async function turnContext(task: AgentTaskEvent): Promise<string> {
       const quiet = pino({ level: 'silent' });
       const registry = new TurnActivityRegistry({ logger: quiet });
       startTarget(registry);
       let seen = '';
       const chat = vi.fn(async (params: { messages: Array<{ role: string; content: unknown }> }) => {
-        const sys = params.messages.find((m) => m.role === 'system');
-        if (seen === '') seen = typeof sys?.content === 'string' ? sys.content : '';
+        if (seen === '') {
+          const users = params.messages.filter((m) => m.role === 'user');
+          const last = users[users.length - 1];
+          seen = typeof last?.content === 'string' ? last.content : '';
+        }
         return textResponse('ok');
       });
       await buildRuntime({ registry, lanes: newLanes(quiet), chat }).bus.publish('dispatch', task);
@@ -1083,22 +1094,22 @@ describe('runtime turn-handoff wiring', () => {
     }
 
     it('the same person in a Signal DM gets the note; in a Signal group, none', async () => {
-      expect(await system(myTask())).toContain(HEADING);
-      expect(await system(myTask({ conversationId: 'signal:group=abc' }))).not.toContain(HEADING);
+      expect(await turnContext(myTask())).toContain(HEADING);
+      expect(await turnContext(myTask({ conversationId: 'signal:group=abc' }))).not.toContain(HEADING);
     });
 
     it('a scheduled job carrying the principal\'s originator gets no note', async () => {
-      expect(await system(myTask({ channelId: 'scheduler', conversationId: 'scheduler:job-1' }))).not.toContain(HEADING);
+      expect(await turnContext(myTask({ channelId: 'scheduler', conversationId: 'scheduler:job-1' }))).not.toContain(HEADING);
     });
 
     it('a synthetic turn gets no note; a hand-off recovery turn does', async () => {
-      expect(await system(myTask({ syntheticTurn: true }))).not.toContain(HEADING);
-      expect(await system(myTask({
+      expect(await turnContext(myTask({ syntheticTurn: true }))).not.toContain(HEADING);
+      expect(await turnContext(myTask({
         syntheticTurn: true,
         metadata: { originator: ORIGINATOR, handoffRecovery: { targetRootId: 'other-root', reason: 'returned' } },
       }))).toContain(HEADING);
       // It reads the note on its copied originator's authentication, like any other reader.
-      expect(await system(myTask({
+      expect(await turnContext(myTask({
         syntheticTurn: true,
         metadata: {
           originator: { ...ORIGINATOR, authenticated: false },
@@ -1109,9 +1120,9 @@ describe('runtime turn-handoff wiring', () => {
 
     it('a sender its channel did not authenticate gets no note, SMS included', async () => {
       const unstamped = { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known', initiatedAt: INITIATED_AT };
-      expect(await system(myTask({ metadata: { originator: unstamped } }))).not.toContain(HEADING);
-      expect(await system(myTask({ metadata: { originator: { ...ORIGINATOR, authenticated: false } } }))).not.toContain(HEADING);
-      expect(await system(myTask({
+      expect(await turnContext(myTask({ metadata: { originator: unstamped } }))).not.toContain(HEADING);
+      expect(await turnContext(myTask({ metadata: { originator: { ...ORIGINATOR, authenticated: false } } }))).not.toContain(HEADING);
+      expect(await turnContext(myTask({
         channelId: 'sms',
         conversationId: 'sms:+15550002',
         metadata: { originator: { ...unstamped, channel: 'sms' } },
@@ -1123,7 +1134,7 @@ describe('runtime turn-handoff wiring', () => {
       // by channel, as the backstop's hold details do.
       const principal = { ...ORIGINATOR, systemRole: 'principal', tier: 'principal', authenticated: false };
       for (const channelId of ['web', 'cli']) {
-        expect(await system(myTask({
+        expect(await turnContext(myTask({
           channelId,
           conversationId: `${channelId}:session-1`,
           metadata: { originator: { ...principal, channel: channelId }, inboundSenderText: REQUEST, inboundScanFindingCount: 0 },

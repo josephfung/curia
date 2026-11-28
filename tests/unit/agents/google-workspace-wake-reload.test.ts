@@ -52,14 +52,18 @@ describe('coordinator wake re-loads an activated google-workspace (#2024)', () =
       setActiveSkillsBlock: vi.fn(),
     };
 
-    const firstCall: { tools: string[]; system: string[] } = { tools: [], system: [] };
+    const firstCall: { tools: string[]; system: string[]; user: string[] } = { tools: [], system: [], user: [] };
     const provider: LLMProvider = {
       id: 'mock',
       chat: async (params) => {
         if (firstCall.tools.length === 0) {
           firstCall.tools = params.tools?.map((t) => t.name) ?? [];
-          firstCall.system = (params.messages as Array<{ role: string; content: unknown }>)
+          const msgs = params.messages as Array<{ role: string; content: unknown }>;
+          firstCall.system = msgs
             .filter((m) => m.role === 'system' && typeof m.content === 'string')
+            .map((m) => m.content as string);
+          firstCall.user = msgs
+            .filter((m) => m.role === 'user' && typeof m.content === 'string')
             .map((m) => m.content as string);
         }
         return {
@@ -97,6 +101,8 @@ describe('coordinator wake re-loads an activated google-workspace (#2024)', () =
     }));
 
     expect(firstCall.tools).toEqual(expect.arrayContaining(['update_drive_file', 'manage_drive_access', 'get_doc_as_markdown']));
+    // Skill bodies are an after-history system row (#2774 / 2026-11-27), not user turn context.
+    expect(firstCall.user.some((u) => u.includes('[Activated skill: google-workspace]'))).toBe(false);
     expect(firstCall.system.some((s) => s.includes('[Activated skill: google-workspace]'))).toBe(true);
     // Same set as stored, so the wake does not rewrite progress (#1410).
     expect(taskRepo.setActiveSkillsBlock).not.toHaveBeenCalled();

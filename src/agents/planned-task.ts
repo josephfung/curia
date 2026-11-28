@@ -82,25 +82,24 @@ export function isPlannedParentTask(ctx: Pick<BoundTaskContext, 'progress'>): bo
   return isPlannedStep(ctx.progress ?? {});
 }
 
-/** Runtime wiring: append plan guidance and auto-pin the plan tool for eligible bound tasks. */
+/** Runtime wiring: plan guidance (after history, #2774) + auto-pin the plan tool. */
 export function applyPlanHarness(options: {
   boundTaskCtx: BoundTaskContext;
   workingToolDefs: ToolDefinition[] | null | undefined;
   getToolDefinitions: (names: string[]) => ToolDefinition[];
-  effectiveSystemPrompt: string;
-}): { effectiveSystemPrompt: string; workingToolDefs: ToolDefinition[] | null | undefined } {
+}): { planGuidance: string | null; workingToolDefs: ToolDefinition[] | null | undefined } {
   if (!shouldOfferPlanSkill(options.boundTaskCtx)) {
     return {
-      effectiveSystemPrompt: options.effectiveSystemPrompt,
+      planGuidance: null,
       workingToolDefs: options.workingToolDefs,
     };
   }
 
   let workingToolDefs = options.workingToolDefs;
-  const effectiveSystemPrompt = `${options.effectiveSystemPrompt}\n\n${buildPlanTaskGuidanceBlock(
+  const planGuidance = buildPlanTaskGuidanceBlock(
     readExistingPlan(options.boundTaskCtx.progress),
     options.boundTaskCtx.progress,
-  )}`;
+  );
 
   if (!workingToolDefs) {
     workingToolDefs = [];
@@ -113,5 +112,5 @@ export function applyPlanHarness(options: {
     }
   }
 
-  return { effectiveSystemPrompt, workingToolDefs };
+  return { planGuidance, workingToolDefs };
 }
