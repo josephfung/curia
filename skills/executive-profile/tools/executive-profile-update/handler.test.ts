@@ -114,3 +114,45 @@ describe('ExecutiveProfileUpdateHandler guide and note', () => {
     expect(Object.keys(manifest.inputs)).toEqual(['writing_voice', 'guide', 'note']);
   });
 });
+
+describe('ExecutiveProfileUpdateHandler rejects input the merge would ignore (#2764)', () => {
+  const handler = new ExecutiveProfileUpdateHandler();
+
+  it('rejects guide and note nested in writing_voice, leaving the profile unchanged', async () => {
+    const service = makeService();
+    const result = await handler.execute(makeContext(service, {
+      writing_voice: { guide: 'Concise and direct.', note: 'deep dive, confirmed by the principal' },
+    }));
+    expect(result.success).toBe(false);
+    expect(result.success ? '' : result.error).toContain('"guide" and "note" must be top-level inputs');
+    expect(service.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown writing_voice field and names the allowed ones', async () => {
+    const service = makeService();
+    const result = await handler.execute(makeContext(service, { writing_voice: { tone: ['warm'], mood: 'calm' } }));
+    expect(result.success).toBe(false);
+    expect(result.success ? '' : result.error).toContain('Unknown writing_voice field(s): mood');
+    expect(service.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects tone or patterns sent as a string instead of a list', async () => {
+    const service = makeService();
+    const result = await handler.execute(makeContext(service, { writing_voice: { tone: 'Concise and direct' } }));
+    expect(result.success).toBe(false);
+    expect(result.success ? '' : result.error).toContain('tone must be a list of strings');
+    expect(service.update).not.toHaveBeenCalled();
+  });
+
+  it('still accepts camelCase signOff and a top-level guide and note', async () => {
+    const service = makeService();
+    const result = await handler.execute(makeContext(service, {
+      writing_voice: { signOff: 'Avery' },
+      guide: 'Concise and direct.',
+      note: 'deep dive, confirmed by the principal',
+    }));
+    expect(result.success).toBe(true);
+    expect(service.update).toHaveBeenCalledOnce();
+    expect(service.update.mock.calls[0]![0].writingVoice).toMatchObject({ signOff: 'Avery', guide: 'Concise and direct.' });
+  });
+});

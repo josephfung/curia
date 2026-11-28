@@ -1,6 +1,6 @@
 {
   "name": "task-list",
-  "description": "List tasks from the backlog. Filter by status (comma-separated: open,in_progress,blocked,waiting,done,cancelled), owner (curia/ceo/external), tag, parent task, or due-before date. Returns up to 25 tasks by default, sorted by priority then due date. Each result has next_wake_at and wake_state (wake job status). Before promising any follow-up or committing to a later action in a send, activate tasks and call task-create so a task backs that promise.",
+  "description": "List tasks from the backlog. Filter by status (comma-separated: open,in_progress,blocked,waiting,done,cancelled), owner (curia/ceo/external), tag, parent task, or due-before date. Returns up to 25 tasks by default, sorted by priority then due date. Each result has next_wake_at and wake_state (wake job status). Before promising a follow-up or later action in a send, make sure a task backs it: reuse an open one, else activate tasks and task-create.",
   "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",

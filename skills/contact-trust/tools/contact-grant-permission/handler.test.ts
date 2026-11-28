@@ -58,13 +58,12 @@ describe('ContactGrantPermissionHandler pending-recommendation guard (#2764)', (
     expect(contactService.grantPermission).not.toHaveBeenCalled();
   });
 
-  it('refuses a deny when a matching recommendation is still pending', async () => {
+  it('stores a deny even when a matching recommendation is still pending', async () => {
+    // Denying is the safe direction, and decline-grant-recommendation would not store it.
     const { contactService, result } = run({ findResult: pendingRec(), granted: false });
     const out = await result;
-    expect(out.success).toBe(false);
-    if (out.success) throw new Error('expected refusal');
-    expect(out.error).toMatch(/decline-grant-recommendation/);
-    expect(contactService.grantPermission).not.toHaveBeenCalled();
+    expect(out.success).toBe(true);
+    expect(contactService.grantPermission).toHaveBeenCalledWith(CONTACT_ID, expect.any(String), false, ACTOR_ID);
   });
 
   it('grants when the principal asks and no pending recommendation matches', async () => {

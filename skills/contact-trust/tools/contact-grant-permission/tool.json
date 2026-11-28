@@ -1,6 +1,6 @@
 {
   "name": "contact-grant-permission",
-  "description": "Grant or deny a specific permission for a contact when the principal names that grant directly ('Let Dana schedule meetings') and no pending grant recommendation covers the same contact+permission. For answering a recommendation task, use approve-grant-recommendation or decline-grant-recommendation — this tool refuses while a matching recommendation is pending.",
+  "description": "Grant or deny a specific permission for a contact when the principal names it directly ('Let Dana schedule meetings'). A grant is refused while a pending grant recommendation covers the same contact+permission: answer that with approve-grant-recommendation. A denial is always stored.",
   "version": "1.1.1",
   "sensitivity": "elevated",
   "action_risk": "critical",
