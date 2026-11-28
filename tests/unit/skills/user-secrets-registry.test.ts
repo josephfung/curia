@@ -27,9 +27,27 @@ describe('user-secret tools registry enrollment (#1497 / #2764)', () => {
     expect(loaded.tools ?? []).not.toContain('archive-extract');
   });
 
-  it('refuses secrets activation for specialists (ceo-inbox) via allowed_callers (#2764)', () => {
-    // Defence in depth on the vault write path: both member tools list only
-    // coordinator/setup-wizard, so skillReservedForOtherAgents refuses everyone else.
+  it('gives the vault tools to no agent without discovery except setup-wizard (#2764, #995)', () => {
+    // The vault tools carry no allowed_callers: #995 lets a delegated specialist that a
+    // deployment deliberately gives secret-capture-request mint a capture link. What keeps
+    // other specialists (ceo-inbox reading inbound mail) off the vault is that skill-activate
+    // refuses skills an agent without discovery does not list (skill-activate handler tests),
+    // and that no shipped agent lists or pins them here.
+    const vault = new Set(['secrets', 'list-user-secrets', 'secret-capture-request']);
+    const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
+    for (const file of fs.readdirSync(agentsDir).filter((f) => f.endsWith('.yaml'))) {
+      const agent = yaml.load(fs.readFileSync(path.resolve(agentsDir, file), 'utf8')) as {
+        name: string;
+        allow_discovery?: boolean;
+        pinned_skills?: string[];
+      };
+      if (agent.allow_discovery === true || agent.name === 'setup-wizard') continue;
+      const reached = (agent.pinned_skills ?? []).filter((p) => vault.has(p));
+      expect({ agent: agent.name, reached }).toEqual({ agent: agent.name, reached: [] });
+    }
+  });
+
+  it('lets the secrets skill resolve for any agent once the gate above allows it', () => {
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
     const toolsDir = path.resolve(skillsDir, 'secrets', 'tools');
@@ -37,6 +55,7 @@ describe('user-secret tools registry enrollment (#1497 / #2764)', () => {
       const manifest = JSON.parse(
         fs.readFileSync(path.resolve(toolsDir, name, 'tool.json'), 'utf-8'),
       ) as ToolManifest;
+      expect(manifest.allowed_callers).toBeUndefined();
       tools.register(manifest, noopHandler);
     }
     const parsed = parseSkillMd(fs.readFileSync(path.resolve(skillsDir, 'secrets', 'SKILL.md'), 'utf-8'));
@@ -50,23 +69,10 @@ describe('user-secret tools registry enrollment (#1497 / #2764)', () => {
       },
       path.resolve(skillsDir, 'secrets'),
     );
-
-    expect(
-      resolveSkillActivation({
-        skillName: 'secrets',
-        skillRegistry: skills,
-        toolRegistry: tools,
-        agentId: 'ceo-inbox',
-      }),
-    ).toEqual({ error: expect.stringContaining('reserved for other agents') });
-
-    expect(
-      resolveSkillActivation({
-        skillName: 'secrets',
-        skillRegistry: skills,
-        toolRegistry: tools,
-        agentId: 'coordinator',
-      }),
-    ).not.toHaveProperty('error');
+    for (const agentId of ['coordinator', 'accounts-specialist']) {
+      expect(
+        resolveSkillActivation({ skillName: 'secrets', skillRegistry: skills, toolRegistry: tools, agentId }),
+      ).not.toHaveProperty('error');
+    }
   });
 });
