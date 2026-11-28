@@ -1323,9 +1323,9 @@ export class AgentRuntime {
         await appendPreActivated(['bullpen'], 'bullpen', 'Bullpen skill pre-activation skipped');
       }
 
-      // Every scheduler-fired turn gets scheduler (holds scheduler-report / future job-report).
+      // Every scheduler-fired turn gets job-report (scheduler-report) (#2764).
       if (taskEvent.payload.channelId === 'scheduler') {
-        await appendPreActivated(['scheduler'], 'job', 'Scheduler skill pre-activation skipped');
+        await appendPreActivated(['job-report'], 'job', 'Job-report skill pre-activation skipped');
         // Declared job skills + last-run learned activations live on the payload / metadata.
         const meta = taskEvent.payload.metadata as Record<string, unknown> | undefined;
         const declared = collectJobSkillNames(
@@ -1340,10 +1340,20 @@ export class AgentRuntime {
         }
       }
 
-      // Spot-check replies: pre-activate reports (digest after PR 3 split).
+      // Spot-check replies: pre-activate digest instead of instructing the model (#2764).
       // `by: trigger` — distinct from conversation carry for Layer-3 by-path counts.
       if (turnGuidanceKeys.includes('spot-check-reply')) {
-        await appendPreActivated(['reports'], 'trigger', 'Spot-check reports skill pre-activation skipped');
+        await appendPreActivated(['digest'], 'trigger', 'Spot-check digest skill pre-activation skipped');
+      }
+
+      // Decay-warning turns: pre-activate memory-review so decay-warnings-list /
+      // memory-confirm are callable without a discovery round (#2764).
+      if (backlog && backlog.decayWarnings > 0) {
+        await appendPreActivated(
+          ['memory-review'],
+          'trigger',
+          'Memory-review skill pre-activation skipped',
+        );
       }
     }
 

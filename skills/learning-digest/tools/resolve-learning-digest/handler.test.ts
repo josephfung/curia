@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ResolveLearningDigestHandler, resolveDigestTaskId } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
-import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
+import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../../../learning-jobs/tools/voice-learn/handler.js';
 import {
   VOICE_PROPOSAL_KEY,
   COMPLETION_DIGEST_KEY,

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ReportToPrincipalHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
-import type { EventBus } from '../../../../src/bus/bus.js';
-import type { PrincipalReportEvent } from '../../../../src/bus/events.js';
-import { createSilentLogger } from '../../../../src/logger.js';
+import type { ToolContext } from '../../src/skills/types.js';
+import type { EventBus } from '../../src/bus/bus.js';
+import type { PrincipalReportEvent } from '../../src/bus/events.js';
+import { createSilentLogger } from '../../src/logger.js';
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
   return {

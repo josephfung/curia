@@ -73,7 +73,9 @@ const EMAIL_TRIAGE_AGENT = 'ceo-inbox';
 const REQUIRED_ENTRIES: ReadonlyArray<{ kind: RegistryKind; name: string }> = [
   { kind: 'agent', name: EMAIL_TRIAGE_AGENT },
   { kind: 'skill', name: 'ceo-inbox' },
-  { kind: 'skill', name: 'learning' },
+  { kind: 'skill', name: 'learning-jobs' },
+  // Review surface for learning digest (list/resolve) — producers stay on learning-jobs (#2764).
+  { kind: 'skill', name: 'learning-digest' },
   { kind: 'skill', name: 'tasks' },
 ];
 const START_LOCK_KEY = 'onboarding:start';

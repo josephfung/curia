@@ -5,8 +5,8 @@
 // carries the item. Published from the dispatch layer, like the other tools that write
 // principal-facing records (deny-action's human.decision).
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { createPrincipalReport, type PrincipalReportUrgency } from '../../../../src/bus/events.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+import { createPrincipalReport, type PrincipalReportUrgency } from '../../src/bus/events.js';
 
 const MAX_SUMMARY = 500;
 const URGENCIES: readonly PrincipalReportUrgency[] = ['digest', 'now'];
