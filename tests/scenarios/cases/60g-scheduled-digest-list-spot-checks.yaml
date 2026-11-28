@@ -45,6 +45,13 @@ expected_behaviors:
       min: 1
       max: 1
       success: true
+  - id: reports_once
+    weight: critical
+    description: Calls scheduler-report no more than once in all (a second report would overwrite the first).
+    check:
+      called: scheduler-report
+      min: 0
+      max: 1
   - id: digest_activated
     weight: critical
     description: digest is activated.
