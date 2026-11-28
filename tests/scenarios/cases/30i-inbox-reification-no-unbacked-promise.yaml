@@ -135,22 +135,26 @@ expected_behaviors:
     description: Marks the message read (📌 Seen end state).
     check:
       called: ceo-inbox-mark-read
+      success: true
       with: { message_id: msg-30i-sow }
   - id: looked_for_document
     weight: important
     description: Searches the inbox for the signed SOW before deciding.
     check:
       called: ceo-inbox-search
+      success: true
   - id: tried_backing_task
     weight: important
     description: Tries to create the follow-up task that would back a promise.
     check:
+      # Attempt only — task-create is stubbed to fail so the unbacked-promise path fires.
       called: task-create
   - id: labelled_seen
     weight: important
     description: Labels the message 📌 Seen.
     check:
       called: ceo-inbox-label
+      success: true
       with: { message_id: msg-30i-sow }
       contains: { labels: Seen }
 failure_modes:

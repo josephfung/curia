@@ -156,8 +156,8 @@ expected_behaviors:
     description: Opens the booking page in the browser, as one action or within a batch.
     check:
       any_of:
-        - { called: web-browser, agent: any, contains: { url: "https://calendly.com/jordan-blake-example/30min" } }
-        - { called: web-browser, agent: any, contains: { actions: "https://calendly.com/jordan-blake-example/30min" } }
+        - { called: web-browser, success: true, agent: any, contains: { url: "https://calendly.com/jordan-blake-example/30min" } }
+        - { called: web-browser, success: true, agent: any, contains: { actions: "https://calendly.com/jordan-blake-example/30min" } }
   - id: books_free_slot
     weight: critical
     description: >

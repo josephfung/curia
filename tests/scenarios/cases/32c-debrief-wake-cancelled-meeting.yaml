@@ -76,11 +76,13 @@ expected_behaviors:
     description: Checks the calendar for the meeting.
     check:
       called: calendar-list-events
+      success: true
   - id: completes_task
     weight: critical
     description: Completes the debrief task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001 }
   - id: no_prompt
     weight: critical

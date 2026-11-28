@@ -69,6 +69,7 @@ expected_behaviors:
     description: Has ceo-inbox draft the email in the principal's mailbox.
     check:
       called: delegate
+      success: true
       with: { agent: ceo-inbox }
   - id: no_curia_mailbox_draft
     weight: critical
@@ -85,6 +86,7 @@ expected_behaviors:
     description: Completes the task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 7b3c4d5e-6f70-4812-9a3b-15b000000001 }
 failure_modes:
   - Messages the principal that the draft is ready

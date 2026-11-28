@@ -100,6 +100,7 @@ expected_behaviors:
     description: Previews the merge with contact-merge dry_run true.
     check:
       called: contact-merge
+      success: true
       with: { dry_run: true }
   - id: no_real_merge
     weight: critical
@@ -128,6 +129,7 @@ expected_behaviors:
     description: Hands the review task to the principal (task-update owner ceo) with a progress note.
     check:
       called: task-update
+      success: true
       with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo }
       contains: { progress_note: "Smith" }
   # Parking is what the prompt asks for, but owner ceo and the note are what deliver the
@@ -138,12 +140,14 @@ expected_behaviors:
     description: Parks the handed-over task as waiting.
     check:
       called: task-update
+      success: true
       with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo, status: waiting }
   - id: no_wake_set
     weight: important
     description: Hands the task over without a wake; the answer comes back by delegation.
     check:
       called: task-update
+      success: true
       with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo, wake_at: null }
   - id: note_asks_to_confirm
     weight: critical

@@ -77,12 +77,14 @@ expected_behaviors:
     description: Calls signal-send with `recipient` set to "principal".
     check:
       called: signal-send
+      success: true
       with: { recipient: principal }
   - id: message_carries_request
     weight: critical
     description: The Signal message carries the request's content (Alice Chen, the merger terms, Friday).
     check:
       called: signal-send
+      success: true
       contains: { message: Friday }
   - id: requested_channel_only
     weight: important
@@ -94,6 +96,7 @@ expected_behaviors:
     description: Passes a context_bridge whose agent_id is ceo-inbox, so the principal's reply routes back.
     check:
       called: signal-send
+      success: true
       contains: { context_bridge: ceo-inbox }
 failure_modes:
   - Replies on the thread that it will pass the message on, and sends nothing

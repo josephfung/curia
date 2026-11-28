@@ -102,6 +102,7 @@ expected_behaviors:
     description: Sends no more than one message in all; the missed session gets one "missed you".
     check:
       called: [signal-send, sms-send, slack-send, web-send, email-send]
+      success: true
       max: 1
   - id: books_nothing_yet
     weight: critical

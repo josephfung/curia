@@ -91,6 +91,7 @@ expected_behaviors:
     description: Moves the draft with ceo-inbox-draft-edit and move_to_mailbox personal.
     check:
       called: ceo-inbox-draft-edit
+      success: true
       with: { move_to_mailbox: personal }
       min: 1
   - id: stores_preference
@@ -100,6 +101,7 @@ expected_behaviors:
       the stored value, so entity-context returns it next time.
     check:
       called: memory-store
+      success: true
       contains: { entity: Priya, value: personal }
       min: 1
   - id: preference_scoped_to_topic
@@ -110,6 +112,7 @@ expected_behaviors:
       so this is its own check beside stores_preference.
     check:
       called: memory-store
+      success: true
       contains: { entity: Priya, value: tax }
       min: 1
   - id: no_resend_or_recompose

@@ -129,6 +129,7 @@ expected_behaviors:
     description: Sends the reply it drafted with ceo-inbox-send-draft, on its own.
     check:
       called: ceo-inbox-send-draft
+      success: true
       with: { draft_id: draft-30aa-reply }
   - id: ack_delivered_to_priya
     weight: critical

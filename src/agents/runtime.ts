@@ -640,9 +640,10 @@ export class AgentRuntime {
   /**
    * Shared pre-activation entry point (#2764 / ADR-070): add each skill's tools to
    * `workingToolDefs` (skipping names already there) and return instruction blocks for
-   * an after-history `role: 'system'` message (#2774 / 2026-11-27 decision). A skill the
-   * agent may not activate is logged with `skipMessage` and skipped. Each success
-   * publishes `skill.activated` with `by`.
+   * the after-history turn context (#2774). A skill the agent may not activate is
+   * logged with `skipMessage` and skipped. Each success publishes `skill.activated`
+   * with `by`. Callers today: wake, conversation, bullpen, job, job-learned,
+   * spot-check (`by: 'trigger'`), onboarding.
    */
   private async preActivateSkills(
     skillNames: string[],

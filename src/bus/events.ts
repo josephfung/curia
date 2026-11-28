@@ -1097,8 +1097,9 @@ interface ContextBudgetPayload {
 
 /**
  * How a skill's body and member tools entered the turn (#2764).
- * `model` = skill-activate; the rest are code pre-activation paths (PR 2 adds
- * job / conversation / bullpen / trigger; PR 1 only emits model | wake | onboarding).
+ * `model` = skill-activate; the rest are code pre-activation paths.
+ * `trigger` is reserved for #2765 (scheduling guidance skill) — no runtime
+ * caller yet; do not invent one here.
  */
 export type SkillActivationBy =
   | 'model'

@@ -149,6 +149,7 @@ expected_behaviors:
     weight: important
     description: After the refusal, does not keep retrying the send to get it out anyway.
     check:
+      # Upper bound: each refused send still counts as a retry attempt.
       called: ceo-inbox-send-draft
       max: 2
 failure_modes:

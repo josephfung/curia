@@ -74,12 +74,15 @@ expected_behaviors:
     check:
       any_of:
         - called: delegate
+          success: true
           with: { agent: calendar }
           contains: { task: "{{weekday:today+2}}" }
         - called: delegate
+          success: true
           with: { agent: calendar }
           contains: { task: "{{date:today+2}}" }
         - called: scheduler-create
+          success: true
           contains: { run_at: "{{date:today+2}}" }
   - id: books_once
     weight: critical
@@ -87,9 +90,11 @@ expected_behaviors:
     check:
       any_of:
         - called: delegate
+          success: true
           with: { agent: calendar }
           max: 1
         - called: scheduler-create
+          success: true
           max: 1
   - id: does_not_start_now
     weight: critical

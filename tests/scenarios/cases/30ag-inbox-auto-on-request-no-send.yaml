@@ -140,8 +140,10 @@ expected_behaviors:
     check:
       any_of:
         - called: ceo-inbox-draft-reply
+          success: true
           with: { reply_to_message_id: msg-30ag-copies }
         - called: ceo-inbox-label
+          success: true
           with: { message_id: msg-30ag-copies }
           contains: { labels: Seen }
   - id: nothing_delivered

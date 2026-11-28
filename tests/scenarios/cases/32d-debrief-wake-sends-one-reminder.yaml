@@ -101,6 +101,7 @@ expected_behaviors:
     description: Stores the reminded:evt-acme-0001 guard.
     check:
       called: config-store
+      success: true
       with: { action: store }
       contains: { key: "reminded:evt-acme-0001" }
   - id: schedules_expiry_wake
@@ -108,6 +109,7 @@ expected_behaviors:
     description: Updates the task with a wake_at for the expiry check.
     check:
       called: task-update
+      success: true
       with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001 }
       contains: { wake_at: ":" }
   - id: not_cancelled

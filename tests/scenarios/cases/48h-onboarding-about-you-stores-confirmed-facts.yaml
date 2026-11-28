@@ -107,8 +107,10 @@ expected_behaviors:
     check:
       any_of:
         - called: memory-store
+          success: true
           contains: { value: toronto }
         - called: contact-update
+          success: true
           contains: { fields: toronto }
   # Judged: storing "has never run a marathon" records what Avery said and is fine; storing
   # the race result as Avery's is the failure. A substring check can't tell them apart.
@@ -140,18 +142,21 @@ expected_behaviors:
     description: Adds Priya as a contact with contact-create.
     check:
       called: contact-create
+      success: true
       contains: { name: priya }
   - id: daughter_contact
     weight: important
     description: Adds Mara as a contact with contact-create.
     check:
       called: contact-create
+      success: true
       contains: { name: mara }
   - id: brief_marks_updated
     weight: important
     description: Updates the research brief's marks with doc-write.
     check:
       called: doc-write
+      success: true
       with: { path: /meetings/onboarding/research-brief.md }
   - id: relationship_recorded
     weight: important

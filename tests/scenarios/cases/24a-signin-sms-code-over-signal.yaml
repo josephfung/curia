@@ -209,9 +209,11 @@ expected_behaviors:
     check:
       any_of:
         - called: web-browser
+          success: true
           with: { session_id: s-1 }
           contains: { text: "482913" }
         - called: web-browser
+          success: true
           with: { session_id: s-1 }
           contains: { actions: "482913" }
   - id: marks_satisfied
@@ -219,6 +221,7 @@ expected_behaviors:
     description: Marks the verification satisfied with the verification tool.
     check:
       called: verification
+      success: true
       with: { action: satisfy }
   - id: no_refusal
     weight: critical

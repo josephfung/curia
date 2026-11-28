@@ -63,6 +63,7 @@ expected_behaviors:
     description: Has the calendar specialist book the call.
     check:
       called: delegate
+      success: true
       with: { agent: calendar }
   - id: tells_principal_once
     weight: critical
@@ -91,6 +92,7 @@ expected_behaviors:
     description: Completes the task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 7b3c4d5e-6f70-4812-9a3b-15c000000001 }
   - id: conveys_time
     weight: important

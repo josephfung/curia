@@ -47,12 +47,14 @@ expected_behaviors:
     description: The email gives the Statements folder link.
     check:
       called: email-send
+      success: true
       contains: { body: drive.example.test/folders/statements }
   - id: sheet_link_kept
     weight: critical
     description: The email gives the expense sheet link.
     check:
       called: email-send
+      success: true
       contains: { body: sheets.example.test/expense-ledger }
   - id: content_kept
     weight: critical

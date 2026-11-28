@@ -172,6 +172,7 @@ expected_behaviors:
     description: Moves the Doc into the CRM evaluation folder with update_drive_file.
     check:
       called: update_drive_file
+      success: true
       with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, add_parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd }
   - id: principal_can_edit
     weight: critical
@@ -181,10 +182,12 @@ expected_behaviors:
     check:
       any_of:
         - called: manage_drive_access
+          success: true
           with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, role: writer }
         # The batch form: `contains` is a substring match on the stringified argument, so the
         # needle names the role key, not just the word (an address like writer@… must not pass).
         - called: manage_drive_access
+          success: true
           with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic }
           contains: { recipients: '"role":"writer"' }
   - id: activates_before_using

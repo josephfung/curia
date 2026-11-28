@@ -119,10 +119,13 @@ expected_behaviors:
     check:
       any_of:
         - called: get_doc_as_markdown
+          success: true
           with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
         - called: get_doc_content
+          success: true
           with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
         - called: get_drive_file_content
+          success: true
           with: { file_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
   - id: answers_from_doc
     weight: important

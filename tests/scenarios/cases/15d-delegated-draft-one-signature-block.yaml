@@ -100,6 +100,7 @@ expected_behaviors:
     description: Sends the meeting request to Jamie with email-send.
     check:
       called: email-send
+      success: true
   - id: no_second_signature_block
     weight: critical
     description: >

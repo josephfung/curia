@@ -165,6 +165,7 @@ expected_behaviors:
     description: Tries to publish a draft as a Google Doc (or create a Doc or Drive file), meeting the failure.
     check:
       any_of:
+        # Attempt only — stubs return error on purpose ("meeting the failure").
         - called: doc-publish-google
         - called: create_doc
         - called: create_drive_file
@@ -173,6 +174,7 @@ expected_behaviors:
     description: Raises the deep_dive_delivery_failed operator notice with onboarding-progress.
     check:
       called: onboarding-progress
+      success: true
       with: { op: operator_notice, event: deep_dive_delivery_failed }
       max: 1
   - id: never_emails_principal

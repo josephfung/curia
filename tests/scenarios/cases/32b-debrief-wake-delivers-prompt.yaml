@@ -81,6 +81,7 @@ expected_behaviors:
     description: Checks the calendar that the meeting happened before prompting.
     check:
       called: calendar-list-events
+      success: true
   - id: posts_once_to_coordinator
     weight: critical
     description: Opens exactly one bullpen thread, with the coordinator as a participant.
@@ -95,6 +96,7 @@ expected_behaviors:
     description: Stores the prompted:evt-acme-0001 guard.
     check:
       called: config-store
+      success: true
       with: { action: store }
       contains: { key: "prompted:evt-acme-0001" }
   - id: guard_after_post
@@ -107,6 +109,7 @@ expected_behaviors:
     description: Updates the task to owner ceo with a wake_at for the reminder.
     check:
       called: task-update
+      success: true
       with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32b000000001, owner: ceo }
       contains: { wake_at: ":" }
   - id: keeps_task_open

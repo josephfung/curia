@@ -84,8 +84,10 @@ expected_behaviors:
     check:
       any_of:
         - called: contact-dedup-exclude
+          success: true
           with: { contact_a_id: "{{contact:nora}}", contact_b_id: "{{contact:nquinn}}" }
         - called: contact-dedup-exclude
+          success: true
           with: { contact_a_id: "{{contact:nquinn}}", contact_b_id: "{{contact:nora}}" }
   - id: no_merge
     weight: critical
@@ -97,6 +99,7 @@ expected_behaviors:
     description: Completes the Nora Quinn review task.
     check:
       called: task-complete
+      success: true
       with: { task_id: 8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b }
   - id: leaves_other_task
     weight: critical
@@ -109,6 +112,7 @@ expected_behaviors:
     description: Finds the review task with task-list filtered on the dedup tag.
     check:
       called: task-list
+      success: true
       with: { tag: dedup }
   - id: no_release
     weight: important

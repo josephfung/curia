@@ -77,6 +77,7 @@ expected_behaviors:
     description: Calls set-autonomy once; no other score is tried.
     check:
       called: set-autonomy
+      success: true
       max: 1
   - id: triage_stays_held
     weight: critical
@@ -88,6 +89,7 @@ expected_behaviors:
     description: Marks the independence topic done with onboarding-progress after applying the score.
     check:
       called: onboarding-progress
+      success: true
       with: { op: topic_done, topic_id: independence }
   - id: reads_back
     weight: important

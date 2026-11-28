@@ -35,6 +35,7 @@ expected_behaviors:
     description: Calls email-send with `to` set to "principal".
     check:
       called: email-send
+      success: true
       with: { to: principal }
   - id: no_raw_address
     weight: critical
