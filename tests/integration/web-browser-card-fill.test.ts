@@ -27,7 +27,7 @@ import {
   type CreditCardPublicFields,
   type CreditCardSecretDoc,
 } from '../../src/secrets/structured-secret-schema.js';
-import { WebBrowserHandler } from '../../skills/web/tools/web-browser/handler.js';
+import { WebBrowserHandler } from '../../skills/browser/tools/web-browser/handler.js';
 
 // The fixture hosts (*.example.test) do not resolve; the private-address guard (#2521)
 // resolves every host it lets through, so answer with a public address.

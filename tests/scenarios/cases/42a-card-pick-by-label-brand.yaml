@@ -2,7 +2,7 @@
 # label and brand match, and the agent asks the principal to approve that card for this
 # checkout before filling anything. Rule: the `list-user-secrets` card summary
 # (skills/list-user-secrets/handler.ts, CARD_SUMMARY) and the `card-use-request` tool
-# description (skills/web/tools/card-use-request/tool.json). The wrong answers are
+# description (skills/browser/tools/card-use-request/tool.json). The wrong answers are
 # attractive: Work Visa is also a Visa, and the Amex is the last card listed.
 #
 # Scenarios have no seeding path for a card's public fields, so list-user-secrets is

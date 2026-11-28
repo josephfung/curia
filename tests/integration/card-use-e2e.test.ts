@@ -19,8 +19,8 @@ import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { ApprovalTriggerService } from '../../src/autonomy/approval-trigger.js';
 import { approveFromConsole } from '../../src/dashboard/console-approval.js';
 import { SecretRefRefusal, type CreditCardPublicFields } from '../../src/secrets/structured-secret-schema.js';
-import { CardUseConfirmHandler } from '../../skills/web/tools/card-use-confirm/handler.js';
-import { CardUseRequestHandler } from '../../skills/web/tools/card-use-request/handler.js';
+import { CardUseConfirmHandler } from '../../skills/browser/tools/card-use-confirm/handler.js';
+import { CardUseRequestHandler } from '../../skills/browser/tools/card-use-request/handler.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
@@ -28,7 +28,7 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 const logger = pino({ level: 'silent' });
 
 function manifestOf(tool: string): ToolManifest {
-  const path = resolve(import.meta.dirname, `../../skills/web/tools/${tool}/tool.json`);
+  const path = resolve(import.meta.dirname, `../../skills/browser/tools/${tool}/tool.json`);
   return JSON.parse(readFileSync(path, 'utf-8')) as ToolManifest;
 }
 
