@@ -41,6 +41,7 @@ expected_behaviors:
     description: Calls memory-confirm successfully for the warned node.
     check:
       called: memory-confirm
+      with: { nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70 }
       success: true
   - id: activates_memory_review
     weight: critical
