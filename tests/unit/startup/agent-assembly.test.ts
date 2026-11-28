@@ -266,6 +266,16 @@ describe('assembleAgent', () => {
     expect(coordinator.runtimeConfig.skillList?.map((s) => s.name)).toEqual(['messaging']);
   });
 
+  it('gives a discovery agent with no listed skills skill-activate too (#2764)', () => {
+    // tool-registry returns bundles as kind:'skill'; only skill-activate can load one.
+    const configs = [coordinatorYaml({ pinned_skills: [] }), specialistYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const coordinator = assembleAgent(configs[0]!, ctx);
+
+    expect(coordinator.runtimeConfig.skillList).toEqual([]);
+    expect(coordinator.toolDefs.map(t => t.name)).toEqual(['tool-registry', 'skill-activate']);
+  });
+
   it('withholds coordinator-only blocks from specialists and resolves their placeholders', () => {
     const configs = [coordinatorYaml(), specialistYaml({ inject_specialists: true })];
     const ctx = buildContext(textProvider(), configs);

@@ -58,15 +58,24 @@ export class SchedulerReportHandler implements ToolHandler {
       };
     }
 
-    const { job_id, summary, context } = ctx.input as {
+    const { job_id, summary, context: rawContext } = ctx.input as {
       job_id?: unknown;
       summary?: string;
-      context?: Record<string, unknown>;
+      context?: unknown;
     };
 
     if (!summary || typeof summary !== 'string') {
       return { success: false, error: 'Missing required input: summary (string)' };
     }
+
+    // context must be a JSON object (tool.json: object?). null means none. An array or a
+    // scalar would replace last_run_context with a non-object, and the scheduler's own
+    // activatedSkillsRuns history kept in it (#2764) could no longer be read.
+    if (rawContext !== undefined && rawContext !== null
+      && (typeof rawContext !== 'object' || Array.isArray(rawContext))) {
+      return { success: false, error: 'context must be an object (or omitted).' };
+    }
+    const context = rawContext === null ? undefined : rawContext as Record<string, unknown> | undefined;
 
     const resolved = resolveSchedulerReportJobId(job_id, ctx.conversationId);
     if (!resolved.ok) {
