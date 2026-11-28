@@ -1,0 +1,43 @@
+# Case 60f (#2764 Layer 2 D4): resolving a learning-digest item needs that skill.
+name: learning-digest resolve item
+description: >
+  The principal asks the coordinator to accept a pending learning-digest voice guide.
+  The coordinator activates learning-digest and calls resolve-learning-digest
+  successfully.
+tags: [learning-digest, skill-activation, on-demand]
+release_gate: false
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    approve voice — yes, keep using that phrasing.
+tool_stubs:
+  list-learning-digest:
+    - match: {}
+      return:
+        voice_guide: Prefer "talk soon" over "best regards" in short Signal notes
+        completion_items: []
+        sections_markdown: "### Proposed writing-voice update\n\nPrefer talk soon over best regards\n\nReply `approve voice` or `dismiss voice`."
+  resolve-learning-digest:
+    - match: { action: approve_voice }
+      return: { resolved: true, detail: Approved voice guide }
+    - match: {}
+      error: "unexpected resolve-learning-digest action — expected approve_voice"
+expected_behaviors:
+  - id: resolves
+    weight: critical
+    description: Calls resolve-learning-digest successfully with approve_voice.
+    check:
+      called: resolve-learning-digest
+      success: true
+      with: { action: approve_voice }
+  - id: activates_learning_digest
+    weight: critical
+    description: learning-digest is activated.
+    check:
+      skills_activated:
+        includes: [learning-digest]
+failure_modes:
+  - Says it accepted the item without calling resolve-learning-digest
+  - Calls confirm_completion when only a voice guide is pending
+  - Tool refused because learning-digest was never activated

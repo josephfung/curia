@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractPromptExfiltrationMarkers,
+  extractSkillBodyMarkers,
   extractSystemPromptLineMarkers,
   normalizeFragmentText,
   MIN_EXFILTRATION_MARKER_LENGTH,
@@ -139,5 +140,29 @@ describe('extractPromptExfiltrationMarkers', () => {
   it('exposes the length gates as distinct constants', () => {
     // Identity constraints use a modest gate; prompt prose needs a longer, safer span.
     expect(MIN_PROMPT_MARKER_LENGTH).toBeGreaterThan(MIN_EXFILTRATION_MARKER_LENGTH);
+  });
+});
+
+describe('extractSkillBodyMarkers (#2764)', () => {
+  it('extracts distinctive lines from SKILL.md bodies and reference text', () => {
+    const tasksBody = [
+      '## Tasks',
+      'Every promise the principal hears needs a task before or alongside the reply.',
+      'short',
+    ].join('\n');
+    const ref = '- NEVER invent a deadline the principal did not state when creating a task.';
+    const markers = extractSkillBodyMarkers([tasksBody, ref]);
+    expect(markers).toContain(
+      'Every promise the principal hears needs a task before or alongside the reply.',
+    );
+    expect(markers).toContain(
+      'NEVER invent a deadline the principal did not state when creating a task.',
+    );
+    expect(markers).not.toContain('short');
+  });
+
+  it('skips empty skill texts and dedupes repeated lines', () => {
+    const line = '- NEVER invent a deadline the principal did not state when creating a task.';
+    expect(extractSkillBodyMarkers(['', '   ', line, line])).toEqual([line.replace(/^- /, '')]);
   });
 });

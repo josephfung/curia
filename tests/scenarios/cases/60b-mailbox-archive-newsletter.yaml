@@ -1,0 +1,63 @@
+# Case 60b (#2764 Layer 2 D6): mailbox filing under on-demand loading. Archiving a
+# newsletter needs the mailbox skill (split from email) OR a correct delegate to
+# ceo-inbox naming the message id. Rule: mailbox description "file, label, archive";
+# email-archive tool; ceo-inbox owns principal-mailbox archive.
+name: mailbox archive newsletter
+description: >
+  The principal asks the coordinator to archive a newsletter already identified by
+  message id. The coordinator either activates mailbox and calls email-archive, or
+  delegates to ceo-inbox naming that message id. It must not invent a send.
+tags: [mailbox, email, skill-activation, on-demand]
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Archive the newsletter with message id nylas-msg-60b-newsletter. Don't reply to it.
+tool_stubs:
+  email-archive:
+    - match: { message_id: nylas-msg-60b-newsletter }
+      return: { archived: true, message_id: nylas-msg-60b-newsletter }
+    - match: {}
+      return: { archived: true, message_id: nylas-msg-60b-newsletter }
+  delegate:
+    - match: {}
+      return: { agent: ceo-inbox, response: "Archived in the principal mailbox." }
+expected_behaviors:
+  - id: archives
+    weight: critical
+    description: >
+      Archives the newsletter via email-archive for that message id, or by
+      delegating to ceo-inbox with the message id in the brief.
+    check:
+      any_of:
+        - called: email-archive
+          success: true
+          with: { message_id: nylas-msg-60b-newsletter }
+        - called: delegate
+          success: true
+          with: { agent: ceo-inbox }
+          contains: { task: nylas-msg-60b-newsletter }
+  - id: activates_mailbox
+    weight: important
+    description: >
+      Activates mailbox when archiving itself; optional when the archive is
+      delegated to ceo-inbox.
+    check:
+      any_of:
+        - skills_activated:
+            includes: [mailbox]
+        - called: delegate
+          success: true
+          with: { agent: ceo-inbox }
+          contains: { task: nylas-msg-60b-newsletter }
+  - id: no_send
+    weight: critical
+    description: Does not send or reply to the newsletter.
+    check:
+      not_called: [email-send, email-reply, signal-send, sms-send, slack-send]
+failure_modes:
+  - Says it archived without calling email-archive or delegating to ceo-inbox
+  - email-archive refused because mailbox was never activated
+  - Replies to or forwards the newsletter

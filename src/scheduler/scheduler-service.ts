@@ -7,6 +7,7 @@ import { createScheduleCreated } from '../bus/events.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
 import { validateTaskErrorBudget } from '../tasks/task-error-budget.js';
+import { appendActivatedSkillsRun } from './activated-skills-runs.js';
 
 // -- Public types --
 
@@ -1062,10 +1063,10 @@ export class SchedulerService {
         }
       }
       if (activatedSkills !== undefined && activatedSkills.length > 0) {
-        const prevRuns = Array.isArray(job.last_run_context?.activatedSkillsRuns)
-          ? (job.last_run_context!.activatedSkillsRuns as unknown[]).filter(Array.isArray)
-          : [];
-        contextPatch.activatedSkillsRuns = [...prevRuns, activatedSkills].slice(-3);
+        contextPatch.activatedSkillsRuns = appendActivatedSkillsRun(
+          job.last_run_context?.activatedSkillsRuns,
+          activatedSkills,
+        );
       }
       const hasContextPatch = Object.keys(contextPatch).length > 0;
       const contextPatchJson = hasContextPatch ? JSON.stringify(contextPatch) : undefined;
@@ -1154,10 +1155,10 @@ export class SchedulerService {
       }
     }
     if (activatedSkills !== undefined && activatedSkills.length > 0) {
-      const prevRuns = Array.isArray(job.last_run_context?.activatedSkillsRuns)
-        ? (job.last_run_context!.activatedSkillsRuns as unknown[]).filter(Array.isArray)
-        : [];
-      failurePatch.activatedSkillsRuns = [...prevRuns, activatedSkills].slice(-3);
+      failurePatch.activatedSkillsRuns = appendActivatedSkillsRun(
+        job.last_run_context?.activatedSkillsRuns,
+        activatedSkills,
+      );
     }
     const hasFailurePatch = Object.keys(failurePatch).length > 0;
     const failurePatchJson = hasFailurePatch ? JSON.stringify(failurePatch) : undefined;

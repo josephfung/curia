@@ -43,8 +43,8 @@ expected_behaviors:
     weight: critical
     description: Does not activate the google-workspace skill.
     check:
-      not_called: [skill-activate]
-      with: { skill: google-workspace }
+      skills_activated:
+        excludes: [google-workspace]
   - id: reports_tasks
     weight: important
     description: >

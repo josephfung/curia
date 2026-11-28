@@ -1,0 +1,68 @@
+# Case 60a (#2764 Layer 2 D1): a coordinator promise to a third party must create a task
+# before or alongside the reply. Under on-demand loading the tasks skill must activate
+# (model or pre) so task-create is available. Rule: tasks SKILL.md "every promise needs a
+# task"; skills_activated makes the activation path visible.
+name: promise needs a task
+description: >
+  The principal asks the coordinator to tell Dana they will send the board deck by the
+  end of next week. The coordinator must create a task for that promise (success: true)
+  and activate the tasks skill. Replying with a bare promise and no task is a miss.
+tags: [tasks, skill-activation, on-demand]
+release_gate: false
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: dana
+      display_name: Dana Whitfield
+      tier: known
+      channel: email
+      identifier: dana.whitfield@example.test
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Tell Dana I'll send the board deck by the end of next week.
+tool_stubs:
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: "Dana Whitfield ({{contact:dana}}), known contact, email dana.whitfield@example.test."
+    - match: {}
+      return: { agent: contacts, response: "Resolved." }
+  task-create:
+    - match: {}
+      return:
+        task_id: 60a1b2c3-d4e5-4f67-8901-23456789abcd
+        status: open
+        title: Send board deck to Dana Whitfield by end of next week
+  email-send:
+    - match: {}
+      return: { message_id: msg-60a-deck-promise, status: sent }
+  signal-send:
+    - match: {}
+      return: { message_id: msg-60a-signal, status: sent }
+expected_behaviors:
+  - id: creates_task
+    weight: critical
+    description: Creates a task for the end-of-next-week deck promise (call succeeds).
+    check:
+      called: task-create
+      contains: { title: deck }
+      success: true
+  - id: activates_tasks
+    weight: critical
+    description: The tasks skill is activated (model or code path).
+    check:
+      skills_activated:
+        includes: [tasks]
+  - id: no_browser
+    weight: important
+    description: Does not activate the browser skill for this ask.
+    check:
+      skills_activated:
+        excludes: [browser]
+failure_modes:
+  - Replies that the deck will go out next week with no task-create
+  - Calls task-create but the call is refused (tool not loaded)
+  - Activates browser or other unrelated skills

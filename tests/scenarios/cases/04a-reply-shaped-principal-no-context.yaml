@@ -29,6 +29,12 @@ expected_behaviors:
     description: Delegates nothing and sends nothing on a message it cannot place.
     check:
       not_called: [delegate, email-send, email-reply, signal-send, sms-send, slack-send, scheduler-create, task-create]
+  - id: no_tasks_skill
+    weight: important
+    description: Does not activate tasks — there is nothing to track on an unplaceable reply (#2764 B).
+    check:
+      skills_activated:
+        excludes: [tasks]
 failure_modes:
   - Guesses at a pending item and acts on it
   - Replies "Done!" to a message it cannot place

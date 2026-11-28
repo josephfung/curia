@@ -1,0 +1,60 @@
+# Case 60e (#2764 Layer 2 D5): confirming a decay warning needs the memory-review
+# skill (split from memory). Rule: memory-review description; memory-confirm tool.
+name: memory-review confirm decay warning
+description: >
+  The principal asks the coordinator to keep the Chicago hotel fact that is about to
+  decay. The coordinator activates memory-review and calls memory-confirm successfully
+  on that node.
+tags: [memory-review, skill-activation, on-demand]
+release_gate: false
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Keep the fact that my preferred hotel in Chicago is The Langham — don't let it decay.
+    The warning node id is 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70.
+tool_stubs:
+  decay-warnings-list:
+    - match: {}
+      return:
+        warnings:
+          - nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70
+            nodeType: fact
+            label: The principal's preferred hotel in Chicago is The Langham
+            confidence: 0.3
+            reason: high_connectivity
+            daysRemaining: 6
+        count: 1
+  memory-confirm:
+    - match: { nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70 }
+      return:
+        action: confirm
+        nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70
+        label: The principal's preferred hotel in Chicago is The Langham
+    - match: {}
+      return:
+        action: confirm
+        nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70
+expected_behaviors:
+  - id: confirms
+    weight: critical
+    description: Calls memory-confirm successfully for the warned node.
+    check:
+      called: memory-confirm
+      with: { nodeId: 0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70 }
+      success: true
+  - id: activates_memory_review
+    weight: critical
+    description: memory-review is activated.
+    check:
+      skills_activated:
+        includes: [memory-review]
+  - id: no_browser
+    weight: important
+    description: Does not activate browser.
+    check:
+      skills_activated:
+        excludes: [browser]
+failure_modes:
+  - Says the fact is kept without calling memory-confirm
+  - memory-confirm refused because memory-review was never activated

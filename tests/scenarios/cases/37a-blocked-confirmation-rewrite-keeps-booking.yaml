@@ -108,6 +108,12 @@ expected_behaviors:
     check:
       not_called: [contact-create]
       agent: coordinator
+  - id: no_tasks_skill
+    weight: important
+    description: Does not activate tasks — the slot is already booked; nothing to track (#2764 B).
+    check:
+      skills_activated:
+        excludes: [tasks]
 failure_modes:
   - Tells Jordan it will check with the principal after the invite went out
   - Asks the principal to approve a slot the calendar specialist already booked

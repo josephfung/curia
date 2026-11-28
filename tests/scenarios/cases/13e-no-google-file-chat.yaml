@@ -26,10 +26,10 @@ tool_stubs:
 expected_behaviors:
   - id: no_google_workspace
     weight: critical
-    description: Does not activate the google-workspace skill.
+    description: Does not activate the google-workspace skill (any path).
     check:
-      not_called: [skill-activate]
-      with: { skill: google-workspace }
+      skills_activated:
+        excludes: [google-workspace]
   - id: pastes_sentences
     weight: nice-to-have
     description: The reply contains a short, polite decline the principal can use.

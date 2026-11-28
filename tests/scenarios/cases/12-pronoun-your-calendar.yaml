@@ -40,7 +40,7 @@ tool_stubs:
   # The wrong path has to be available: production activation of the calendar bundle
   # succeeds for the coordinator, with every member tool skipped (allowed_callers).
   skill-activate:
-    - match: {}
+    - match: { skill: calendar }
       return:
         skill: calendar
         tools: []
@@ -74,3 +74,4 @@ failure_modes:
   - '"My calendar is clear tomorrow"'
   - Searches tool-registry for a calendar tool and reports it can't find one
   - Relays "my calendar specialist says..."
+  - Activates browser for a calendar question

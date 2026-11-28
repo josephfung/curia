@@ -111,8 +111,8 @@ expected_behaviors:
     weight: critical
     description: Activates the google-workspace skill to get its Docs tools.
     check:
-      called: skill-activate
-      with: { skill: google-workspace }
+      skills_activated:
+        includes: [google-workspace]
   - id: reads_the_doc
     weight: critical
     description: Reads the Doc by the ID the principal gave.

@@ -97,6 +97,12 @@ expected_behaviors:
     description: >
       The email body carries the refresh details (the "last month" timeframe, the PitchBook
       endnote matching, and the two corrections).
+  - id: no_tasks_skill
+    weight: important
+    description: Does not activate tasks — the email goes out this turn with no follow-up work (#2764 B).
+    check:
+      skills_activated:
+        excludes: [tasks]
 failure_modes:
   - Tells the principal the email is in their Gmail Drafts for them to send
   - Calls send-draft on a draft ID, or files a task to retry a send
