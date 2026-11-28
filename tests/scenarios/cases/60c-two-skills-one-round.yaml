@@ -1,6 +1,7 @@
-# Case 60c (#2764 Layer 2 D8): one request needs two skills. Both should activate in
-# one round (skills: [] on skill-activate, or two activations before other work).
-# Coordinator calls should stay near baseline (+ at most 1 for the activation round).
+# Case 60c (#2764 Layer 2 D8): one request needs two skills, web and documents. Both must
+# activate and the brief must land in the requested folder. Whether they activate in one
+# round is measured by the A/B (coordinator calls vs baseline), not by a check here:
+# skills_activated records which skills activated, not in which round.
 name: two skills one round
 description: >
   The principal asks the coordinator to look up the latest Series B news for Acme and
@@ -59,9 +60,10 @@ expected_behaviors:
       success: true
   - id: files_brief
     weight: critical
-    description: Writes the brief (doc-write succeeds).
+    description: Writes the brief under /projects/acme-series-b/ (doc-write succeeds).
     check:
       called: doc-write
+      contains: { path: /projects/acme-series-b/ }
       success: true
   - id: names_path
     weight: important

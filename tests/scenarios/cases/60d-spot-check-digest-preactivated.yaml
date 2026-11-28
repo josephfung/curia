@@ -24,9 +24,10 @@ tool_stubs:
 expected_behaviors:
   - id: records
     weight: critical
-    description: Calls record-spot-check successfully.
+    description: Records item 2 as bad with record-spot-check (call succeeds).
     check:
       called: record-spot-check
+      contains: { verdicts: '"verdict":"bad"' }
       success: true
   - id: digest_activated
     weight: critical
