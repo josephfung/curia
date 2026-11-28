@@ -207,8 +207,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
     expect(config.pinned_skills).toContain('google-workspace');
     // Listed under on_demand: description only — member tools are not eager pins.
-    expect(resolveAgent('coordinator.yaml')).not.toContain('create_doc');
-    expect(resolveAgent('coordinator.yaml')).not.toContain('search_drive_files');
+    const coordinatorTools = resolveAgentTools('coordinator.yaml');
+    expect(coordinatorTools).not.toContain('create_doc');
+    expect(coordinatorTools).not.toContain('search_drive_files');
     expect(config.pinned_skills).not.toContain('create_doc');
     // #2764: contact tools are listed via the contacts skill, not always-on tool pins.
     expect(config.pinned_skills).toContain('contacts');
@@ -272,7 +273,7 @@ describe('resolved pin sets after #1494 bundling', () => {
   it('coordinator leaves image-generate and drive-download-file to discovery', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
     expect(config.allow_discovery).toBe(true);
-    const tools = resolveAgent('coordinator.yaml');
+    const tools = resolveAgentTools('coordinator.yaml');
     expect(tools).not.toContain('image-generate');
     expect(tools).not.toContain('drive-download-file');
   });
