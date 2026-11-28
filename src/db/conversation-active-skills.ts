@@ -13,6 +13,16 @@ export const CONVERSATION_ACTIVE_SKILLS_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
 /** Default cap per conversation/agent (owner decision, #2764). */
 export const CONVERSATION_ACTIVE_SKILLS_CAP = 8;
 
+/**
+ * Config `conversationActiveSkills.idleTtlHours` → milliseconds. 0 is valid (the schema allows
+ * it): nothing carries. Absent, negative or non-numeric falls back to the 24-hour default.
+ */
+export function conversationActiveSkillsIdleTtlMs(hours: unknown): number {
+  return typeof hours === 'number' && Number.isFinite(hours) && hours >= 0
+    ? hours * 60 * 60 * 1000
+    : CONVERSATION_ACTIVE_SKILLS_IDLE_TTL_MS;
+}
+
 export interface ConversationActiveSkillsConfig {
   idleTtlMs?: number;
   cap?: number;
@@ -44,6 +54,9 @@ export class PgConversationActiveSkillsStore implements ConversationActiveSkills
   }
 
   async listActive(conversationId: string, agentId: string, now: Date = new Date()): Promise<string[]> {
+    // A zero TTL carries nothing: the `>=` cutoff below would still admit a skill touched in
+    // the same millisecond as this read.
+    if (this.idleTtlMs <= 0) return [];
     const cutoff = new Date(now.getTime() - this.idleTtlMs);
     try {
       const result = await this.pool.query<Row>(

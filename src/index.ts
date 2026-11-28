@@ -162,7 +162,7 @@ import {
 import {
   PgConversationActiveSkillsStore,
   CONVERSATION_ACTIVE_SKILLS_CAP,
-  CONVERSATION_ACTIVE_SKILLS_IDLE_TTL_MS,
+  conversationActiveSkillsIdleTtlMs,
 } from './db/conversation-active-skills.js';
 import { readSkillResource } from './skills/skill-resources.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidance-sources.js';
@@ -3687,13 +3687,10 @@ async function main(): Promise<void> {
     bullpenService,
     conversationEntities,
     conversationActiveSkills: new PgConversationActiveSkillsStore(pool, logger, {
-      idleTtlMs: (() => {
-        const hours = (yamlConfig as { conversationActiveSkills?: { idleTtlHours?: number } })
-          .conversationActiveSkills?.idleTtlHours;
-        return typeof hours === 'number' && hours > 0
-          ? hours * 60 * 60 * 1000
-          : CONVERSATION_ACTIVE_SKILLS_IDLE_TTL_MS;
-      })(),
+      idleTtlMs: conversationActiveSkillsIdleTtlMs(
+        (yamlConfig as { conversationActiveSkills?: { idleTtlHours?: number } })
+          .conversationActiveSkills?.idleTtlHours,
+      ),
       cap: (() => {
         const cap = (yamlConfig as { conversationActiveSkills?: { cap?: number } })
           .conversationActiveSkills?.cap;
