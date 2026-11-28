@@ -164,7 +164,9 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
   const skillListChars = skillListBlock.length;
   return {
     yamlChars,
-    skillMdChars: Math.max(0, alwaysOnChars - yamlChars - (skillListChars > 0 ? skillListChars + 2 : 0)),
+    // The ## Skills list is rendered per turn (buildBaseSystemPrompt), so it is not in
+    // assembled.systemPrompt: measured on its own as skillListChars, not subtracted here.
+    skillMdChars: Math.max(0, alwaysOnChars - yamlChars),
     alwaysOnPromptTokens: Math.ceil(alwaysOnChars / CHARS_PER_TOKEN),
     localToolDefinitionBytes: assembled.toolDefs.reduce(
       (sum, def) => sum + Buffer.byteLength(JSON.stringify(def), 'utf8'),
