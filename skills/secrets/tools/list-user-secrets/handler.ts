@@ -5,9 +5,9 @@
 // (SQL prefix + allowlist + in-handler filter). This skill has no code path that
 // reads a secret value.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { USER_SECRET_PREFIX } from '../../src/secrets/user-secret-name.js';
-import { CARD_FIELDS, isCardExpired, type CardBrand } from '../../src/secrets/structured-secret-schema.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { USER_SECRET_PREFIX } from '../../../../src/secrets/user-secret-name.js';
+import { CARD_FIELDS, isCardExpired, type CardBrand } from '../../../../src/secrets/structured-secret-schema.js';
 
 interface CardSummary {
   label?: string;

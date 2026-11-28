@@ -44,6 +44,11 @@ skills:
   - setup
   - digest
   - meetings
+  - files
+  - secrets
+  # Coordinator-only single-tool skills (#2764 §2).
+  - verification
+  - record-outreach
   # Onboarding (#2360): activated only on onboarding turns; inert until someone starts onboarding.
   - onboarding
   # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
@@ -68,31 +73,24 @@ tools:
   - async-offramp
   - meeting-agenda-load
   - meeting-notes-start
-  - file-parse
-  - archive-extract
+  # file-parse / archive-extract live in the files skill (#2764).
   - request-clarification
   # Cross-conversation hand-off (#2588): coordinator-only. Not pinned; the runtime offers
   # it on a turn whose other-turns note lists a turn that can take a hand-off.
   - turn-handoff
-  # Delegated sign-in verification (#2017): coordinator-only code-screen tracking.
-  - verification
-  # Task outreach (#2312): coordinator-only record of web forms and calls made for a task.
-  - record-outreach
+  # verification / record-outreach live in their single-tool skills (#2764).
   - drive-download-file
   # Publish a Curia document as a formatted Google Doc (#2758): reached through discovery and
   # the google-workspace drive-files.md reference, not pinned.
   - doc-publish-google
   - image-generate
-  # Personal vault (agent-captured user.* secrets)
-  - secret-capture-request
-  - list-user-secrets
+  # Personal vault tools live in the secrets skill (#2764).
   # Mailbox sign-in links (#2361): pinned to setup-wizard, reached by the coordinator through
   # discovery (tool-registry), so the coordinator's always-on prompt does not grow.
   - mailbox-signin-link
   # Deep-dive re-run (#2362): reached by the coordinator through discovery, not pinned.
   - deep-dive-run
-  # Autonomy
-  - activity-log
+  # activity-log lives in the job-report skill (#2764).
   # Infrastructure-only: re-publishes a Gate C–withheld dispatcher relay after CEO
   # approve (#1733). Not pinned to any agent; allowed_callers: ["system"] so agents
   # cannot invoke it — only approve-action's humanApproved re-exec path reaches it.

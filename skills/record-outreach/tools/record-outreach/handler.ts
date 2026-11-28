@@ -7,9 +7,9 @@
 // Writes only on a task-bound turn (a bound or linked task, or the principal live):
 // an outsider must not be able to plant outreach that later pulls replies into a task.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { OutreachVia } from '../../src/dispatch/task-outreach.js';
-import { registrableDomain } from '../../src/verification/domain.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { OutreachVia } from '../../../../src/dispatch/task-outreach.js';
+import { registrableDomain } from '../../../../src/verification/domain.js';
 
 const VIA: ReadonlySet<string> = new Set(['web_form', 'phone', 'other']);
 const MAX_SUMMARY = 500;

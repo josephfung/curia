@@ -2,7 +2,7 @@
 name: meetings
 description: >
   Park an agenda for an upcoming principal call, and turn meeting minutes into
-  tasks, drafts, and a recap. Load before a planned call or when following up
+  tasks, drafts, and a recap. Load when preparing a planned call or following up
   minutes (Curia's own or from elsewhere).
 version: "0.2.1"
 tools:

@@ -5,14 +5,15 @@
 // image against the merged core + custom tree (curia-deploy#276), so the numbers are the
 // ones production assembles. Nothing here runs at boot.
 //
-// Two numbers per agent, both from the assembly production uses (assembleAgent,
-// src/startup/agent-assembly.ts):
-//   - always-on prompt: the YAML system_prompt plus the pinned SKILL.md bodies,
-//     estimated at 4 chars/token. Runtime blocks (identity, security, roster,
-//     autonomy, time, contact details, turn budget) are code-owned and not counted.
+// Numbers per agent, both from the assembly production uses (assembleAgent,
+// src/startup/agent-assembly.ts), per ADR-046 / ADR-070:
+//   - always-on prompt: the YAML system_prompt only (pinned SKILL.md bodies load on
+//     activation), estimated at 4 chars/token. Runtime blocks (identity, security,
+//     roster, autonomy, time, contact details, turn budget) are code-owned and not counted.
+//   - skill list: the ## Skills name+description block (its own budget row).
 //   - local tool-definition bytes: the JSON of every local tool definition the agent
-//     is sent, including the discovery tools. MCP tools are not loaded here, so they are
-//     excluded; their list comes from the upstream server.
+//     is sent (tool pins plus discovery tools). MCP tools are not loaded here, so they
+//     are excluded; their list comes from the upstream server.
 import { resolve } from 'node:path';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { discoverToolManifests } from '../skills/loader.js';
@@ -61,8 +62,8 @@ export interface AgentContextMeasurement {
   /** The `## Available Specialists` roster this agent is given, in chars (0 when it gets none). */
   rosterChars: number;
   /**
-   * The `## Skills` list (#2764), in chars (0 when empty).
-   * Counted in the always-on prompt budget separately from YAML.
+   * The `## Skills` list (#2764 / ADR-070), in chars (0 when empty).
+   * Own budget row — not part of the YAML always-on prompt total.
    */
   skillListChars: number;
   /**
@@ -71,7 +72,7 @@ export interface AgentContextMeasurement {
    * entries sum to the always-on total within a few tokens of rounding.
    */
   contributors: {
-    /** system_prompt, split by heading. Tokens. */
+    /** YAML system_prompt, split by heading. Tokens. */
     prompt: Contributor[];
     /** One entry per local tool definition. Bytes. */
     tools: Contributor[];

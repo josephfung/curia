@@ -1242,7 +1242,7 @@ export class Scheduler {
     }
     // Job skill pre-activation (#2764): declared skills on the payload, plus what
     // the last three runs activated (stored on last_run_context.activatedSkillsRuns).
-    // Debrief jobs also need `reports` (list-spot-checks) until the digest split in PR 3.
+    // Debrief recap jobs also need `digest` (list-spot-checks) when not already declared.
     {
       const declared = Array.isArray((job.taskPayload as { skills?: unknown }).skills)
         ? (job.taskPayload as { skills: unknown[] }).skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)

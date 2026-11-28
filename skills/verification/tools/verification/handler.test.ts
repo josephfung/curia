@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, type Mock } from 'vitest';
 import pino from 'pino';
 import { VerificationToolHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { Verification } from '../../src/verification/types.js';
-import type { VerificationRuntime } from '../../src/verification/index.js';
-import { registrableDomain } from '../../src/verification/domain.js';
-import { DEFAULT_IDENTITY_PROVIDER_DOMAINS } from '../../src/config.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { Verification } from '../../../../src/verification/types.js';
+import type { VerificationRuntime } from '../../../../src/verification/index.js';
+import { registrableDomain } from '../../../../src/verification/domain.js';
+import { DEFAULT_IDENTITY_PROVIDER_DOMAINS } from '../../../../src/config.js';
 
 const silentLog = pino({ level: 'silent' });
 const SESSION = 'sess-1';

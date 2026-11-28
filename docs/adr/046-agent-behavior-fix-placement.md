@@ -37,9 +37,10 @@ Before adding a rule to rung 5, delete or rewrite any existing statement of it. 
 
 `tests/unit/agents/prompt-budget.test.ts` fails CI when an opted-in agent exceeds any of its budgets, and its failure message points here:
 
-- **Always-on prompt:** the YAML `system_prompt` plus the pinned SKILL.md bodies, estimated at 4 characters per token. The code-owned runtime blocks (identity, security, roster, autonomy, time, contact details, turn budget) are not counted.
+- **Always-on prompt:** the YAML `system_prompt` only, estimated at 4 characters per token. Pinned SKILL.md bodies are no longer always-on (ADR-070); they load on activation. The code-owned runtime blocks (identity, security, roster, autonomy, time, contact details, turn budget) are not counted.
+- **Skill list:** the `## Skills` block of listed skill names and descriptions (ADR-070). Measured as its own budget row in `prompt-budget.test.ts`.
 - **Specialist roster** (coordinator only): the `## Available Specialists` block. Each line is an agent's YAML `delegate_when`, or its `description` when it has none, so routing text moved out of the prompt is held to a budget too.
-- **Local tool definitions:** the JSON bytes of every local tool definition the agent is sent, including the discovery tools. MCP tools are excluded; their size is governed by the server's `--tools` allowlist (#1957).
+- **Local tool definitions:** the JSON bytes of every local tool definition the agent is sent (tool pins plus discovery tools such as `skill-activate`). MCP tools are excluded; their size is governed by the server's `--tools` allowlist (#1957).
 
 Both are measured through `assembleAgent()`, the same assembly production boots with, over the real `agents/` and `skills/` directories. The coordinator is enforced first, with budgets set from its numbers after #1958, #1959 and #1960 plus about 3% headroom. Another agent opts in by adding a row to the test's `AGENT_BUDGETS`.
 

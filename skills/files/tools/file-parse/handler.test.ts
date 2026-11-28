@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pino from 'pino';
 import { parseCsv } from './csv.js';
 import { FileParseHandler } from './handler.js';
-import type { ToolContext } from '../../src/skills/types.js';
-import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
+import type { ToolContext } from '../../../../src/skills/types.js';
+import type { InfraLlm, InfraLlmResult } from '../../../../src/skills/infra-llm.js';
 
 function makeCtx(
   input: Record<string, unknown>,

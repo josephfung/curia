@@ -79,7 +79,7 @@ function filesIn(dir: string, extension: string): string[] {
 const ALLOWED = new Map<string, string>([
   ['skills/contacts/tools/contact-create/tool.json: sms or signal', 'which identity kinds a phone number can become'],
   ['skills/contacts/tools/contact-link-identity/tool.json: signal, sms', 'identity kinds that take a phone number'],
-  ['skills/verification/tool.json: email|sms', 'how the invitation link is delivered, set by the operator'],
+  ['skills/verification/tools/verification/tool.json: email|sms', 'how the invitation link is delivered, set by the operator'],
   ['agents/setup-wizard.yaml: email, signal', 'which channels are configured in the console during setup'],
   ['skills/approvals/tools/deliver-approval/tool.json: signal | web | slack | email', 'approval channels: SMS cannot answer an approval (GHSA-p49r-jqh2-v668)'],
 ]);

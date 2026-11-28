@@ -165,4 +165,76 @@ describe('extractSkillBodyMarkers (#2764)', () => {
     const line = '- NEVER invent a deadline the principal did not state when creating a task.';
     expect(extractSkillBodyMarkers(['', '   ', line, line])).toEqual([line.replace(/^- /, '')]);
   });
+
+  it('boot walk covers every non-synthetic SKILL.md body and loaded reference (#2764)', async () => {
+    // Mirrors src/index.ts / test-mode-stack: every listed skill body + reference text
+    // must enter extractSkillBodyMarkers so outbound Stage 1 cannot miss them.
+    const { resolve } = await import('node:path');
+    const { createLogger } = await import('../../../src/logger.js');
+    const {
+      discoverSkillManifests,
+      loadSkillsFromDiscovery,
+    } = await import('../../../src/skills/skill-loader.js');
+    const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+    const { readSkillResource } = await import('../../../src/skills/skill-resources.js');
+
+    const repoRoot = resolve(import.meta.dirname, '../../..');
+    const skillsDir = resolve(repoRoot, 'skills');
+    const skillRegistry = new SkillRegistry();
+    // Enable every discovered skill so the walk matches "every SKILL.md" (#2764).
+    const discovery = discoverSkillManifests(skillsDir);
+    loadSkillsFromDiscovery(
+      discovery,
+      skillRegistry,
+      createLogger('silent'),
+      new Set(discovery.map((d) => d.name)),
+    );
+
+    const skillTexts: string[] = [];
+    const missingRefs: string[] = [];
+    const registeredBodies = new Set<string>();
+    for (const skill of skillRegistry.list()) {
+      if (skill.synthetic) continue;
+      const body = skill.manifest.instructions?.trim();
+      if (body) {
+        skillTexts.push(body);
+        registeredBodies.add(skill.manifest.name);
+      }
+      const refs = skill.manifest.references ?? [];
+      const assets = skill.manifest.assets ?? [];
+      if (skill.dir && refs.length > 0) {
+        for (const ref of refs) {
+          const loaded = readSkillResource(skill.dir, ref, { references: refs, assets });
+          if (loaded.ok && loaded.content.trim()) {
+            skillTexts.push(loaded.content);
+          } else {
+            missingRefs.push(`${skill.manifest.name}:${ref}`);
+          }
+        }
+      }
+    }
+
+    // On-disk SKILL.md with a non-empty body must be registered and walked.
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { parseSkillMd } = await import('../../../src/skills/skill-md.js');
+    const unregisteredBodies: string[] = [];
+    for (const name of readdirSync(skillsDir)) {
+      const path = join(skillsDir, name, 'SKILL.md');
+      try {
+        if (!statSync(path).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const parsed = parseSkillMd(readFileSync(path, 'utf-8'), path);
+      if (!parsed.instructions.trim()) continue;
+      if (!registeredBodies.has(parsed.name)) unregisteredBodies.push(parsed.name);
+    }
+
+    expect(unregisteredBodies, `on-disk bodies not walked: ${unregisteredBodies.join(', ')}`).toEqual([]);
+    expect(missingRefs, `unreadable skill refs: ${missingRefs.join(', ')}`).toEqual([]);
+    expect(skillTexts.length).toBeGreaterThan(0);
+    const markers = extractSkillBodyMarkers(skillTexts);
+    expect(markers.length).toBeGreaterThan(0);
+  });
 });

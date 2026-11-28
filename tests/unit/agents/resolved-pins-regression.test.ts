@@ -10,6 +10,7 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
+import { agentCanSend } from '../../../src/agents/principal-reach.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 
 const agentsDir = resolve(import.meta.dirname, '../../../agents');
@@ -59,6 +60,8 @@ function loadOnDiskSkills(registry: SkillRegistry): void {
     'context-bridge',
     'executive-profile',
     'setup',
+    'files',
+    'secrets',
   ]) {
     const raw = readFileSync(resolve(skillsDir, name, 'SKILL.md'), 'utf-8');
     const parsed = parseSkillMd(raw);
@@ -208,7 +211,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(coordinatorTools).not.toContain('create_doc');
     expect(coordinatorTools).not.toContain('search_drive_files');
     expect(config.pinned_skills).not.toContain('create_doc');
-    expect(config.pinned_skills).toContain('contact-update');
+    // #2764: contact tools are listed via the contacts skill, not always-on tool pins.
+    expect(config.pinned_skills).toContain('contacts');
+    expect(config.pinned_skills).not.toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
     // #1853: principal calendar stays on @calendar — never widen coordinator pins
     expect(config.pinned_skills).not.toContain('calendar');
@@ -249,12 +254,18 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(resolveAgentListed('coordinator.yaml')).toContain('memory');
   });
 
-  it('coordinator pins list-user-secrets alongside secret-capture-request (#1497)', () => {
+  it('coordinator lists the secrets skill instead of tool-pinning vault tools (#1497 / #2764)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).toContain('list-user-secrets');
-    expect(config.pinned_skills).toContain('secret-capture-request');
+    expect(config.pinned_skills).toContain('secrets');
+    expect(config.pinned_skills).not.toContain('list-user-secrets');
+    expect(config.pinned_skills).not.toContain('secret-capture-request');
+    expect(resolveAgentListed('coordinator.yaml')).toContain('secrets');
+    expect(resolveAgentListed('coordinator.yaml')).toContain('files');
     const tools = resolveAgentTools('coordinator.yaml');
-    expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
+    expect(tools).not.toContain('list-user-secrets');
+    expect(tools).not.toContain('secret-capture-request');
+    expect(tools).not.toContain('file-parse');
+    expect(tools).not.toContain('archive-extract');
   });
 
   // #1960: unused for the 30-day baseline, so they are reached through discovery
@@ -265,5 +276,53 @@ describe('resolved pin sets after #1494 bundling', () => {
     const tools = resolveAgentTools('coordinator.yaml');
     expect(tools).not.toContain('image-generate');
     expect(tools).not.toContain('drive-download-file');
+  });
+
+  it('principalReach still sees listed send tools for every shipped agent (#2764)', () => {
+    // Mirrors agent-assembly's reachToolNames: tool pins ∪ listed skill members.
+    const agents = [
+      'coordinator.yaml',
+      'ceo-inbox.yaml',
+      'calendar.yaml',
+      'contacts.yaml',
+      'meeting-debrief.yaml',
+      'diagnostics.yaml',
+      'research-analyst.yaml',
+      'setup-wizard.yaml',
+    ];
+    const canSendByAgent = new Map<string, boolean>();
+    for (const file of agents) {
+      const resolution = resolveAgent(file);
+      const reachTools = [...resolution.toolNames];
+      const seen = new Set(reachTools);
+      for (const listed of resolution.listedSkills) {
+        // resolveAgent already loaded the skill into a throwaway registry; re-resolve
+        // via a fresh call is expensive — instead expand from on-disk SKILL.md tools
+        // already registered when resolveAgent ran by re-reading listed names.
+        const skillTools = (() => {
+          // Use pin-resolution's listed skill name against a new registry load.
+          const skills = new SkillRegistry();
+          loadOnDiskSkills(skills);
+          return skills.get(listed.name)?.manifest.tools ?? [];
+        })();
+        for (const t of skillTools) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            reachTools.push(t);
+          }
+        }
+      }
+      canSendByAgent.set(file, agentCanSend(reachTools));
+    }
+    // Coordinator reaches the principal via listed messaging (+ email) skills.
+    expect(canSendByAgent.get('coordinator.yaml')).toBe(true);
+    // Specialists do not carry channel-send skills; reach stays off.
+    for (const file of agents) {
+      if (file === 'coordinator.yaml') continue;
+      expect(canSendByAgent.get(file), file).toBe(false);
+    }
+    // Boot tool pins alone must NOT be enough for the coordinator (sends are listed).
+    const bootOnly = resolveAgent('coordinator.yaml');
+    expect(agentCanSend([...bootOnly.toolNames])).toBe(false);
   });
 });

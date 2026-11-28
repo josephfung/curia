@@ -7,12 +7,12 @@
 // returns ONLY the link — it has no code path that reads a value, which is the
 // structural form of the "LLM never sees secrets" guarantee.
 
-import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { CaptureTemplate, CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
-import { deriveCardLabel, normalizeCardLabel } from '../../src/secrets/structured-secret-schema.js';
-import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
-import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
-import { hasUserSecretDetails, parseUserSecretDetails, type UserSecretDetails } from '../../src/secrets/user-secret-details.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { CaptureTemplate, CaptureValueFormat } from '../../../../src/secrets/secret-capture-service.js';
+import { deriveCardLabel, normalizeCardLabel } from '../../../../src/secrets/structured-secret-schema.js';
+import { buildCaptureOrigin } from '../../../../src/secrets/build-capture-origin.js';
+import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { hasUserSecretDetails, parseUserSecretDetails, type UserSecretDetails } from '../../../../src/secrets/user-secret-details.js';
 
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
  *  local SPA origin (Fastify serves the built console on httpPort). */

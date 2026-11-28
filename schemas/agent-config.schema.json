@@ -69,7 +69,12 @@
           "task": { "type": "string", "minLength": 1 },
           "agent_id": { "type": "string" },
           "expectedDurationSeconds": { "type": "number", "minimum": 0 },
-          "intent_anchor": { "type": "string" }
+          "intent_anchor": { "type": "string" },
+          "skills": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Skills to pre-activate when this job fires (#2764)."
+          }
         }
       }
     },

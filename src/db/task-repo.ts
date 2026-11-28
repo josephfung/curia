@@ -32,6 +32,7 @@ import {
 } from './resumable-progress.js';
 import {
   prepareActiveSkillsBlock,
+  reconcileActiveSkillsBlock,
   type ActiveSkillsBlock,
   type ActiveSkillsWriteResult,
 } from './active-skills-progress.js';
@@ -114,6 +115,12 @@ export interface CreateTaskParams {
   /** Structured escalation payload (#1267), stored at progress.escalation for audit and a
    *  future interactive surface. Set by the circuit-breaker / delegation escalation paths. */
   escalation?: TaskEscalation;
+  /**
+   * Skill names to seed on `progress.activeSkills` so the first wake pre-activates them
+   * (#2764). Used by structural creators (e.g. inbox-drain) that know which listed skills
+   * the turn needs before the model can activate anything.
+   */
+  activeSkills?: string[];
 }
 
 /**
@@ -126,12 +133,21 @@ export function buildInitialTaskProgress(opts: {
   progressNote?: string;
   escalation?: TaskEscalation;
   now?: Date;
+  /** Seed wake-reloadable skills (#2764). Empty/absent → no activeSkills block. */
+  activeSkills?: readonly string[];
 }): Record<string, unknown> {
+  const at = (opts.now ?? new Date()).toISOString();
   const notes = opts.progressNote
-    ? [{ at: (opts.now ?? new Date()).toISOString(), note: opts.progressNote }]
+    ? [{ at, note: opts.progressNote }]
     : [];
   const progress: Record<string, unknown> = { notes };
   if (opts.escalation) progress.escalation = opts.escalation;
+  const names = (opts.activeSkills ?? [])
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (names.length > 0) {
+    progress.activeSkills = reconcileActiveSkillsBlock(names, null, at);
+  }
   return progress;
 }
 
@@ -295,13 +311,15 @@ export class TaskRepo {
       progressNote,
       escalation,
       wakePayload,
+      activeSkills,
     } = params;
 
     const resolvedCreatedBy = createdBy ?? agentId;
     const resolvedIntentAnchor = intentAnchor ?? title;
     const errorBudgetJson = resumable ? JSON.stringify({ resumable: true }) : '{}';
     // Seed the row's progress so the digest's last_progress_note has content from creation (#1267).
-    const progressJson = JSON.stringify(buildInitialTaskProgress({ progressNote, escalation }));
+    // Optional activeSkills let structural creators pre-load listed skills on the first wake (#2764).
+    const progressJson = JSON.stringify(buildInitialTaskProgress({ progressNote, escalation, activeSkills }));
 
     // Resolve the lineage to stamp (#1125). For a child task, cap the creating event's
     // originator to the parent's lineage so a child can never carry standing above its parent.

@@ -5,10 +5,11 @@
 // This test is the push-back: it fails when an agent's fixed per-call payload grows
 // past its budget, and the failure names the placement rule a fix should follow.
 //
-// Two numbers per agent, measured over the real agents/, skills/ and config/ by
-// src/agents/prompt-budget.ts (which says what each counts): the always-on prompt (YAML
-// system_prompt plus pinned SKILL.md bodies) and the local tool-definition bytes. A
-// deployment measures its own agents with the same function (curia-deploy#276).
+// Budgets per agent, measured over the real agents/, skills/ and config/ by
+// src/agents/prompt-budget.ts (which says what each counts): the always-on prompt
+// (YAML system_prompt), the skill list (name+description), and local tool-definition
+// bytes (ADR-046 / ADR-070). A deployment measures its own agents with the same
+// function (curia-deploy#276).
 //
 // To opt another agent in, add a row to AGENT_BUDGETS. Set each budget from the
 // agent's measured numbers with small headroom, and raise one only in a PR that says
@@ -136,15 +137,15 @@ interface AgentBudget {
 // from web/SKILL.md, so main measured 86,125 over 76 tools and later PRs grew 950 bytes into the
 // 1,125 it had freed. Restored: 87,250 over 77 local tools. The budget is set to that measurement.
 const AGENT_BUDGETS: AgentBudget[] = [
-  // #2764 switch-on re-measured 2026-11-27 (on-demand): skill bodies leave always-on; tool pins only.
-  // ~3% headroom on each ceiling. task-list promise text is in the coordinator pin set.
-  // coordinator: prompt 2,021; tools 20,951 B / 19; skill list 662.
-  { agent: 'coordinator', alwaysOnPromptTokens: 2_100, localToolDefinitionBytes: 21_600, skillListTokens: 700, allowMcpPins: true, rosterTokens: 500 },
+  // #2764 switch-on re-measured 2026-11-27 (on-demand); #2787 adjusts coordinator for listed folds.
+  // ~3% headroom. Specialists match #2773; coordinator tools drop as files/secrets/job-report list.
+  // coordinator (rem): prompt 2,021; tools 9,661 B / 10; skill list 881.
+  { agent: 'coordinator', alwaysOnPromptTokens: 2_100, localToolDefinitionBytes: 10_000, skillListTokens: 910, allowMcpPins: true, rosterTokens: 500 },
   // calendar: prompt 5,652; tools 29,136 B / 20; skill list 85.
   { agent: 'calendar', alwaysOnPromptTokens: 5_850, localToolDefinitionBytes: 30_100, skillListTokens: 100, allowMcpPins: false },
-  // ceo-inbox: prompt 12,964; tools 34,821 B / 29; skill list 244 (tasks listed; task-list text is list-only).
+  // ceo-inbox: prompt 12,964; tools 34,821 B / 29; skill list 244.
   { agent: 'ceo-inbox', alwaysOnPromptTokens: 13_400, localToolDefinitionBytes: 35_900, skillListTokens: 260, allowMcpPins: false },
-  // contacts: prompt 2,926; tools 16,930 B / 16; skill list 289 (contact-trust listed, not tool-pinned).
+  // contacts: prompt 2,926; tools 16,930 B / 16; skill list 289.
   { agent: 'contacts', alwaysOnPromptTokens: 3_050, localToolDefinitionBytes: 17_450, skillListTokens: 300, allowMcpPins: false },
   // meeting-debrief: prompt 3,765; tools 18,334 B / 14; skill list 85.
   { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 18_900, skillListTokens: 100, allowMcpPins: false },
