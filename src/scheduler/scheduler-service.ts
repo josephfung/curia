@@ -1493,7 +1493,8 @@ export class SchedulerService {
    *
    * @param jobId    The job to update.
    * @param summary  Human-readable description of what the run accomplished.
-   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors).
+   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors). It replaces
+   *                 the previous context, except the scheduler-owned `activatedSkillsRuns` key.
    */
   async reportJobRun(
     jobId: string,
@@ -1504,9 +1505,17 @@ export class SchedulerService {
 
     if (context !== undefined) {
       result = await this.pool.query(
+        // Agent-authored context replaces the old one, but activatedSkillsRuns is the
+        // scheduler's own learned-skills history (#2764): keep it, or a reporting job
+        // loses what its last runs activated before completeJobRun reads it.
         `UPDATE scheduled_jobs
             SET last_run_summary = $1,
-                last_run_context = $2
+                last_run_context = CASE
+                  WHEN jsonb_typeof(last_run_context) = 'object'
+                       AND last_run_context ? 'activatedSkillsRuns'
+                    THEN $2::jsonb || jsonb_build_object('activatedSkillsRuns', last_run_context->'activatedSkillsRuns')
+                  ELSE $2::jsonb
+                END
           WHERE id = $3`,
         [summary, JSON.stringify(context), jobId],
       );
