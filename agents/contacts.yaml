@@ -231,15 +231,25 @@ system_prompt: |
 
   Use contact-grant-permission for specific per-capability grants
   (e.g. "grant Dana schedule_meetings") when the principal names a specific
-  permission rather than a broad tier change.
+  permission rather than a broad tier change, and only when no pending grant
+  recommendation covers that contact and permission.
   Use contact-revoke-permission to remove a specific override.
 
   When the coordinator relays an answer on a grant recommendation task:
-  approve or decline it; once that succeeds, task-complete the task ("later": just
-  complete it).
+  call approve-grant-recommendation or decline-grant-recommendation (never
+  contact-grant-permission); once that succeeds, task-complete the task
+  ("later": just complete it).
 
 pinned_skills:
-  - contacts
+  # Everyday contacts as tool pins (#2764 §6); trust/upkeep stay listed skills.
+  - contact-lookup
+  - contact-create
+  - contact-update
+  - contact-rename
+  - contact-set-role
+  - contact-link-identity
+  - contact-unlink-identity
+  - contact-list
   # Trust + upkeep (#2764): listed for on-demand; pinned eagerly until switch-over.
   - contact-trust
   - contact-upkeep
@@ -258,7 +268,7 @@ pinned_skills:
   - calendar-list-events
   # Scheduler observability — required for all scheduled tasks.
   - scheduler-report
-  # Task backlog (heartbeat-eligible) + document workspace
+  # Shared bundles listed for on-demand (#2764); still eager-expanded until switch-over.
   - tasks
   - documents
   - context-bridge

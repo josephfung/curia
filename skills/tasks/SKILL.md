@@ -1,8 +1,9 @@
 ---
 name: tasks
 description: >
-  Defer, track, and resume multi-step work with task-create/list/update/complete,
-  plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
+  Defer, track, and resume multi-step work (create/list/update/complete, plan,
+  checkpoint). Load when promising any follow-up or committing to a later action,
+  when work spans turns, or when asking what is open.
 version: "0.2.3"
 heartbeat: true
 tools:
@@ -46,8 +47,8 @@ are expecting, or a `wake_at` timer). When a task's goal is achieved, call `task
 with a note.
 
 **Never promise without a task.** Before you send anything that commits to a future
-action ("I'll follow up with X", "we'll send that over"), make sure a task backs that
-promise. Prefer to resolve the dependency first and send a complete message. Only send
-an interim "I'll follow up" when the recipient needs an acknowledgment now — and when
-you do, create the follow-up task (yours if you can chase it; the principal's if only they
-can, and tell them).
+action ("I'll follow up with X", "we'll send that over"), make sure a task backs it.
+Prefer to resolve the dependency first and send a complete message; only send an interim
+"I'll follow up" when the recipient needs an acknowledgment now — and when you do, create
+the follow-up task (yours if you can chase it; the principal's if only they can, and tell
+them).

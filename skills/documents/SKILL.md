@@ -1,8 +1,9 @@
 ---
 name: documents
 description: >
-  OKF document workspace — doc-read/list/write/search/place for mutable working state
-  addressed by path. Pin alongside tasks for resumable project documents.
+  OKF document workspace: doc-read/list/write/search/place for mutable working
+  state by path. Load when reading or writing project docs; pair with tasks for
+  resumable multi-step work.
 version: "0.3.0"
 document_workspace: true
 tools:

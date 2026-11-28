@@ -1,10 +1,8 @@
 ---
 name: calendar
 description: >
-  Google Calendar tools for listing calendars/events, creating and updating events,
-  finding free time, checking conflicts, RSVPs, and tentative holds. Per-tool
-  action_risk is preserved (list/find/check = none; create-hold/RSVP = medium;
-  holds-sweep = low; create/update/delete/register = high).
+  Principal calendar: list calendars/events, create/update/delete, free/busy, conflicts,
+  RSVPs, and tentative holds. Load for any scheduling work.
 version: "0.1.1"
 tools:
   - calendar-list-calendars

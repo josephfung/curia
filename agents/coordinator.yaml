@@ -155,9 +155,10 @@ pinned_skills:
   # Bundles (ADR-031 / #1494)
   - web
   - browser
-  # google-workspace (MCP-projected, ADR-032) is NOT pinned (#2024): its ~50 tool
-  # definitions (~85-100 KB) rode on every call, and 0.7% of tasks used them. The
-  # "Google Workspace" prompt section has the coordinator skill-activate it instead.
+  # google-workspace (MCP-projected, ADR-032) is NOT pinned under eager (#2024): its
+  # ~50 tool definitions (~85-100 KB) rode on every call. The "Google Workspace"
+  # prompt section above covers when to activate until #2773 lists it under on_demand
+  # (~300-char description always-on; member tools still load on activation).
   - executive-profile
   - email
   - mailbox
@@ -177,6 +178,9 @@ pinned_skills:
   - report-to-principal
   - tasks
   - documents
+  # Always-on tool pins from usage (#2764 §9): survive when skill pins list-only.
+  - task-list
+  - memory-query
   # Learning review surface only (producers stay on ceo-inbox via learning-jobs)
   - learning-digest
   # Narrow / standalone pins (polymorphic — do not pull sibling tools)
